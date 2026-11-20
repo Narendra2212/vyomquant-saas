@@ -152,12 +152,14 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from backend_app.backend.market_data_contract import interval_for
 from backend_app.backend.asset_universe import markets_are_mocked
 from backend_app.backend.market_data_latency import (
     OUTCOME_BLOCKED,
@@ -199,8 +201,34 @@ MDS_COMMAND_CHANNEL = "mds:commands"
 MDS_ACTION_SUBSCRIBE = "subscribe"
 MDS_ACTION_UNSUBSCRIBE = "unsubscribe"
 
+#: PAPER-17. How long a subscription may stay silent before it is treated as dropped.
+#:
+#: ``mds`` keeps its streams in process memory and starts one only when a ``subscribe`` command
+#: arrives. When its task is replaced (every deploy, a crash, a reschedule) the new process streams
+#: nothing until it is asked again - and this feed asked exactly once, at start, then waited on the
+#: data channel with no timeout. Production session c2f57492 received one candle, then nothing, with
+#: ``feed_state`` still ``HEALTHY``, until reconciliation abandoned it. A silent channel is now the
+#: dropped subscription it is: :meth:`FeedHandle._receive` raises :class:`PaperFeedDisconnected`,
+#: :func:`next_validated_event` marks the session ``DEGRADED`` and reconnects, and the reconnect
+#: re-publishes ``subscribe``, which a restarted ``mds`` honours (its subscribe is idempotent, so a
+#: healthy ``mds`` ignores the repeat). ``mds`` publishes the forming candle on every exchange update,
+#: so a minute and a half of silence is far outside healthy behaviour on every timeframe.
+FEED_STALL_SECONDS = float(os.environ.get("PAPER_FEED_STALL_SECONDS", "90"))
 
-def mds_command(action: str, exchange_id: Any, symbol: Any) -> str:
+
+#: The one timeframe ``mds`` has always streamed, on the unsuffixed channel. A session on this
+#: timeframe is wired exactly as it was before PAPER-11; every other timeframe is streamed on its own
+#: channel, named by :func:`mds_data_channel`, and requested through the command's ``timeframe`` key.
+MDS_BASE_TIMEFRAME = "1m"
+
+
+def _is_base_timeframe(timeframe: Any) -> bool:
+    return timeframe is None or str(timeframe).strip() in ("", MDS_BASE_TIMEFRAME)
+
+
+def mds_command(
+    action: str, exchange_id: Any, symbol: Any, timeframe: Any = None
+) -> str:
     """One ``mds:commands`` message, as the JSON text that channel carries.
 
     Exactly the three keys ``handle_commands`` reads - ``action``, ``exchange``, ``symbol`` - and
@@ -216,17 +244,25 @@ def mds_command(action: str, exchange_id: Any, symbol: Any) -> str:
             f"{action!r} is not an mds:commands action; handle_commands branches on "
             f"{MDS_ACTION_SUBSCRIBE!r} and {MDS_ACTION_UNSUBSCRIBE!r} and ignores anything else"
         )
-    return json.dumps(
-        {
-            "action": action,
-            "exchange": str(exchange_id).strip().lower(),
-            "symbol": str(symbol).strip(),
-        }
-    )
+    message = {
+        "action": action,
+        "exchange": str(exchange_id).strip().lower(),
+        "symbol": str(symbol).strip(),
+    }
+    # PAPER-11. Present ONLY for a non-base timeframe, so a 1m command is byte-for-byte what it
+    # always was and an older ``mds`` that ignores the key behaves exactly as it did.
+    if not _is_base_timeframe(timeframe):
+        message["timeframe"] = str(timeframe).strip()
+    return json.dumps(message)
 
 
 async def publish_unsubscribe(
-    redis: Any, *, exchange_id: Any, symbol: Any, session_id: Any = None
+    redis: Any,
+    *,
+    exchange_id: Any,
+    symbol: Any,
+    session_id: Any = None,
+    timeframe: Any = None,
 ) -> bool:
     """``PUBLISH {'action': 'unsubscribe', ...}`` to ``mds:commands``. Requirement 17.8's release.
 
@@ -262,7 +298,7 @@ async def publish_unsubscribe(
     try:
         await redis.publish(
             MDS_COMMAND_CHANNEL,
-            mds_command(MDS_ACTION_UNSUBSCRIBE, exchange_id, symbol),
+            mds_command(MDS_ACTION_UNSUBSCRIBE, exchange_id, symbol, timeframe),
         )
     except asyncio.CancelledError:
         raise
@@ -279,7 +315,7 @@ async def publish_unsubscribe(
     return True
 
 
-def mds_data_channel(exchange_id: Any, symbol: Any) -> str:
+def mds_data_channel(exchange_id: Any, symbol: Any, timeframe: Any = None) -> str:
     """The channel ``mds/main.py::broadcast_ohlcv`` publishes that pair's candles to.
 
     Spelled once, here, because it is a wire contract shared with a separate process: the
@@ -287,7 +323,15 @@ def mds_data_channel(exchange_id: Any, symbol: Any) -> str:
     stream table, so a caller passing ``"Binance"`` subscribes to the channel the service
     actually publishes to rather than to one nobody writes.
     """
-    return f"mds:data:{str(exchange_id).strip().lower()}:{str(symbol).strip()}"
+    base = f"mds:data:{str(exchange_id).strip().lower()}:{str(symbol).strip()}"
+    # PAPER-11. ``mds`` streamed ONLY 1m candles, and a session refuses a candle whose timeframe is
+    # not its own, so a 5m / 15m / 1h / 4h session received nothing, ever (zero ``paper_market_events``
+    # after twelve minutes of RUNNING). Every other timeframe now has its own channel, so it can never
+    # be mixed into the 1m stream other consumers (``stream_live_ohlcv``, the last-price key) read.
+    # ``mds/main.py`` spells the same suffix; tests/test_paper11 pins the two equal.
+    if _is_base_timeframe(timeframe):
+        return base
+    return f"{base}:{str(timeframe).strip()}"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -557,7 +601,7 @@ class PaperFeedConfig:
     @property
     def channel(self) -> str:
         """The ``mds:data:*`` channel this session's candles arrive on."""
-        return mds_data_channel(self.exchange_id, self.symbol)
+        return mds_data_channel(self.exchange_id, self.symbol, self.timeframe)
 
     @property
     def normalised_exchange_id(self) -> str:
@@ -1302,6 +1346,11 @@ class FeedHandle:
     #: bound has to evict the OLDEST entry, and a set has no order to evict by.
     seen_event_ids: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
     last_timestamp: Dict[str, datetime] = field(default_factory=dict)
+    #: ``symbol -> (open_ms, open_time, values, transport)``: the candle still forming (PAPER-12).
+    forming: Dict[str, Any] = field(default_factory=dict)
+    forming_held: int = 0
+    #: PAPER-17: seconds of silence after which the subscription counts as dropped.
+    stall_seconds: float = FEED_STALL_SECONDS
 
     _pubsub: Any = None
     _messages: Any = None
@@ -1347,6 +1396,7 @@ class FeedHandle:
             MDS_ACTION_SUBSCRIBE,
             self.config.normalised_exchange_id,
             self.config.symbol,
+            self.config.timeframe,
         )
         await self.redis.publish(MDS_COMMAND_CHANNEL, command)
 
@@ -1374,7 +1424,17 @@ class FeedHandle:
             )
         while True:
             try:
-                message = await self._messages.__anext__()
+                # PAPER-17: bounded, so a channel nobody publishes on any more (an ``mds`` that
+                # restarted and lost this pair's stream) surfaces as a drop and is re-subscribed,
+                # rather than hanging this session's loop forever behind a HEALTHY feed state.
+                message = await asyncio.wait_for(
+                    self._messages.__anext__(), timeout=self.stall_seconds
+                )
+            except asyncio.TimeoutError as exc:
+                raise PaperFeedDisconnected(
+                    f"no market data on {self.channel!r} for {self.stall_seconds:g}s; the "
+                    "market-data service may have restarted"
+                ) from exc
             except StopAsyncIteration as exc:
                 raise PaperFeedDisconnected(
                     f"the subscription to {self.channel!r} ended"
@@ -1430,11 +1490,24 @@ class FeedHandle:
 
         The payload names the channel and the reason and carries no credential, no endpoint and no
         other user's identifier (Requirement 26.4).
+
+        PAPER-06: this used to allocate its sequence number from
+        ``repo.next_session_event_sequence`` (``max(paper_events.sequence) + 1`` over the LOG)
+        while every other Paper_Channel event allocates from ``repo.allocate_session_event_sequence``
+        (an atomic compare-and-swap on the ``paper_sessions.event_sequence`` COUNTER). Those two can
+        disagree: this writer's INSERT advances the log but never touches the counter, so the next
+        ordinary event's counter-based allocation can read a STALE, lower number and collide with
+        the sequence this writer already used -- ``uq_paper_event_seq`` then refuses that ordinary
+        event's INSERT with ``PaperDuplicateSessionEvent``, and nothing upstream of ``record_event``
+        (``paper_session_service._emit`` / the bar-stepping loop) catches and retries it, so that
+        bar is dropped rather than recorded. Routing this writer through the SAME counter-based
+        allocator as every other event means there is only one source of truth for the next
+        sequence number, so this race cannot happen at all.
         """
         if self.supabase is None:
             return
         try:
-            sequence = repo.next_session_event_sequence(
+            sequence = repo.allocate_session_event_sequence(
                 self.supabase, self.user_id, self.session_id
             )
             event_id = (
@@ -1605,6 +1678,7 @@ class FeedHandle:
                 exchange_id=self.config.normalised_exchange_id,
                 symbol=self.config.symbol,
                 session_id=self.session_id,
+                timeframe=self.config.timeframe,
             )
         finally:
             await self._close_pubsub()
@@ -1677,6 +1751,16 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _wall_now() -> datetime:
+    """The real clock, for ONE question: has this candle closed yet? (PAPER-12.)
+
+    Separate from :func:`_utc_now` on purpose. That one stamps when an event was *processed*, and a
+    replay or a test pins it to the bars' own instants; whether a bar has closed is a fact about
+    the world, so pinning the processing clock must not turn a historical bar into a forming one.
+    """
+    return datetime.now(timezone.utc)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 24.3 - next_validated_event
 # ══════════════════════════════════════════════════════════════════════════
@@ -1703,6 +1787,10 @@ async def next_validated_event(handle: FeedHandle) -> Optional[MarketEvent]:
     5. **Exact values.** Any of the five that is not an exact decimal -> invalid. This is where a
        ``float`` is refused (Requirement 18.1).
     6. **Validate** through ``market_data_validation``'s own validators -> ``paper.feed.invalid``.
+    6b. **Forming candles are held, not processed** (PAPER-12). A candle whose interval has not
+        closed by the wall clock is kept (latest state per symbol) and returns ``None``; when a
+        NEWER candle opens, the held one is processed once through gates 7-10 with the last
+        values observed. Already-closed candles skip the hold.
     7. **Identity**, then the LRU. A hit -> ``paper.feed.duplicates``, dropped (Requirement 14.7).
     8. **Order.** Below the symbol's high-water mark -> ``paper.feed.out_of_order``, dropped, so the
        processed sequence per symbol is non-decreasing (Requirement 14.7).
@@ -1802,6 +1890,52 @@ async def next_validated_event(handle: FeedHandle) -> Optional[MarketEvent]:
         )
         return None
 
+    # 6b. A candle that has not closed is HELD, not processed (PAPER-12). mds republishes the
+    # forming candle on every socket update (~2 s), and every accepted event is a stored
+    # ``paper_market_events`` row, a ``market_tick`` frame, a full strategy evaluation and a
+    # chance to fill an order. Taken literally, a 1h session evaluated its strategy on a partial
+    # bar thirty times a minute (signals that repaint and orders on bars that never close that
+    # way) and wrote ~40,000 rows a day. The latest state of the forming candle is kept; when a
+    # NEWER candle opens, the held one has closed and is processed exactly once, with the last
+    # values observed. A candle that has already closed by the clock (a replay, a REST backfill)
+    # takes the unchanged path below.
+    event_timestamp = _as_utc(open_time)
+    held = handle.forming.get(symbol)
+    if event_timestamp + interval_for(config.timeframe) > _wall_now():
+        if held is not None and stamp_ms < held[0]:
+            _record_out_of_order(symbol)
+            return None
+        handle.forming[symbol] = (stamp_ms, open_time, values, transport)
+        handle.forming_held += 1
+        handle.reconnect_attempts = 0
+        # The feed is alive the moment it delivers a valid tick, not an hour later when the first
+        # candle closes: a session must not read PENDING for the whole first bar.
+        handle._transition_feed_state(
+            FEED_STATE_FOR_TRANSPORT[transport],
+            reason=f"forming_tick:{transport}",
+            transport=transport,
+        )
+        if held is None or held[0] == stamp_ms:
+            return None
+        # A newer candle opened: the held one closed, with the values last observed.
+        return await _accept_candle(handle, *held)
+    if held is not None:
+        # A candle that closed by the clock supersedes the held one (same bar: its final form;
+        # older bar: a gap, which is not repaired -- Requirement 14.9).
+        handle.forming.pop(symbol, None)
+    return await _accept_candle(handle, stamp_ms, open_time, values, transport)
+
+
+async def _accept_candle(
+    handle: FeedHandle,
+    stamp_ms: int,
+    open_time: Any,
+    values: Mapping[str, Decimal],
+    transport: str,
+) -> Optional[MarketEvent]:
+    """Steps 7-10 of :func:`next_validated_event` for one CLOSED candle: identity, order, record."""
+    config = handle.config
+    symbol = config.symbol
     event_timestamp = _as_utc(open_time)
 
     # 7. Identity, then the LRU (Requirement 14.7).

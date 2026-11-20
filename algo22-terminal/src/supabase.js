@@ -64,7 +64,9 @@ const notConfiguredError = () => {
 
 /**
  * Postgrest query-builder methods this app actually chains, enumerated from the call
- * sites in `lib/waitlistApi.js` and `lib/downloadAnalyticsApi.js`. Each returns the
+ * sites in `lib/waitlistApi.js`. (It also enumerated `lib/downloadAnalyticsApi.js`,
+ * which DEPLOY-05 removed as vestigial; the chain shapes below are unchanged, because
+ * `select('*').gte(...).eq(...)` is still what waitlistApi chains.) Each returns the
  * builder so a chain of any length terminates in an awaitable that resolves to the
  * not-configured result - `select('*').gte(...).eq(...)` used to die on the second
  * link, because `select` returned a plain result object with no `gte` on it.
@@ -130,6 +132,22 @@ function createUnconfiguredClient() {
       signUp: () => ({ data: { user: null, session: null }, error: notConfiguredError() }),
       signOut: () => ({ error: null }),
       getUser: () => ({ data: { user: null }, error: notConfiguredError() }),
+      // Added with the *Forgot password?* control on `pages/AuthPage.jsx`. Before that
+      // control existed there was no `resetPasswordForEmail` call site anywhere in `src/`
+      // (the comment further down this file still records the consequence), so the stub
+      // did not need it. Now it does, and the reason is the whole point of this object:
+      // without the entry, pressing the control on a deployment whose Supabase config is
+      // missing throws `TypeError: supabase.auth.resetPasswordForEmail is not a function`
+      // -- an unhandled crash -- instead of the handler catching a "Supabase not
+      // configured" error and rendering it. A stub that omits a method the app calls is
+      // worse than no stub, because it converts a clean refusal into a broken page.
+      resetPasswordForEmail: () => ({ data: null, error: notConfiguredError() }),
+      // FE-01: `App.jsx`'s `useGuardedAuthToken` (`AuthGuard`/`GuestGuard`) and
+      // `PasswordRecoveryHandler` both now await `getSession()` while a PKCE code
+      // exchange may be in flight. Resolves with no session and no error -- the
+      // unconfigured client has none to report, and a guard waiting on this must still
+      // settle rather than hang forever when Supabase is not configured at all.
+      getSession: () => ({ data: { session: null }, error: null }),
       updateUser: () => ({ data: { user: null }, error: notConfiguredError() }),
       onAuthStateChange: (callback) => ({
         data: {
@@ -162,7 +180,66 @@ try {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true
+      detectSessionInUrl: true,
+      // FE-01: the implicit-flow fix.
+      //
+      // Before this, every OAuth / magic-link / sign-up-confirmation redirect this app
+      // caused Supabase to send came back as `#access_token=<jwt>` in the URL HASH, and
+      // this library's own `detectSessionInUrl` (above) adopted whatever hash it found on
+      // ANY page load as the real, internal Supabase session -- no proof the token was
+      // ever issued to THIS browser, just that Supabase signed it for someone. That is a
+      // forgeable bearer credential sitting in a URL: an attacker who owns any valid
+      // Supabase account could craft a link to this app's own redirect target carrying
+      // THEIR token, and a victim who clicked it had their browser silently become
+      // authenticated as the attacker (login CSRF). `src/App.jsx`'s `getEffectiveToken` /
+      // `PasswordRecoveryHandler` narrowed WHERE that hash was honoured (an earlier FE-01
+      // pass), but the underlying adoption this library performs internally, before any of
+      // that app code runs, was never narrowed by that fix and remained exploitable on
+      // literally any route (see the long comment on `getEffectiveToken` in App.jsx).
+      //
+      // `flowType: 'pkce'` is the real fix. A redirect now carries `?code=<opaque>` in the
+      // QUERY STRING instead, and that code is useless on its own: exchanging it for a
+      // session (`exchangeCodeForSession`, which `detectSessionInUrl` now triggers
+      // automatically) requires a `code_verifier` this library generated and stored
+      // LOCALLY, in THIS browser, at the moment the flow was started (signInWithOAuth /
+      // signInWithOtp / signUp). An attacker's own valid `code` has no matching verifier in
+      // the victim's browser, so the exchange fails and no session is ever adopted --
+      // closing the forgery regardless of which path the link targets. As a second-order
+      // effect, this library's own URL detection now also actively REJECTS a stray
+      // `#access_token=` hash as a flow-type mismatch rather than adopting it (see
+      // `@supabase/auth-js`'s `_getSessionFromURL`), rather than silently trusting it.
+      //
+      // THE PASSWORD-RECOVERY EMAIL IS NOW COVERED TOO -- this paragraph used to say the
+      // opposite and was correct when written. It read "this app has no call site for
+      // `resetPasswordForEmail` (grep `src/` -- there isn't one), so it has never
+      // controlled, and still does not control, what generates that email", and warned
+      // that `updateUser` on `/reset-password` might therefore start failing under PKCE.
+      // The *Forgot password?* control on `pages/AuthPage.jsx` (`handlePasswordReset`)
+      // closed that gap: the product now calls `resetPasswordForEmail` from THIS client,
+      // so the recovery email is minted with a `code_challenge` this browser generated and
+      // arrives as `?code=` -- and the browser that asked for the reset is the one holding
+      // the verifier that completes it. `detectSessionInUrl` above exchanges that code on
+      // arrival, which gives `updateUser` the library's own internal session it needs.
+      // `/reset-password` is also deliberately outside both route guards and outside
+      // `_AUTH_REDIRECT_LANDING_PATHS`, so nothing forwards the user off the reset form
+      // mid-exchange (see `hasPendingAuthCodeExchange` in App.jsx).
+      //
+      // WHAT IS STILL NOT COVERED, AND IT IS INHERENT TO PKCE, NOT A BUG HERE: the reset
+      // must be COMPLETED IN THE BROWSER THAT REQUESTED IT. Request on a desktop, open the
+      // mail on a phone, and that phone holds no verifier -- the exchange fails, so
+      // `updateUser` reports a missing session. Same constraint as a PKCE magic link,
+      // but it bites harder for recovery because reading mail on a different device is
+      // ordinary behaviour. A cross-device reset needs a server-side exchange, not a
+      // client flow-type change. Tracked under FE-01 in
+      // docs/launch_readiness/REMEDIATION_LEDGER.json.
+      //
+      // The `type=recovery` hash branch in `App.jsx` is now a FALLBACK FOR OLD LINKS only
+      // -- implicit-shaped mail sent from the Supabase dashboard before 2026-10-28. Those
+      // links do fail under PKCE, as this paragraph originally warned; production has four
+      // such dispatches, all 2026-09-27..09-29, and the single still-outstanding
+      // `recovery_token` among them was sent 2026-09-29 10:25Z, far past any GoTrue
+      // recovery lifetime. So the regression has no reachable victim left.
+      flowType: 'pkce',
     }
   });
 } catch (error) {

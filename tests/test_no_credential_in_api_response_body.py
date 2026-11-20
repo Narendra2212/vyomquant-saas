@@ -400,6 +400,14 @@ def _engine(connect_error: Optional[BaseException] = None):
             secret_key: Any = None,
             password: Any = None,
             uid: Any = None,
+            # EXCH-06: the real `ConnectionEngine.__init__` takes this, and `store_keys`
+            # now passes it so a testnet credential is verified against the TESTNET
+            # endpoint rather than production. Declared explicitly rather than swallowed
+            # by `**kwargs`: a double that accepted anything would keep passing after the
+            # real signature changed again, which is the opposite of what it is for. It
+            # is RECORDED for the same reason the credentials are -- so a test can prove
+            # the flag reached the venue-dialling code.
+            testnet: Any = False,
         ) -> None:
             seen.append(
                 {
@@ -408,6 +416,7 @@ def _engine(connect_error: Optional[BaseException] = None):
                     "secret_key": secret_key,
                     "password": password,
                     "uid": uid,
+                    "testnet": testnet,
                 }
             )
 
@@ -468,7 +477,19 @@ def overrides():
     """Auth, store, vault and cache, torn down whatever the test does."""
 
     def _install(db: Any = None, vault: Any = None):
-        app.dependency_overrides[get_current_user] = lambda: dict(OWNER)
+        # AUTH-01 wired `require_aal2` to POST /api/exchanges/keys and
+        # DELETE /api/exchanges/{id}, so a plain authenticated session now gets 403
+        # "Two-factor authentication is required" and never reaches the handler --
+        # which made seven tests in this file fail for a reason unrelated to what they
+        # assert (that a response body does not echo a submitted credential).
+        #
+        # The claim is added to the USER rather than overriding `require_aal2` itself,
+        # deliberately: overriding it would stub out the real dependency, so this file
+        # would keep passing if AUTH-01 were ever reverted. Supplying `aal: "aal2"`
+        # runs the real control and satisfies it, which is what an MFA-verified caller
+        # does. `require_aal2` reads `app_metadata.aal` or `aal`, defaulting to "aal1"
+        # (`core/dependencies.py:456`).
+        app.dependency_overrides[get_current_user] = lambda: {**OWNER, "aal": "aal2"}
         app.dependency_overrides[get_request_supabase] = lambda: db
         app.dependency_overrides[get_vault] = lambda: vault
         app.dependency_overrides[get_redis_manager] = lambda: None

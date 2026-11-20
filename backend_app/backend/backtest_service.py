@@ -21,12 +21,64 @@ import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from backend_app.core.dependencies import create_request_supabase_async
+from backend_app.core.dependencies import (
+    create_request_supabase_async,
+    get_service_supabase_async,
+)
 
 logger = logging.getLogger("BacktestService")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  WHY THE THREE WRITES IN THIS MODULE USE THE SERVICE-ROLE CLIENT
+#  (MKT-07 follow-up; the other half of the Eligibility_Gate's evidence)
+#
+#  `strategy_backtests` holds the five backtests the Marketplace
+#  Eligibility_Gate counts as a seller's evidence. Until this change the only
+#  writer of that table was the CALLER'S OWN request-scoped client, which is
+#  why `authenticated` had to keep INSERT/UPDATE/DELETE on it -- and a
+#  privilege the application needs is also a privilege a logged-in seller can
+#  use directly against PostgREST, with no application code in the path. The
+#  gate was therefore counting evidence its own subject could author.
+#
+#  Measured in production (2026-11-18), `authenticated` held
+#  DELETE/INSERT/SELECT/UPDATE on this table while the three ledgers
+#  (`execution_records`, `orders`, `positions`) had already been narrowed to
+#  SELECT. This was the live half of that pair, and it stayed open only
+#  because revoking it without moving these writes first would have stopped
+#  every backtest from persisting.
+#
+#  WHAT REPLACES RLS AS THE OWNERSHIP SCOPE
+#  `001_strategy_architecture.sql` gives the table `user_id = auth.uid()`
+#  policies for SELECT/INSERT/UPDATE, and
+#  `migrations/006_reconcile_production_database.sql` adds
+#  `backtests_owner_access FOR ALL`, which is what production took. The
+#  service-role client is not subject to those policies, so for each write the
+#  predicate ON THE STATEMENT is now the whole of the ownership scope:
+#
+#    * the INSERT has no WHERE clause, and never relied on one: RLS checked
+#      `WITH CHECK (user_id = auth.uid())`, and the payload's `user_id` is
+#      `user["id"]` -- taken from the verified JWT by `get_current_user`, not
+#      from the request body -- so the value RLS would have compared against
+#      is the value being written. Note that RLS never validated
+#      `strategy_id` ownership either, so nothing is lost there.
+#    * the UPDATE and the DELETE each keep `.eq("id", ...).eq("user_id", ...)`,
+#      which is the same comparison the policy's USING clause made.
+#
+#  This is why the predicates below are load-bearing and must not be removed
+#  or loosened: they are no longer belt-and-braces over RLS, they ARE the
+#  check. `tests/test_mkt10_backtest_writes_are_service_role.py` fails if any
+#  of them is dropped.
+#
+#  READS ARE DELIBERATELY NOT MOVED. `get_backtest`, `list_backtests`,
+#  `get_backtest_history` and `compare_backtests` keep the request-scoped
+#  client, so they are still filtered by RLS as well as by their own
+#  `user_id` predicate. A read has no reason to give up that second layer, and
+#  `authenticated` keeps SELECT.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -54,7 +106,9 @@ logger = logging.getLogger("BacktestService")
 #  ``deployment_binding`` and ``strategy_archive`` detect theirs:
 #
 #    1. Once per process, a read-only ``SELECT executed_bar_count ... LIMIT 1``
-#       through the caller's own RLS-scoped client, cached in this module.
+#       through the same client the write uses (the service-role one -- see "WHY THE
+#       THREE WRITES IN THIS MODULE USE THE SERVICE-ROLE CLIENT" below), cached in
+#       this module.
 #    2. A definitive "absent" answer degrades the write: the bar count is dropped
 #       from ``update_data``, a warning NAMING the migration is logged, and every
 #       other metric is still persisted.
@@ -180,10 +234,13 @@ async def _execute(query: Any) -> Any:
 async def executed_bar_count_supported(sb: Any) -> bool:
     """Whether ``strategy_backtests`` carries 006's ``executed_bar_count``.
 
-    Read-only and cached: one ``SELECT executed_bar_count ... LIMIT 1`` per process through
-    the caller's own RLS-scoped client, so the probe sees what the write will see. An
-    *indeterminate* answer resolves to ``True`` so the write is attempted and any real
-    failure surfaces at the UPDATE - the same disposition
+    Read-only and cached: one ``SELECT executed_bar_count ... LIMIT 1`` per process
+    through ``sb``, which is **the same client the write will use** -- the service-role
+    one, since the writer moved (see the module header). That identity is the point of
+    the probe: it asks "will the UPDATE find this column?", and asking through a client
+    with different authority would be asking a different question. An *indeterminate*
+    answer resolves to ``True`` so the write is attempted and any real failure surfaces
+    at the UPDATE - the same disposition
     ``deployment_binding.binding_columns_supported`` takes.
     """
     cached = _cached_executed_bar_count_support()
@@ -332,8 +389,28 @@ class BacktestService:
         return hashlib.sha256(checksum_string.encode()).hexdigest()[:16]
     
     async def _get_supabase(self, user: dict):
-        """Get Supabase client for user."""
+        """The caller's own RLS-scoped client. **Reads only** -- see the module header.
+
+        Every write in this class goes through :meth:`_get_write_supabase` instead, so
+        that `authenticated` needs no DML privilege on `strategy_backtests`.
+        """
         res = create_request_supabase_async(user.get("access_token"))
+        return await res if inspect.isawaitable(res) else res
+
+    async def _get_write_supabase(self):
+        """The service-role client that performs this module's three writes.
+
+        Separate seam from :meth:`_get_supabase` on purpose: the two clients carry
+        different authority, and a reader (or a test) should be able to see at the call
+        site which one a statement runs under.
+
+        Returns ``None`` only in DEV_MODE with no `SUPABASE_SERVICE_ROLE_KEY`, which is
+        the same shape `_get_supabase` already returns there and which each caller
+        already handles by logging and echoing the payload. Outside DEV_MODE the factory
+        raises rather than returning ``None``, so a missing key is a loud startup-time
+        failure and never a write that silently goes nowhere.
+        """
+        res = get_service_supabase_async()
         return await res if inspect.isawaitable(res) else res
     
     async def create_backtest(
@@ -384,7 +461,9 @@ class BacktestService:
         Returns:
             Backtest record
         """
-        sb_res = self._get_supabase(user)
+        # Service-role: see the module header. The payload's ``user_id`` below is the
+        # whole ownership scope for this INSERT, and it comes from the verified JWT.
+        sb_res = self._get_write_supabase()
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         backtest_id = str(uuid4())
@@ -461,9 +540,17 @@ class BacktestService:
         backtest_id: str,
         results: Dict,
         executed_bar_count: Optional[int] = None,
+        covered_window: Optional[Tuple[str, str]] = None,
     ) -> Dict:
         """
         Update backtest with execution results.
+
+        ``covered_window`` (BT-07): ``(first_bar, last_bar)`` when the data did NOT cover the
+        requested window - the run stopped at the bar cap, or the exchange holds nothing that
+        early. The row's ``start_date`` / ``end_date`` are then rewritten to the dates the
+        numbers describe. Production, 2026-11-11: a 1m backtest "2025-07-01 to 2025-09-30"
+        simulated 10,000 bars (~7 days) and was stored as covering the full quarter, which the
+        Marketplace evidence gate (>= 90 days) then trusted.
 
         Args:
             user: User dict
@@ -517,7 +604,10 @@ class BacktestService:
             cases are indistinguishable from here up (Requirement 20.2). The HTTP layer
             turns that single empty answer into one 404 for both.
         """
-        sb_res = self._get_supabase(user)
+        # Service-role: see the module header. The ``.eq("id", ...).eq("user_id", ...)``
+        # pair on the UPDATE below is the whole ownership scope, and the 006 availability
+        # probe runs through THIS client too, so it still sees what the write will see.
+        sb_res = self._get_write_supabase()
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         # Every metric column is read through the declared mapping above (task 7.8), so
@@ -528,12 +618,35 @@ class BacktestService:
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
-        for column, source_key in RESULT_COLUMN_SOURCE_KEYS.items():
-            update_data[column] = results.get(source_key)
-        for column, source_key in RESULT_JSON_COLUMN_SOURCE_KEYS.items():
-            update_data[column] = results.get(source_key, [])
+        if results.get("status") == "failed":
+            # BT-03. A FAILED run is recorded as failed. `BacktestRuntime.run_backtest`'s
+            # failure path calls this method with `{"status": "failed", "error": ...}`, and this
+            # method used to ignore both keys: it wrote status='completed' and then set every
+            # metric column to NULL (`results.get(...)` on a payload that carries none), so
+            # every failed backtest was persisted as a COMPLETED one with no results -- and was
+            # then listed, compared and offered as marketplace evidence. Only the status, the
+            # reason and the elapsed time are written; the metric and curve columns are left
+            # exactly as they were (they hold nothing, and a partial write must not invent a
+            # zero or erase an earlier value).
+            reason = str(results.get("error") or "The backtest failed.")[:2000]
+            update_data["status"] = "failed"
+            update_data["error"] = reason
+            update_data["error_message"] = reason
+            if results.get("execution_time_seconds") is not None:
+                update_data["execution_time_seconds"] = results.get("execution_time_seconds")
+        else:
+            for column, source_key in RESULT_COLUMN_SOURCE_KEYS.items():
+                update_data[column] = results.get(source_key)
+            for column, source_key in RESULT_JSON_COLUMN_SOURCE_KEYS.items():
+                update_data[column] = results.get(source_key, [])
 
         bar_count = coerce_executed_bar_count(executed_bar_count)
+
+        if covered_window and results.get("status") != "failed":
+            first_bar, last_bar = covered_window
+            if first_bar and last_bar:
+                update_data["start_date"] = first_bar
+                update_data["end_date"] = last_bar
 
         if sb is None:
             # DEV_MODE echoes what would have been written, including the bar count: there
@@ -766,7 +879,9 @@ class BacktestService:
             different obligations, and this is the one place they point in opposite
             directions - see the handler in ``routers/strategy_operations.py``.
         """
-        sb_res = self._get_supabase(user)
+        # Service-role: see the module header. The ``.eq("id", ...).eq("user_id", ...)``
+        # pair on the DELETE below is the whole ownership scope.
+        sb_res = self._get_write_supabase()
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
         if sb is None:

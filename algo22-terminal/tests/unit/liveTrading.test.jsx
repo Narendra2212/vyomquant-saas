@@ -1077,7 +1077,7 @@ describe('LiveTrading deployment selector (task 20.1d)', () => {
    *   * The explanation is NOT in the render tree while closed, which is the difference
    *     between a disclosure and a `max-height: 0` panel: `ds/Accordion` unmounts its body,
    *     so a closed explanation holds no tab stop.
-   *   * Nothing is paraphrased. The three sentences below join back to the 384-character
+   *   * Nothing is paraphrased. The three sentences below join back to the 306-character (LT-01)
    *     paragraph the page used to render as one `<p>`, and the assertion is on the join, so
    *     a later edit that tightens one of them fails here (Requirement 19.6).
    *   * Empty or partial, the disclosures render EXPANDED. `LiveTrading.jsx`'s `selectorState`
@@ -1093,9 +1093,9 @@ describe('LiveTrading deployment selector (task 20.1d)', () => {
    * could not catch the one failure mode Requirement 19.6 names. These are the characters.
    */
   const CAVEAT_CLAIM = 'This list may be incomplete.';
-  const CAVEAT_WHY = 'It reports the deployments the backend process currently holds in memory, '
-    + 'so one started by an earlier process — before a restart, or on another worker — is not '
-    + 'listed here even though it is still recorded and may still be trading.';
+  // LT-01: the list reads the deployment records now, capped at 50 per strategy.
+  const CAVEAT_WHY = "It reads each strategy's 50 most recent deployment records, so an older "
+    + 'one is not listed here even though it is still recorded and may still be trading.';
   const CAVEAT_ACTION = 'Treat a deployment you cannot find as UNKNOWN rather than stopped, and '
     + 'do not deploy it again on the strength of this list.';
 
@@ -1124,7 +1124,10 @@ describe('LiveTrading deployment selector (task 20.1d)', () => {
 
     // Requirement 19.6, asserted on the join: moving is permitted, paraphrasing shorter is
     // not, and these three sentences still ARE the paragraph.
-    expect([CAVEAT_CLAIM, CAVEAT_WHY, CAVEAT_ACTION].join(' ')).toHaveLength(384);
+    // LT-01 re-pinned this: the WHY sentence changed because the old one stopped being TRUE
+    // (the list reads the deployment records now), not because it was shortened. The pin still
+    // guards against an unreviewed paraphrase.
+    expect([CAVEAT_CLAIM, CAVEAT_WHY, CAVEAT_ACTION].join(' ')).toHaveLength(306);
 
     // The operative half is a plain paragraph — not the trigger, not the body.
     expect(caveatSurface().textContent).toBe(`${CAVEAT_CLAIM} ${CAVEAT_ACTION}`);

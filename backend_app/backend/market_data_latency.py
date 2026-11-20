@@ -68,7 +68,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 # ══════════════════════════════════════════════════════════════════════════
 # CANDIDATE IDENTITIES (design.md -> "Latency measurement plan")
@@ -136,6 +136,19 @@ class LatencySummary:
             "max_ms": round(self.max_ms, 4),
             "mean_ms": round(self.mean_ms, 4),
         }
+
+    @staticmethod
+    def from_dict(d: Mapping[str, Any]) -> "LatencySummary":
+        """The inverse of :meth:`to_dict`, for RT-04's persisted measurement store.
+
+        Round-trips every field by name; raises on a missing one rather than defaulting,
+        since a default latency figure here is exactly the invented evidence this whole
+        module exists to refuse.
+        """
+        return LatencySummary(
+            count=int(d["count"]), p50_ms=float(d["p50_ms"]), p95_ms=float(d["p95_ms"]),
+            p99_ms=float(d["p99_ms"]), max_ms=float(d["max_ms"]), mean_ms=float(d["mean_ms"]),
+        )
 
 
 def _nearest_rank(ordered: Sequence[float], fraction: float) -> float:
@@ -286,6 +299,55 @@ class SourceMeasurement:
             "silent_stall_episodes": self.silent_stall_episodes,
             "notes": list(self.notes),
         }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "SourceMeasurement":
+        """The inverse of :meth:`to_dict`, for RT-04's persisted measurement store.
+
+        ``completeness`` and ``rss_growth_bytes`` are not constructor fields -- they are
+        derived properties, recomputed from ``expected_bars``/``received_bars`` and
+        ``rss_start_bytes``/``rss_end_bytes`` respectively -- so this reads every OTHER key
+        and ignores both rather than accepting a stored value that could disagree with what
+        the other fields now compute.
+        """
+        def _latency(key: str) -> Optional[LatencySummary]:
+            v = d.get(key)
+            return None if v is None else LatencySummary.from_dict(v)
+
+        return cls(
+            source=str(d["source"]),
+            has_validation_layer=bool(d["has_validation_layer"]),
+            measured=bool(d.get("measured", False)),
+            unavailable_reason=d.get("unavailable_reason"),
+            symbols=tuple(d.get("symbols") or ()),
+            timeframes=tuple(d.get("timeframes") or ()),
+            window_seconds=d.get("window_seconds"),
+            events_observed=d.get("events_observed"),
+            end_to_end=_latency("end_to_end"),
+            ingest=_latency("ingest"),
+            pipeline=_latency("pipeline"),
+            cpu_percent_mean=d.get("cpu_percent_mean"),
+            cpu_percent_p95=d.get("cpu_percent_p95"),
+            rss_start_bytes=d.get("rss_start_bytes"),
+            rss_end_bytes=d.get("rss_end_bytes"),
+            throughput_events_per_second=d.get("throughput_events_per_second"),
+            reconnects=d.get("reconnects"),
+            reconnect_recovery_mean_seconds=d.get("reconnect_recovery_mean_seconds"),
+            reconnect_recovery_max_seconds=d.get("reconnect_recovery_max_seconds"),
+            events_lost_per_reconnect=d.get("events_lost_per_reconnect"),
+            expected_bars=d.get("expected_bars"),
+            received_bars=d.get("received_bars"),
+            monotonic_violations=d.get("monotonic_violations"),
+            clock_skew_ms=d.get("clock_skew_ms"),
+            duplicates_delivered=d.get("duplicates_delivered"),
+            out_of_order_delivered=d.get("out_of_order_delivered"),
+            invalid_ohlc_delivered=d.get("invalid_ohlc_delivered"),
+            synthetic_candles_delivered=d.get("synthetic_candles_delivered"),
+            uptime_fraction=d.get("uptime_fraction"),
+            error_count=d.get("error_count"),
+            silent_stall_episodes=d.get("silent_stall_episodes"),
+            notes=list(d.get("notes") or []),
+        )
 
 
 def unmeasured(source: str, *, has_validation_layer: bool, reason: str) -> SourceMeasurement:

@@ -1,8 +1,8 @@
 {
   "devDependencies": {
-    "@playwright/test": "^1.59.1"
+    "@playwright/test": "^1.65.0"
   },
   "dependencies": {
-    "lucide-react": "^1.14.0"
+    "lucide-react": "^1.72.0"
   }
 }

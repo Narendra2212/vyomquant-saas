@@ -23,7 +23,6 @@ from backend_app.core.country_detection import CountryDetector, COUNTRY_TO_CURRE
 from backend_app.core.fx_service import (
     FXService,
     BASELINE_FX_RATES,
-    STRIPE_SUPPORTED_CHECKOUT_CURRENCIES,
     RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES,
 )
 from backend_app.core.subscription_engine import (

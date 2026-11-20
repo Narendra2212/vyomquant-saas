@@ -608,21 +608,40 @@ class TestRouterHTTPMapping:
         assert body["detail"]["missing_prerequisite"] == "dag_hash"
 
     def test_deploy_strategy_endpoint_maps_gate_rejection_to_409(self):
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+        """``POST /api/strategies/{id}/deploy`` still maps a 10.4 refusal to 409.
 
-        import backend_app.routers.strategy_operations as ops
+        This used to post to ``strategy_operations.router``'s own ``deploy_strategy``
+        route. That route was correctly deleted by an earlier session's API-01
+        (commit ``396d210``) as permanently shadowed dead code -- ``routers/strategies.py``
+        is mounted first and always won the identical ``POST /api/strategies/{id}/deploy``
+        path, so the ``strategy_operations`` copy had been unreachable since the day both
+        were added. Posting to a standalone app that mounts only ``ops.router`` (as this
+        test did) therefore 404s now: there is no route left to answer it, not a broken
+        gate.
 
-        app = FastAPI()
-        app.include_router(ops.router, prefix="/api")
+        The real, reachable path for this URL is
+        ``routers.strategies.deploy_bot`` -> ``_deploy_current_version_paper`` ->
+        ``StrategyService.deploy_version``, which already calls
+        ``_assert_deploy_prerequisites`` (see ``strategy_service.py:1817``) and lets
+        ``DeployPrerequisiteError`` propagate uncaught -- ``_deploy_current_version_paper``
+        already catches it and maps it to 409 with this exact
+        ``DEPLOY_PREREQUISITE_NOT_MET`` / ``missing_prerequisite`` shape (see
+        ``routers/strategies.py:2053``). So unlike DEPLOY-03 (the sibling gap this same
+        dead-route deletion exposed in the parameter-refusal check), there was no real
+        production gap here to fix -- only this test needed to move to the route that
+        actually serves the URL it names.
+        """
+        import asyncio
 
-        async def _get_current_user_override():
-            return _user()
+        from fastapi import HTTPException
 
-        app.dependency_overrides[ops.get_current_user] = _get_current_user_override
+        from backend_app.routers.strategies import _deploy_current_version_paper
 
         fake_service = MagicMock()
-        fake_service.deploy_strategy = AsyncMock(
+        fake_service.get_strategy = AsyncMock(
+            return_value={"version": {"version": "v2.0"}}
+        )
+        fake_service.deploy_version = AsyncMock(
             side_effect=DeployPrerequisiteError(
                 "Cannot deploy version v2.0 of strategy s1: validation_state is 'INVALID' "
                 "(must be 'VALID')",
@@ -633,14 +652,17 @@ class TestRouterHTTPMapping:
         async def _fake_get_strategy_service():
             return fake_service
 
-        with patch.object(ops, "get_strategy_service", _fake_get_strategy_service):
-            client = TestClient(app, raise_server_exceptions=False)
-            resp = client.post("/api/strategies/s1/deploy", json={})
+        with patch(
+            "backend_app.backend.strategy_service.get_strategy_service",
+            _fake_get_strategy_service,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(_deploy_current_version_paper(_user(), "s1"))
 
-        assert resp.status_code == 409
-        body = resp.json()
-        assert body["detail"]["error"] == "DEPLOY_PREREQUISITE_NOT_MET"
-        assert body["detail"]["missing_prerequisite"] == "validation_state"
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["error"] == "DEPLOY_PREREQUISITE_NOT_MET"
+        assert detail["missing_prerequisite"] == "validation_state"
 
 
 if __name__ == "__main__":

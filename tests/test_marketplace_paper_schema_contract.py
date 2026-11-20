@@ -76,15 +76,37 @@ BACKEND_MIGRATIONS_DIR = REPO_ROOT / "backend_app" / "migrations"
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def _strip_sql_comments_and_strings(sql: str) -> str:
-    """Return ``sql`` with ``--`` line comments, ``/* */`` block comments and single-quoted
-    string literals removed.
+#: Matches a dollar-quoted body opener and captures its tag: ``$$``, ``$fn$``, ``$body$``.
+_DOLLAR_QUOTE_OPEN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
 
-    The destructive-statement scan runs on this so that a header explaining "no ``DROP TABLE``",
-    a verification query embedded in a comment, or a ``DELETE`` mentioned inside an
-    ``EXECUTE format('…')`` payload is not counted as a destructive statement in the DDL itself.
-    String literals are blanked (replaced by ``''``) rather than deleted so that statement
-    boundaries and the surrounding structure are preserved.
+
+def _strip_sql_comments_and_strings(sql: str) -> str:
+    """Return ``sql`` with comments, string literals and dollar-quoted bodies blanked.
+
+    Removes ``--`` line comments, ``/* */`` block comments, single-quoted string literals
+    (honouring the doubled ``''`` escape) and ``$tag$ … $tag$`` dollar-quoted bodies.
+
+    The destructive-statement scan runs on this so that a header explaining "no ``DROP
+    TABLE``", a verification query embedded in a comment, or a ``DELETE`` mentioned inside
+    an ``EXECUTE format('…')`` payload is not counted as a destructive statement in the DDL
+    itself. Contents are BLANKED rather than deleted so that statement boundaries and the
+    surrounding structure are preserved.
+
+    DOLLAR-QUOTED BODIES ARE DELIBERATELY *NOT* TOUCHED HERE, and the reason is worth
+    recording because the opposite was tried first and the suite refused it. This function
+    feeds BOTH the destructive-statement scan and :func:`_build_schema_model`, and many
+    files in the set declare constraints inside an idempotency wrapper:
+
+        DO $$ BEGIN ALTER TABLE … ADD CONSTRAINT chk_ls_split_conserved … END $$;
+
+    Blanking bodies here hid six such constraints from the model and failed
+    ``test_named_constraints_present`` for ``chk_ls_active_has_period``,
+    ``chk_ls_featured_requires_published``, ``chk_ls_price_minor``,
+    ``chk_ls_split_conserved``, ``chk_signals_environment`` and
+    ``fk_signals_paper_session``. The body is where the DDL *is*, not noise around it.
+
+    The destructive scan's own narrowing lives in :func:`_blank_dollar_quoted_bodies`,
+    applied only there.
     """
     out: List[str] = []
     i = 0
@@ -893,8 +915,304 @@ _DESTRUCTIVE = {
     "DROP COLUMN": re.compile(r"\bdrop\s+column\b", re.IGNORECASE),
     "RENAME": re.compile(r"\brename\b", re.IGNORECASE),
     "DELETE FROM": re.compile(r"\bdelete\s+from\b", re.IGNORECASE),
-    "TRUNCATE": re.compile(r"\btruncate\b", re.IGNORECASE),
+    # `BEFORE TRUNCATE ON <table>` is the EVENT NAME in a trigger that REFUSES truncation
+    # (036_order_audit_log_durable.sql); it is protective, not a statement that truncates.
+    # The statement forms (`TRUNCATE TABLE x`, `TRUNCATE x`, `TRUNCATE ONLY x`) are still
+    # flagged -- see test_truncate_statement_forms_are_still_flagged.
+    "TRUNCATE": re.compile(r"\btruncate\b(?!\s+on\s)", re.IGNORECASE),
 }
+
+
+def _dollar_quoted_bodies(sql: str) -> List[str]:
+    """Every ``$tag$ … $tag$`` body in ``sql``, innermost text only.
+
+    Closed by the IDENTICAL opening tag, which is what lets a body contain a bare ``$`` or
+    a differently-tagged quote without ending early.
+    """
+    bodies: List[str] = []
+    pos = 0
+    while True:
+        opener = _DOLLAR_QUOTE_OPEN.search(sql, pos)
+        if not opener:
+            return bodies
+        tag = opener.group(0)
+        end = sql.find(tag, opener.end())
+        if end == -1:
+            return bodies
+        bodies.append(sql[opener.end() : end])
+        pos = end + len(tag)
+
+
+def _blank_dollar_quoted_bodies(sql: str) -> str:
+    """``sql`` with every dollar-quoted body replaced by a space.
+
+    USED ONLY BY THE DESTRUCTIVE-STATEMENT SCAN, never by the schema-model parser -- see
+    :func:`_strip_sql_comments_and_strings` for what happens when the two share it.
+
+    Requirement 24.7's rule is that APPLYING the migration set must not destroy schema or
+    data. A ``DELETE`` inside a ``CREATE FUNCTION`` body is not executed when the file is
+    applied; it runs if and when something calls the function, which is ordinary runtime
+    behaviour and not the migration's doing. Same reason a ``DELETE`` inside an
+    ``EXECUTE format('…')`` payload is already exempt, stated from the other side.
+
+    ``059_mkt06_creator_payout_atomic.sql`` is the first file in the set to contain one:
+    ``settle_creator_payout`` ends a REJECTION with
+
+        DELETE FROM public.marketplace_creator_payout_claims WHERE payout_id = p_payout_id;
+
+    the inverse of the claim -- it frees the settlements that payout had claimed so the next
+    ``create_creator_payout`` for that owner sums them back in. Removing the statement would
+    leave a rejected payout holding its settlements forever, so the statement is correct and
+    the scan's reading of it was not.
+
+    THIS NARROWS THE SCAN, SO IT IS PAIRED WITH A WIDENING:
+    :func:`test_function_bodies_do_not_drop_or_truncate` scans the bodies this blanks for
+    the statements that have no legitimate runtime use. Net effect: ``DELETE`` is permitted
+    inside a function body and nowhere else, ``DROP``/``TRUNCATE`` in neither.
+    """
+    out = sql
+    for body in _dollar_quoted_bodies(sql):
+        if body:
+            out = out.replace(body, " ", 1)
+    return out
+
+
+#: A `GRANT`/`REVOKE` privilege list: everything between the keyword and its `ON`, stopped
+#: at a statement boundary so a `GRANT role TO user` (which has no `ON`) cannot run on and
+#: swallow a later statement's `ON`.
+_PRIVILEGE_LIST = re.compile(r"\b(?:grant|revoke)\b[^;]*?\bon\b", re.IGNORECASE)
+
+
+_FUNCTION_RENAME = re.compile(
+    r"\balter\s+(?:function|procedure)\b[^;]*?\brename\s+to\b", re.IGNORECASE | re.DOTALL
+)
+
+
+def _blank_function_renames(sql: str) -> str:
+    """``sql`` with each ``ALTER FUNCTION ... RENAME TO`` reduced to ``ALTER FUNCTION``.
+
+    A FUNCTION rename moves no stored data: 078 (SEC-DEF-01) renames a SECURITY DEFINER body
+    to ``<name>__impl`` and puts a caller-checking wrapper in its place. Table, column, index,
+    schema and type renames -- which break readers of stored data -- are still flagged; see
+    :func:`test_only_a_function_rename_is_exempt`.
+    """
+    return _FUNCTION_RENAME.sub("ALTER FUNCTION", sql)
+
+
+def _blank_privilege_lists(sql: str) -> str:
+    """``sql`` with each ``GRANT``/``REVOKE`` privilege list replaced by the keyword alone.
+
+    TRUNCATE AND DELETE ARE PRIVILEGE NAMES AS WELL AS STATEMENTS, and the scan could not
+    tell the two apart. ``074_mkt10_revoke_backtest_dml.sql`` revokes the forgery surface
+    on ``strategy_backtests`` with
+
+        REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+            ON public.strategy_backtests FROM authenticated;
+
+    and the bare-word ``TRUNCATE`` pattern matched the privilege being TAKEN AWAY. That is
+    not merely harmless, it is the exact inverse: the statement exists so that nobody can
+    truncate the table, and RLS cannot filter TRUNCATE, so revoking it is the only defence
+    there is. The scan read a hardening statement as a destructive one.
+
+    It is the same class of false positive the ``(?!\\s+on\\s)`` lookahead already handles
+    for ``BEFORE TRUNCATE ON <table>`` -- a trigger EVENT name on a trigger that refuses
+    truncation. That carve-out could not cover this one, because in a privilege list
+    ``TRUNCATE`` is followed by a comma, not by ``ON``.
+
+    WHY BLANKING THE LIST IS SAFE: a privilege list is a sequence of keywords. It cannot
+    contain a nested statement, so nothing destructive can hide in the blanked span. The
+    table names after ``ON`` are deliberately kept, so ``REVOKE ... ON TRUNCATE_LOG`` would
+    still be visible to anything that looked.
+
+    THIS NARROWS THE SCAN, SO IT IS PAIRED WITH A WIDENING, the same way
+    :func:`_blank_dollar_quoted_bodies` is: the three tests below require that a real
+    ``TRUNCATE`` statement elsewhere in the same file is still caught, including one that
+    sits immediately after a REVOKE.
+    """
+    return _PRIVILEGE_LIST.sub(
+        lambda m: f"{m.group(0).split()[0]} on", sql
+    )
+
+
+def test_only_a_function_rename_is_exempt() -> None:
+    rename = _DESTRUCTIVE["RENAME"]
+    assert not rename.search(_blank_function_renames(
+        "ALTER FUNCTION public.f(uuid, numeric)\n    RENAME TO f__impl;"))
+    for statement in ("ALTER TABLE public.t RENAME TO u;",
+                      "ALTER TABLE public.t RENAME COLUMN a TO b;",
+                      "ALTER INDEX i RENAME TO j;",
+                      "ALTER SCHEMA s RENAME TO z;"):
+        assert rename.search(_blank_function_renames(statement)), statement
+
+
+def test_truncate_statement_forms_are_still_flagged() -> None:
+    pattern = _DESTRUCTIVE["TRUNCATE"]
+    for statement in ("TRUNCATE TABLE public.t", "truncate public.t", "TRUNCATE ONLY public.t",
+                      "TRUNCATE\n  public.t RESTART IDENTITY"):
+        assert pattern.search(statement), statement
+    assert not pattern.search("BEFORE TRUNCATE ON public.order_audit_log")
+
+
+def test_revoking_the_truncate_privilege_is_not_a_destructive_statement() -> None:
+    """The 074 case. Taking the TRUNCATE privilege away is the opposite of truncating."""
+    sql = (
+        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER\n"
+        "    ON public.strategy_backtests FROM authenticated;\n"
+    )
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert not _DESTRUCTIVE["TRUNCATE"].search(clean), (
+        "revoking the TRUNCATE privilege was read as a TRUNCATE statement"
+    )
+    assert not _DESTRUCTIVE["DELETE FROM"].search(clean)
+
+
+def test_granting_the_truncate_privilege_is_not_flagged_either() -> None:
+    """Stated separately because the fix must not be REVOKE-only.
+
+    A GRANT is not a statement that truncates any more than a REVOKE is, and a future
+    migration restoring a privilege set should not have to work around this scan.
+    """
+    sql = "GRANT SELECT, TRUNCATE ON public.t TO service_role;\n"
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert not _DESTRUCTIVE["TRUNCATE"].search(clean)
+
+
+def test_a_real_truncate_after_a_revoke_is_still_flagged() -> None:
+    """The widening that pays for the narrowing above.
+
+    If `_blank_privilege_lists` over-reached -- by running past the statement boundary to a
+    later `ON`, which is what an unbounded match would do -- it would blank real statements
+    between the two. This is the case that catches that.
+    """
+    sql = (
+        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.a FROM authenticated;\n"
+        "TRUNCATE TABLE public.b;\n"
+    )
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert _DESTRUCTIVE["TRUNCATE"].search(clean), (
+        "a real TRUNCATE statement following a REVOKE was blanked away with the "
+        "privilege list"
+    )
+
+
+def test_a_grant_without_on_does_not_swallow_a_later_statement() -> None:
+    """`GRANT <role> TO <user>` has no `ON`, so an unbounded match would run forward.
+
+    Without the `[^;]*?` bound it would consume up to the NEXT statement's `ON` and hide
+    whatever lay between -- here, a DROP TABLE.
+    """
+    sql = (
+        "GRANT readonly TO analyst;\n"
+        "DROP TABLE public.victim;\n"
+        "REVOKE ALL ON public.t FROM anon;\n"
+    )
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert _DESTRUCTIVE["DROP TABLE"].search(clean), (
+        "a DROP TABLE between a role GRANT and a later REVOKE was blanked away"
+    )
+
+
+#: Where a function definition starts. Matched on its own, with the dollar-quoted body
+#: located by a LINEAR SCAN rather than by the same regex.
+#:
+#: A single pattern of the form `create ... function .*? (\$tag\$) .*? \1` with DOTALL is
+#: the obvious way to write this and it is catastrophically slow: the two lazy `.*?`
+#: groups backtrack against each other across the whole file, once per candidate, and on
+#: this migration set it did not finish in fifteen minutes. The scan below is linear.
+_FUNCTION_HEAD = re.compile(
+    r"\bcreate\s+(?:or\s+replace\s+)?function\b", re.IGNORECASE
+)
+
+#: A dollar-quote delimiter: `$$`, `$fn$`, `$body$`.
+_DOLLAR_TAG = re.compile(r"\$[A-Za-z_]*\$")
+
+
+def _strip_function_bodies(sql: str) -> str:
+    """``sql`` with the BODIES of function definitions removed.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT A LOOPHOLE. Requirement 24.7's additive-only rule
+    is about what APPLYING a migration does to existing data. A statement inside a
+    function body is not applied -- it is DEFINED. Applying
+    ``059_mkt06_creator_payout_atomic.sql`` creates two tables and two functions and
+    deletes nothing; the ``DELETE FROM marketplace_creator_payout_claims`` in
+    ``settle_creator_payout``'s body runs later, when an operator rejects a payout, and
+    that deletion is REQUIRED behaviour: it releases the claims the rejected payout held
+    so the creator's real earnings are summed back into the next weekly sweep. Without
+    it a rejection would make a creator's unpaid money permanently invisible, which that
+    migration's own header calls the single most important correctness property it has.
+
+    So scanning a function body for "destructive statements" asks the wrong question of
+    it. The scan's subject is apply-time behaviour.
+
+    ``DO`` BLOCKS ARE DELIBERATELY NOT STRIPPED, and that is the whole care in this
+    helper. ``DO $$ ... $$`` EXECUTES at apply time, so a ``DROP TABLE`` inside one is
+    exactly as destructive as a bare one and must still be caught. Only
+    ``CREATE [OR REPLACE] FUNCTION`` bodies are removed -- see
+    ``test_a_destructive_statement_in_a_do_block_is_still_flagged``.
+    """
+    out: List[str] = []
+    cursor = 0
+    while True:
+        head = _FUNCTION_HEAD.search(sql, cursor)
+        if head is None:
+            out.append(sql[cursor:])
+            break
+        # Everything up to and including the function header is kept: a destructive
+        # statement BEFORE a function definition must still be seen.
+        opener = _DOLLAR_TAG.search(sql, head.end())
+        if opener is None:
+            out.append(sql[cursor:])
+            break
+        tag = opener.group(0)
+        closer = sql.find(tag, opener.end())
+        if closer == -1:
+            # Unterminated body. Keep the remainder rather than silently swallowing the
+            # rest of the file, which would hide anything after it.
+            out.append(sql[cursor:])
+            break
+        out.append(sql[cursor:opener.start()])
+        cursor = closer + len(tag)
+    return "".join(out)
+
+
+def test_a_delete_inside_a_function_body_is_not_flagged() -> None:
+    """The MKT-06 case. Defining a function that can delete is not a destructive migration."""
+    sql = (
+        "CREATE OR REPLACE FUNCTION public.settle(p uuid) RETURNS void AS $fn$\n"
+        "BEGIN\n"
+        "    DELETE FROM public.claims WHERE payout_id = p;\n"
+        "END\n"
+        "$fn$ LANGUAGE plpgsql;\n"
+    )
+    clean = _strip_function_bodies(_strip_sql_comments_and_strings(sql))
+    assert not _DESTRUCTIVE["DELETE FROM"].search(clean)
+
+
+def test_a_destructive_statement_outside_a_function_is_still_flagged() -> None:
+    """The refinement must not turn the rule off. A bare statement still trips it."""
+    for sql in (
+        "DELETE FROM public.claims WHERE id = '1';",
+        "DROP TABLE public.t;",
+        "TRUNCATE TABLE public.t;",
+    ):
+        clean = _strip_function_bodies(_strip_sql_comments_and_strings(sql))
+        assert any(p.search(clean) for p in _DESTRUCTIVE.values()), sql
+
+
+def test_a_destructive_statement_in_a_do_block_is_still_flagged() -> None:
+    """A ``DO`` block RUNS at apply time, so stripping it would be the actual loophole."""
+    sql = (
+        "DO $$\n"
+        "BEGIN\n"
+        "    DELETE FROM public.claims;\n"
+        "END\n"
+        "$$;\n"
+    )
+    clean = _strip_function_bodies(_strip_sql_comments_and_strings(sql))
+    assert _DESTRUCTIVE["DELETE FROM"].search(clean), (
+        "a DELETE inside a DO block was stripped; DO blocks execute when the migration "
+        "is applied and must still be caught"
+    )
 
 
 def test_no_destructive_statements() -> None:
@@ -903,12 +1221,24 @@ def test_no_destructive_statements() -> None:
     Comments and string literals are stripped first, so a header stating "no ``DROP TABLE``" or
     a verification query embedded in a comment does not trip the scan - only DDL in the file
     body counts.
+
+    Function BODIES are stripped too, for the reason :func:`_strip_function_bodies` gives:
+    the rule is about what applying the migration does, and a function body is defined
+    rather than executed. ``DO`` blocks are NOT stripped, because they do execute.
+
+    ``GRANT``/``REVOKE`` PRIVILEGE LISTS are blanked as well -- see
+    :func:`_blank_privilege_lists`. ``TRUNCATE`` and ``DELETE`` are privilege names as
+    well as statements, and revoking them is the inverse of performing them.
     """
     offenders: List[str] = []
     for path in _all_migration_files():
-        clean = _strip_sql_comments_and_strings(
-            path.read_text(encoding="utf-8", errors="replace")
-        )
+        clean = _blank_function_renames(_blank_privilege_lists(
+            _strip_function_bodies(
+                _strip_sql_comments_and_strings(
+                    path.read_text(encoding="utf-8", errors="replace")
+                )
+            )
+        ))
         for label, pattern in _DESTRUCTIVE.items():
             if pattern.search(clean):
                 match = pattern.search(clean)

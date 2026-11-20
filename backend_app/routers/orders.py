@@ -76,13 +76,13 @@ import re
 import time
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from backend_app.backend.connection_engine import get_or_create_exchange
+from backend_app.backend.connection_engine import get_or_create_exchange, key_sandbox
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.backend.execution_guard import ExecutionGuard
 # CRITICAL FIX C4: Use shared Redis pool instead of per-request connections
@@ -786,21 +786,48 @@ async def get_open_orders(
     # ═══════════════════════════════════════════════════════════════════
     # DATA QUERIES USE EXCHANGE DIRECTLY (NO EXECUTION RISK)
     # ═══════════════════════════════════════════════════════════════════
-    keys = vault.load_decrypted_keys(
-        user["id"],
-        exchange_id,
-        access_token=user.get("access_token"),
-    )
-    exchange = await get_or_create_exchange(
-        user_id=user["id"],
-        exchange_id=exchange_id,
-        api_key=keys["api_key"],
-        secret_key=keys["secret_key"],
-        password=keys.get("password"),
-    )
-    
-    sym = symbol.replace("-", "/") if symbol else None
-    return await DataEngine(exchange).fetch_open_orders(sym)
+    # ORD-01: an account with no key for this venue answered a bare 500 - the vault's
+    # ValueError("No keys found ...") escaped - so the Live Trading page could not tell "you
+    # have not connected this exchange" from a server fault (production, 2026-11-13). A missing
+    # key is now 404 EXCHANGE_NOT_CONNECTED; a failure talking to the venue is 502. An owner
+    # mismatch (the vault's PermissionError) is deliberately NOT caught here: it stays loud.
+    try:
+        keys = vault.load_decrypted_keys(
+            user["id"],
+            exchange_id,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "EXCHANGE_NOT_CONNECTED",
+                "message": f"No {exchange_id} account is connected to this account, so it has "
+                           "no open orders to read. Connect it under Exchange Connections.",
+            },
+        )
+    try:
+        exchange = await get_or_create_exchange(
+            user_id=user["id"],
+            exchange_id=exchange_id,
+            api_key=keys["api_key"],
+            secret_key=keys["secret_key"],
+            password=keys.get("password"),
+            testnet=key_sandbox(keys),
+        )
+        sym = symbol.replace("-", "/") if symbol else None
+        return await DataEngine(exchange).fetch_open_orders(sym)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Open orders could not be read from {exchange_id} for {user['id']}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "EXCHANGE_UNAVAILABLE",
+                "message": f"{exchange_id} did not answer the open-orders request. This is not a "
+                           "report that there are no open orders.",
+            },
+        )
 
 
 # ── POST /api/orders/cancel/{order_id} ───────────────────────────────
@@ -822,17 +849,10 @@ async def cancel_order(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 2: SAFETY CHECKS
     # ═══════════════════════════════════════════════════════════════════
-    safety_check = SafetyMonitor.check_execution_allowed("cancel")
-    if safety_check:
-        logger.critical(f"🚫 BLOCKED CANCEL: {safety_check}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "SYSTEM_FREEZE",
-                "message": "Order cancellation is disabled during safety fixes",
-                "reason": safety_check,
-            }
-        )
+    # RT-21: NO PLATFORM-MODE GATE ON A CANCEL. `SafetyMonitor.check_execution_allowed` blocks
+    # in `safe` mode (the default) and when live trading is off -- both are about OPENING
+    # risk. A cancel only removes it, and must stay available in every mode, during a tenant
+    # halt (RT-19) and while the global kill switch is on.
     
     # ═══════════════════════════════════════════════════════════════════
     # STEP 3: EXECUTION GUARD VALIDATION
@@ -853,12 +873,11 @@ async def cancel_order(
         validation_report = await guard.validate_trade(
             tenant_id=str(tenant_id),
             signal=signal,
-            portfolio_state=await get_portfolio_state(user["id"], exchange_id, vault),
-            market_state={
-                "spread_bps": "10",
-                "volatility": "0.02",
-                "status": "open",
-            },
+            # RT-21: a control action reads neither the portfolio nor the market. The guard
+            # validates only its shape, so no cache-freshness failure or fabricated market
+            # figure can block (or rubber-stamp) a cancel.
+            portfolio_state={},
+            market_state={},
                 # reduce_only: a cancel does not ask whether the account can AFFORD a
                 # position, so the six capital checks are skipped. Idempotency, the
                 # symbol allow-list and the circuit breakers still apply. Without this,
@@ -889,16 +908,16 @@ async def cancel_order(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 4: EXECUTE CANCEL THROUGH UNIFIED ENGINE WITH IDEMPOTENCY
     # ═══════════════════════════════════════════════════════════════════
-    execution_engine = await _build_execution_engine(user["id"], vault, exchange_id)
-    
-    # Generate execution_id from idempotency_key or create new one
+    # RT-21: the cancel goes straight to the venue through the single gated cancel boundary
+    # in exchange_executor (see backend/order_control.py). `_build_execution_engine` stays
+    # blocked: it is the OPENING path.
     execution_id = idempotency_key or f"cancel_{tenant_id}_{order_id}_{datetime.utcnow().timestamp()}"
-    
-    # STEP 4a: ACQUIRE REDIS DISTRIBUTED LOCK (prevents duplicate cancels)
+
+    # STEP 4a: ACQUIRE REDIS DISTRIBUTED LOCK (prevents duplicate concurrent cancels)
     redis_client = await redis_manager.get_client()
-    cancel_lock_key = f"cancel_lock:{order_id}"
+    cancel_lock_key = f"cancel_lock:{tenant_id}:{order_id}"
     cancel_lock_acquired = await redis_client.set(cancel_lock_key, "1", nx=True, ex=30)
-    
+
     if not cancel_lock_acquired:
         logger.warning(f"🔒 CANCEL LOCK DENIED: order_id={order_id} already being cancelled")
         raise HTTPException(
@@ -909,15 +928,28 @@ async def cancel_order(
                 "order_id": order_id
             }
         )
-    
+
     try:
-        # Execute cancel through unified engine with idempotency
-        result = await execution_engine.cancel_order(
-            order_id=order_id,
-            symbol=body.symbol.replace("-", "/"),
-            execution_id=execution_id
+        from backend_app.backend.order_control import cancel_order_for_user
+        outcome = await cancel_order_for_user(
+            user_id=user["id"], exchange_id=exchange_id, vault=vault,
+            order_id=order_id, symbol=body.symbol.replace("-", "/"),
+            execution_id=execution_id, idempotency_key=idempotency_key,
+            redis_client=redis_client,
         )
-        return result
+        if not outcome.get("success"):
+            # Never report a cancel that did not happen (or may not have) as a success.
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": ("CANCEL_OUTCOME_UNKNOWN" if outcome.get("status") == "unknown"
+                              else "CANCEL_FAILED"),
+                    "message": outcome.get("error") or "The exchange did not confirm the cancel",
+                    "order_id": order_id,
+                    "retryable": True,
+                },
+            )
+        return outcome
     finally:
         # STEP 4b: RELEASE LOCK (cleanup - TTL will also expire it)
         await redis_client.delete(cancel_lock_key)
@@ -943,17 +975,10 @@ async def cancel_all(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 2: SAFETY CHECKS
     # ═══════════════════════════════════════════════════════════════════
-    safety_check = SafetyMonitor.check_execution_allowed("cancel_all")
-    if safety_check:
-        logger.critical(f"🚫 BLOCKED CANCEL-ALL: {safety_check}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "SYSTEM_FREEZE",
-                "message": "Cancel-all is disabled during safety fixes",
-                "reason": safety_check,
-            }
-        )
+    # RT-21: NO PLATFORM-MODE GATE ON A CANCEL. `SafetyMonitor.check_execution_allowed` blocks
+    # in `safe` mode (the default) and when live trading is off -- both are about OPENING
+    # risk. A cancel only removes it, and must stay available in every mode, during a tenant
+    # halt (RT-19) and while the global kill switch is on.
     
     # ═══════════════════════════════════════════════════════════════════
     # STEP 3: EXECUTION GUARD VALIDATION
@@ -974,12 +999,11 @@ async def cancel_all(
         validation_report = await guard.validate_trade(
             tenant_id=str(tenant_id),
             signal=signal,
-            portfolio_state=await get_portfolio_state(user["id"], exchange_id, vault),
-            market_state={
-                "spread_bps": "10",
-                "volatility": "0.02",
-                "status": "open",
-            },
+            # RT-21: a control action reads neither the portfolio nor the market. The guard
+            # validates only its shape, so no cache-freshness failure or fabricated market
+            # figure can block (or rubber-stamp) a cancel.
+            portfolio_state={},
+            market_state={},
                 # reduce_only: a cancel does not ask whether the account can AFFORD a
                 # position, so the six capital checks are skipped. Idempotency, the
                 # symbol allow-list and the circuit breakers still apply. Without this,
@@ -1010,14 +1034,18 @@ async def cancel_all(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 4: EXECUTE CANCEL-ALL THROUGH UNIFIED ENGINE WITH IDEMPOTENCY
     # ═══════════════════════════════════════════════════════════════════
-    execution_engine = await _build_execution_engine(user["id"], vault, exchange_id)
-    
-    symbol = body.symbol.replace("-", "/") if body.symbol else None
-    
+    symbol = body.symbol.replace("-", "/") if body.symbol and body.symbol.upper() != "ALL" else None
+
     # Generate execution_id from idempotency_key or create new one
     execution_id = idempotency_key or f"cancelall_{tenant_id}_{datetime.utcnow().timestamp()}"
-    
-    result = await execution_engine.cancel_all(symbol, execution_id=execution_id)
+
+    # RT-21: see cancel_order above - reduce-only, through the single cancel boundary.
+    from backend_app.backend.order_control import cancel_all_for_user
+    result = await cancel_all_for_user(
+        user_id=user["id"], exchange_id=exchange_id, vault=vault, symbol=symbol,
+        execution_id=execution_id, idempotency_key=idempotency_key,
+        redis_client=await redis_manager.get_client(),
+    )
     
     # Broadcast cancellation event
     fire_and_forget_task(
@@ -1031,7 +1059,169 @@ async def cancel_all(
         ),
         name=f"orders_ws_cancel_all_{user['id']}"
     )
-    return {"status": "ok", "cancelled": result}
+    return {"status": "ok" if result.get("success") else "partial", "cancelled": result}
+
+
+#: LIVE-HIST-01 / LIVE-PNL-01: how much of a user's live fill history the P&L walk reads.
+#: Average cost needs every fill of a position from its first buy, so the read is not the
+#: page size; past this cap the oldest fills are not read and a sell whose buys fell outside
+#: it reports no P&L rather than a wrong one.
+_LIVE_HISTORY_SCAN = 5000
+
+_LIVE_HISTORY_SQL = r"""
+    SELECT er.execution_id,
+           er.venue_order_id                                      AS order_id,
+           er.strategy_id,
+           s.name                                                 AS strategy,
+           er.symbol,
+           lower(er.side)                                         AS side,
+           er.filled_size                                         AS quantity,
+           coalesce(er.avg_price, er.price)                       AS price,
+           er.price                                               AS decision_price,
+           er.exchange_id,
+           coalesce(er.filled_at, er.submitted_at, er.created_at) AS executed_at,
+           er.result -> 'trade_result' ->> 'fee'                  AS raw_fee,
+           er.result -> 'trade_result' ->> 'fee_currency'         AS fee_currency,
+           er.result -> 'trade_result' ->> 'fill_state'           AS fill_state
+      FROM execution_records er
+      LEFT JOIN strategies s
+             ON s.id::text = er.strategy_id AND s.user_id = er.tenant_id
+     WHERE er.tenant_id = :tenant_id
+       AND er.exchange_id IS NOT NULL
+       AND er.status::text = 'COMPLETED'
+       AND er.filled_size ~ '^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'
+       AND er.filled_size::numeric > 0{symbol_clause}
+     ORDER BY coalesce(er.filled_at, er.submitted_at, er.created_at) DESC
+     LIMIT :scan
+"""
+
+
+def _as_decimal(value: Any) -> Optional[Decimal]:
+    if value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+    return number if number.is_finite() else None
+
+
+def _money(value: Optional[Decimal]) -> Optional[str]:
+    if value is None:
+        return None
+    text = format(value.quantize(Decimal("0.00000001")).normalize(), "f")
+    return "0" if text in ("-0", "") else text
+
+
+def _with_realised_pnl(rows: list) -> None:
+    """LIVE-PNL-01: each row's realised P&L, average cost, per (strategy, market), in place.
+
+    ``rows`` must be OLDEST first. A buy opens or adds to the position and realises nothing
+    (``"0"``, as the paper ledger reports a buy). A sell realises
+    ``(sell price - average cost) * quantity sold - the sell's fee``, where the average cost
+    carries each buy's fee too. A sell larger than the position realises on the part that
+    has a cost basis; a sell with no position at all -- its buys predate this history --
+    reports ``None``, never a guess. ``pnl_complete`` is ``False`` when a fee in the
+    position could not be stated in quote, so the figure excludes it.
+    """
+    books: Dict[Tuple[Any, str], Dict[str, Any]] = {}
+    for row in rows:
+        key = (row.get("strategy_id"), str(row.get("symbol") or "").upper())
+        book = books.setdefault(key, {"qty": Decimal("0"), "cost": Decimal("0"), "complete": True})
+        qty = _as_decimal(row.get("quantity")) or Decimal("0")
+        price = _as_decimal(row.get("price"))
+        fee = _as_decimal(row.get("fee"))
+        if price is None or qty <= 0:
+            row["realized_pnl"], row["pnl_complete"] = None, False
+            continue
+        if row.get("side") == "buy":
+            book["qty"] += qty
+            book["cost"] += qty * price + (fee or Decimal("0"))
+            book["complete"] = book["complete"] and fee is not None
+            row["realized_pnl"], row["pnl_complete"] = "0", fee is not None
+            continue
+        if book["qty"] <= 0:
+            row["realized_pnl"], row["pnl_complete"] = None, False
+            continue
+        matched = min(qty, book["qty"])
+        average = book["cost"] / book["qty"]
+        pnl = (price - average) * matched - (fee or Decimal("0"))
+        book["cost"] -= average * matched
+        book["qty"] -= matched
+        complete = book["complete"] and fee is not None
+        if book["qty"] <= 0:
+            book.update(qty=Decimal("0"), cost=Decimal("0"), complete=True)
+        row["realized_pnl"], row["pnl_complete"] = _money(pnl), complete
+
+
+def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optional[list]:
+    """LIVE-HIST-01: this user's filled LIVE executions, newest first.
+
+    A row is LIVE when ``exchange_id`` is set; paper fills carry none (they are the paper
+    ledger, read by ``GET /api/paper/trades``). Only fills are trades: an order that never
+    filled is a signal outcome, which Signal Trace shows. Fees are stated in the quote
+    currency (LIVE-FEE-01) and each row carries its realised P&L (LIVE-PNL-01).
+    """
+    try:
+        tenant = UUID(str(user_id))
+    except (TypeError, ValueError):
+        return []
+    from sqlalchemy import bindparam, text
+    from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+    from backend_app.core.database import get_db_context
+    from backend_app.core.fee_conversion import fee_in_quote
+
+    symbol_clause = ""
+    params: Dict[str, Any] = {"tenant_id": tenant, "scan": _LIVE_HISTORY_SCAN}
+    if symbol:
+        symbol_clause = (
+            "\n       AND upper(replace(replace(er.symbol, '-', '/'), '_', '/')) = :symbol"
+        )
+        params["symbol"] = symbol.upper().replace("-", "/").replace("_", "/")
+    statement = text(_LIVE_HISTORY_SQL.format(symbol_clause=symbol_clause)).bindparams(
+        bindparam("tenant_id", type_=PG_UUID(as_uuid=True))
+    )
+    with get_db_context() as session:
+        found = session.execute(statement, params).mappings().all()
+
+    rows = []
+    for r in reversed(found):  # oldest first, for the P&L walk
+        price = None if r.get("price") is None else str(r.get("price"))
+        fee = None
+        if r.get("fill_state") != "accepted":
+            fee = fee_in_quote(r.get("raw_fee"), r.get("fee_currency"), r.get("symbol"), price)
+        # Slippage as this page defines it on both ledgers: |fill - decision| x quantity, in
+        # quote. Only when the venue reported its own average (not the requested price).
+        slippage = None
+        fill_px, decision_px, qty = (_as_decimal(price), _as_decimal(r.get("decision_price")),
+                                     _as_decimal(r.get("quantity")))
+        if fill_px is not None and decision_px is not None and qty is not None:
+            slippage = abs(fill_px - decision_px) * qty
+        executed_at = r.get("executed_at")
+        rows.append({
+            "execution_id": r.get("execution_id"),
+            "order_id": r.get("order_id"),
+            "strategy_id": r.get("strategy_id"),
+            "strategy": r.get("strategy"),
+            "symbol": r.get("symbol"),
+            "side": r.get("side"),
+            "quantity": None if r.get("quantity") is None else str(r.get("quantity")),
+            "price": price,
+            "fee": _money(fee),
+            "fee_currency": r.get("fee_currency"),
+            "slippage": _money(slippage),
+            "status": "FILLED",
+            "exchange_id": r.get("exchange_id"),
+            "executed_at": (
+                executed_at.isoformat() if hasattr(executed_at, "isoformat") else executed_at
+            ),
+            "execution_environment": "LIVE",
+            "is_simulated": False,
+        })
+    _with_realised_pnl(rows)
+    rows.reverse()  # newest first, as the ledger is read
+    return rows[: max(1, min(int(limit), 500))]
 
 
 # ── GET /api/orders/history ───────────────────────────────────────────
@@ -1053,15 +1243,31 @@ async def get_history(
     except Exception:
         pass
 
+    # STRICT symbol validation to prevent injection
+    if symbol and not re.match(r"^[A-Z0-9/_-]+$", symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+
+    # LIVE-HIST-01: the live ledger is `execution_records`, the table the trading engine
+    # writes every live order to. Found on 2026-11-15: this route read only QuestDB's
+    # `executions` (unreachable in production -- QUESTDB_HOST is 127.0.0.1 on the ECS task --
+    # and `execute_query` never binds its `%s` parameters anyway) and then, with no
+    # `exchange_id`, answered `[]`: Trade History's LIVE ledger was empty for every user
+    # however many live orders had filled.
     try:
-        # STRICT symbol validation to prevent injection
-        if symbol:
-            if not re.match(r"^[A-Z0-9/_-]+$", symbol):
-                raise HTTPException(status_code=400, detail="Invalid symbol format")
-            clean_sym = symbol.replace("-", "_").replace("/", "_")
-        else:
-            clean_sym = None
-        
+        rows = await asyncio.to_thread(_live_history_rows, str(user["id"]), symbol, int(limit))
+    except Exception as exc:  # noqa: BLE001 - fall through to the older sources
+        logger.warning("LIVE-HIST-01: execution_records history unreadable: %s", exc)
+        rows = None
+    if rows is not None:
+        try:
+            await redis_manager.set(cache_key, json.dumps(rows, default=str), ex=5)
+        except Exception:
+            pass
+        return rows
+
+    try:
+        clean_sym = symbol.replace("-", "_").replace("/", "_") if symbol else None
+
         # PARAMETERIZED query - prevents SQL injection
         if clean_sym:
             query = "SELECT * FROM executions WHERE user_id = %s AND symbol = %s ORDER BY timestamp DESC LIMIT %s"
@@ -1095,7 +1301,6 @@ async def get_history(
         keys = vault.load_decrypted_keys(
             user["id"],
             exchange_id,
-            access_token=user.get("access_token"),
         )
         exchange = await get_or_create_exchange(
             user_id=user["id"],
@@ -1103,6 +1308,7 @@ async def get_history(
             api_key=keys["api_key"],
             secret_key=keys["secret_key"],
             password=keys.get("password"),
+            testnet=key_sandbox(keys),
         )
         
         sym = symbol.replace("-", "/") if symbol else None

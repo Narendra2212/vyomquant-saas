@@ -148,9 +148,28 @@ describe('NotAvailable: an em-dash, never a zero', () => {
   });
 });
 
-/** jsdom serialises an inline `color` as `rgb(...)`; the tokens are hex. */
-function toRgb(hex) {
-  const value = hex.replace('#', '');
-  const int = parseInt(value, 16);
+/**
+ * The form jsdom will report for an inline `color` set to `value`.
+ *
+ * jsdom normalises a HEX colour to `rgb(...)`, which is why this helper existed.
+ * It does NOT touch a `var(--…)` reference: custom properties are resolved by
+ * the cascade, and jsdom implements no cascade for them, so the raw string comes
+ * back unchanged.
+ *
+ * THEME-01 made every colour token a `var()` reference, so both forms now reach
+ * here — hex from any literal still in the tree, `var()` from a token. Passing
+ * the reference through is what keeps the assertion at `:32` meaningful rather
+ * than turning it into a comparison of two mangled strings.
+ *
+ * Worth being explicit, because it bounds what this file can prove: with tokens
+ * as `var()` references, a jsdom test can verify WHICH TOKEN a component chose,
+ * and can no longer verify the colour that token resolves to. The resolved value
+ * is now a property of `tokens.css`, and it is checked there — by
+ * `tests/unit/design/theme.test.js`, which reads both theme blocks and asserts
+ * that every colour the dark theme declares has a light counterpart.
+ */
+function toRgb(value) {
+  if (typeof value !== 'string' || !value.startsWith('#')) return value;
+  const int = parseInt(value.replace('#', ''), 16);
   return `rgb(${(int >> 16) & 255}, ${(int >> 8) & 255}, ${int & 255})`;
 }

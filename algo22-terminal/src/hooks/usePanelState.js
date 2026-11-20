@@ -80,6 +80,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { subscribeAutoRefresh } from './useAutoRefresh';
+
 import {
   PANEL_STATES as PAPER_TRADING_PANEL_STATES,
   classifyReadFailure,
@@ -154,7 +156,7 @@ export const PAPER_TRADING_STATE_TO_PANEL_STATE = Object.freeze({
  * outside this set is not treated as a collection, so an object payload with real content is
  * never reported as `empty`.
  */
-const COLLECTION_KEYS = Object.freeze(['items', 'results', 'rows', 'records', 'entries', 'data']);
+const COLLECTION_KEYS = Object.freeze(['items', 'results', 'rows', 'records', 'entries', 'data', 'strategies']);
 
 /**
  * Whether a successful payload has zero items — the `loading → empty` edge.
@@ -356,18 +358,15 @@ export function usePanelState(reader, { deps = NO_DEPS, enabled = true, unavaila
     // A changed `deps` is a new question, so this is a first read and not a refresh.
     run(false);
 
-    const timer =
-      intervalMs > 0
-        ? setInterval(() => {
-            // §13.2: paused while the tab is hidden. The tick is skipped rather than the
-            // interval being cleared and re-created, so this stays "set once".
-            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-            run(true);
-          }, intervalMs)
-        : null;
+    // §13.2: paused while the tab is hidden (a tick is skipped, the interval is set once).
+    // A polling panel also re-reads the moment the trader comes back to the tab, so a
+    // stop / deploy made elsewhere is on screen without waiting for the next tick. Panels
+    // that do not poll (editable forms) are left alone, so a refresh never moves a control
+    // the trader is editing.
+    const stopAutoRefresh = intervalMs > 0 ? subscribeAutoRefresh(() => run(true), intervalMs) : null;
 
     return () => {
-      if (timer !== null) clearInterval(timer);
+      if (stopAutoRefresh !== null) stopAutoRefresh();
       // Whatever is in flight belongs to a question that is no longer being asked — either the
       // panel unmounted or `deps` changed. Bumping the read id is what stops its outcome from
       // landing on a panel that has moved on.

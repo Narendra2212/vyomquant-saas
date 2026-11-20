@@ -579,6 +579,7 @@ _MP = "backend_app/backend/marketplace"
 _PP = "backend_app/backend/paper"
 _MDC = "backend_app/backend/market_data_contract.py"
 _MDV = "backend_app/backend/market_data_validation.py"
+_MDS = "backend_app/backend/market_data_measurement_store.py"
 _WSM = "backend_app/api_ws/ws_manager.py"
 _BTS = "backend_app/backend/backtest_service.py"
 _BILLING = "backend_app/routers/billing.py"
@@ -687,6 +688,22 @@ REGISTER: Tuple[Reviewed, ...] = (
              "stop", f"{_JS}/strategies.js", Signal.CROSS_SURFACE,
              "and strategies.js's stop, which stops a deployment. The reference ledger is a test "
              "oracle that makes no HTTP call at all."),
+    # RT-04: `market_data_measurement_store.py` joined the `market_data_*` baseline the moment it
+    # was added, so its own `_service_client` (a one-line wrapper around
+    # `core.dependencies.get_service_supabase`) now collides by NAME with
+    # `subscriber_operation_guard.py`'s pre-existing private helper of the same name - which wraps
+    # a DIFFERENT accessor, `routers.library._build_service_client`. Neither reimplements the
+    # other's accessor or the other's degradation policy (library's has its own cached client,
+    # its own DEV_MODE/ENV fallback rule and its own MarketplaceError mapping; the store's is a
+    # one-line passthrough). Two private, module-scoped wrappers independently named "the function
+    # that gets me a service client" is a coincidence of a generic name, not a duplicated
+    # responsibility - confirmed by the test's own measurement: shape similarity 0.38, no shared
+    # parameters.
+    Reviewed("_service_client", "_service_client", f"{_MP}/subscriber_operation_guard.py",
+             "_service_client", _MDS, Signal.NAME_ONLY,
+             "subscriber_operation_guard's helper delegates to routers.library._build_service_client; "
+             "the measurement store's delegates to core.dependencies.get_service_supabase. Two "
+             "different, pre-existing accessors, wrapped under the same obvious private name."),
 )
 
 REGISTER_BY_KEY: Dict[Tuple[str, str, str, str], Reviewed] = {

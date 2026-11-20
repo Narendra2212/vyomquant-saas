@@ -154,7 +154,19 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
       const emailInput = screen.getByPlaceholderText('trader@vyomquant.io');
       const passwordInput = screen.getByLabelText(/^Password$/i);
       const confirmInput = screen.getByLabelText(/^Confirm Password$/i);
-      const termsCheckbox = screen.getByRole('checkbox');
+
+      // LEGAL-01 put THREE declarations on this form, not one: an age attestation, the
+      // Terms/Risk agreement, and a country declaration that makes Terms section 3's
+      // restricted-jurisdiction clause enforceable. This used to read
+      // `screen.getByRole('checkbox')`, which threw "Found multiple elements" the moment
+      // the second box landed, and would silently have ticked only one of them if it had
+      // not. Counted, so a FOURTH declaration fails here with a clear reason rather than
+      // as an unexplained "signUp was not called".
+      const consents = screen.getAllByRole('checkbox');
+      expect(consents).toHaveLength(2);
+      const ageCheckbox = screen.getByRole('checkbox', { name: /at least 18/i });
+      const termsCheckbox = screen.getByRole('checkbox', { name: /agree to the/i });
+      const countrySelect = screen.getByLabelText(/which country are you in/i);
 
       fireEvent.change(emailInput, { target: { value: 'newuser@vyomquant.io' } });
       fireEvent.change(passwordInput, { target: { value: 'short' } });
@@ -173,14 +185,31 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
       expect(mismatchMsgs.length).toBeGreaterThan(0);
       expect(signUpSpy).not.toHaveBeenCalled();
 
-      // Match confirmation but leave terms unchecked
+      // Match confirmation but leave every declaration blank
       fireEvent.change(confirmInput, { target: { value: 'StrongAuth!2026' } });
       fireEvent.click(submitBtn);
       expect(await screen.findByText(/You must agree to the Terms and Risk Disclosure/i)).toBeDefined();
       expect(signUpSpy).not.toHaveBeenCalled();
 
-      // Check terms box and submit
+      // Each declaration is refused ON ITS OWN. Walked one at a time rather than filled in
+      // together, because that is the only way to show each gate is load-bearing: satisfying
+      // two of three must still refuse, and the message must name the one that is missing.
+      // The order mirrors the handler's own (`agreedToPolicies`, then `confirmedAge`, then
+      // `declaredCountry`), so each step's error is the next gate down.
       fireEvent.click(termsCheckbox);
+      fireEvent.click(submitBtn);
+      expect(
+        await screen.findByText(/You must confirm you meet the minimum age/i),
+      ).toBeDefined();
+      expect(signUpSpy).not.toHaveBeenCalled();
+
+      fireEvent.click(ageCheckbox);
+      fireEvent.click(submitBtn);
+      expect(await screen.findByText(/Please select the country you are in/i)).toBeDefined();
+      expect(signUpSpy).not.toHaveBeenCalled();
+
+      // Every declaration satisfied: India, which is not in RESTRICTED_COUNTRY_CODES.
+      fireEvent.change(countrySelect, { target: { value: 'IN' } });
       signUpSpy.mockResolvedValueOnce({
         data: { user: { id: 'usr_new' } },
         error: null,
@@ -202,6 +231,87 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
 
       // Transitions to OTP step
       expect(await screen.findByRole('heading', { name: /Verify Your Identity/i })).toBeDefined();
+    });
+
+    it('REF-UI-01: a typed referral code is checked, and an invalid one blocks sign-up', async () => {
+      const pr = await import('../../src/lib/pendingReferral');
+      window.localStorage.clear();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ valid: false, message: 'Invalid referral code' }),
+      });
+      const signUpSpy = vi.spyOn(supabase.auth, 'signUp');
+      render(
+        <MemoryRouter>
+          <AuthPage mode="signup" />
+        </MemoryRouter>
+      );
+      const field = screen.getByLabelText(/^Referral code$/i);
+      fireEvent.change(field, { target: { value: 'bad-12' } });
+      expect(field.value).toBe('BAD12');
+      fireEvent.blur(field);
+      expect(await screen.findByText(/Invalid referral code/i)).toBeDefined();
+
+      fireEvent.change(screen.getByPlaceholderText('trader@vyomquant.io'), { target: { value: 'ref@vyomquant.io' } });
+      fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.change(screen.getByLabelText(/^Confirm Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /agree to the/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /at least 18/i }));
+      fireEvent.change(screen.getByLabelText(/which country are you in/i), { target: { value: 'IN' } });
+      fireEvent.click(screen.getByRole('button', { name: /CREATE ACCOUNT & SEND OTP/i }));
+      expect(await screen.findByText(/referral code isn't valid/i)).toBeDefined();
+      expect(signUpSpy).not.toHaveBeenCalled();
+      expect(pr.readPendingReferral()).toBeNull();
+      fetchSpy.mockRestore();
+    });
+
+    it('REF-UI-01: a valid typed code is remembered for the claim after first sign-in', async () => {
+      const pr = await import('../../src/lib/pendingReferral');
+      window.localStorage.clear();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ valid: true, message: 'Valid referral code' }),
+      });
+      vi.spyOn(supabase.auth, 'signUp').mockResolvedValueOnce({ data: { user: { id: 'usr_ref' } }, error: null });
+      render(
+        <MemoryRouter>
+          <AuthPage mode="signup" />
+        </MemoryRouter>
+      );
+      fireEvent.change(screen.getByLabelText(/^Referral code$/i), { target: { value: 'good1234' } });
+      fireEvent.change(screen.getByPlaceholderText('trader@vyomquant.io'), { target: { value: 'ref2@vyomquant.io' } });
+      fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.change(screen.getByLabelText(/^Confirm Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /agree to the/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /at least 18/i }));
+      fireEvent.change(screen.getByLabelText(/which country are you in/i), { target: { value: 'IN' } });
+      fireEvent.click(screen.getByRole('button', { name: /CREATE ACCOUNT & SEND OTP/i }));
+      expect(await screen.findByRole('heading', { name: /Verify Your Identity/i })).toBeDefined();
+      expect(pr.readPendingReferral()).toBe('GOOD1234');
+      fetchSpy.mockRestore();
+    });
+
+    it('AUTH-DUP-01: an address that already has an account is told to sign in, not asked for a code', async () => {
+      // Supabase answers signUp for an existing address with success, an EMPTY identities
+      // list and no email. Production 2026-11-20: the page asked for a code that never came.
+      vi.spyOn(supabase.auth, 'signUp').mockResolvedValueOnce({
+        data: { user: { id: 'usr_existing', identities: [] } },
+        error: null,
+      });
+      const signOutSpy = vi.spyOn(supabase.auth, 'signOut').mockResolvedValue({ error: null });
+      render(
+        <MemoryRouter>
+          <AuthPage mode="signup" />
+        </MemoryRouter>
+      );
+      fireEvent.change(screen.getByPlaceholderText('trader@vyomquant.io'), { target: { value: 'existing@vyomquant.io' } });
+      fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.change(screen.getByLabelText(/^Confirm Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /agree to the/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /at least 18/i }));
+      fireEvent.change(screen.getByLabelText(/which country are you in/i), { target: { value: 'IN' } });
+      fireEvent.click(screen.getByRole('button', { name: /CREATE ACCOUNT & SEND OTP/i }));
+      expect(await screen.findByText(/already exists\. Sign in instead/i)).toBeDefined();
+      expect(screen.queryByRole('heading', { name: /Verify Your Identity/i })).toBeNull();
+      expect(signOutSpy).toHaveBeenCalled();
     });
   });
 

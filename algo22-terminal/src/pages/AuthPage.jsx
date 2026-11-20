@@ -338,6 +338,25 @@ import { supabase } from "../supabase";
 // ERR_CONNECTION_REFUSED with a perfectly valid token in the hash. See `config.js`.
 import { getAuthRedirectUrl } from "../config";
 
+// LEGAL-01: the signup consent checkbox below used to be React state that gated
+// this form and was then discarded. These two make it a persisted record.
+import { api } from "../api";
+import { LEGAL_VERSION, SIGNUP_REQUIRED_DOCUMENTS } from "../legal/documents";
+import { COUNTRIES } from "../legal/countries";
+import {
+  capturePendingReferral,
+  clearPendingReferral,
+  readPendingReferral,
+  setPendingReferral,
+  validateReferralCode,
+} from "../lib/pendingReferral";
+
+// LEGAL-01: mirrored here only to refuse early in the form. The SERVER holds the
+// authoritative list (backend_app/core/restricted_jurisdictions.py) and refuses
+// regardless of what this constant says, so a stale copy here cannot admit
+// anyone it should not -- it can only fail to warn them a moment sooner.
+const RESTRICTED_COUNTRY_CODES = ["CU", "IR", "KP", "SY"];
+
 const RESEND_COOLDOWN_SECONDS = 60;
 
 export const AUTH_STATES = {
@@ -463,6 +482,58 @@ function PasswordStrengthMeter({ strength }) {
 export default function AuthPage({ mode = "signin" }) {
   const navigate = useNavigate();
 
+  // REF-ATTR-01: `/signup?ref=CODE` is the referral link. Remember the code until the
+  // account's first signed-in session claims it (AuthGuard -> POST /api/referral/claim).
+  // REF-UI-01: the same code pre-fills the form's Referral code field, which a user without
+  // a link can also type into.
+  const [referralCode, setReferralCode] = useState(() => {
+    const fromLink = capturePendingReferral(typeof window !== "undefined" ? window.location.search : "");
+    return fromLink || readPendingReferral() || "";
+  });
+  // null (not checked) | "checking" | "valid" | "invalid" | "unknown" (check unavailable)
+  const [referralStatus, setReferralStatus] = useState(null);
+  const [referralMessage, setReferralMessage] = useState("");
+
+  const checkReferral = async (raw = referralCode) => {
+    const code = String(raw || "").trim();
+    if (!code) {
+      setReferralStatus(null);
+      setReferralMessage("");
+      return null;
+    }
+    setReferralStatus("checking");
+    const result = await validateReferralCode(code);
+    const status = result.valid === true ? "valid" : result.valid === false ? "invalid" : "unknown";
+    setReferralStatus(status);
+    setReferralMessage(
+      status === "valid"
+        ? "Referral code applied"
+        : status === "invalid"
+          ? result.message || "Referral code not recognised"
+          : "Couldn't check this code right now. It will be checked again when you first sign in.",
+    );
+    return status;
+  };
+
+  // REF-UI-01: what to remember before the account exists. A code that the server has said
+  // is invalid refuses the submit (the user can fix it or empty the field); an emptied field
+  // forgets any code a link left behind; an unchecked or unverifiable code is kept, because
+  // the claim after first sign-in validates it again with the same rules.
+  const settleReferralBeforeSignup = async () => {
+    const code = referralCode.trim();
+    if (!code) {
+      clearPendingReferral();
+      return true;
+    }
+    const status = referralStatus === "valid" ? "valid" : await checkReferral(code);
+    if (status === "invalid") {
+      setError("That referral code isn't valid. Check it, or leave the field empty to continue without one.");
+      return false;
+    }
+    setPendingReferral(code);
+    return true;
+  };
+
   // Mode: "signin" | "signup"
   const [authMode, setAuthMode] = useState(mode === "signup" ? "signup" : "signin");
 
@@ -483,12 +554,20 @@ export default function AuthPage({ mode = "signin" }) {
 
   const [agreedToPolicies, setAgreedToPolicies] = useState(false);
 
+  // LEGAL-01: Terms section 3 makes the user represent that they meet the age
+  // requirement and are not in a restricted jurisdiction. Both were sentences in
+  // a document with no mechanism behind them. Neither is pre-filled: the country
+  // starts empty so India is not silently declared on a user's behalf, and the
+  // age box starts unticked.
+  const [confirmedAge, setConfirmedAge] = useState(false);
+  const [declaredCountry, setDeclaredCountry] = useState("");
+
   // OTP form state: 6 separate digits
   const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
   const otpInputRefs = useRef([]);
 
   // UI / Status state
-  const [loadingAction, setLoadingAction] = useState(""); // "" | "password_auth" | "verify_otp" | "google" | "resend_otp"
+  const [loadingAction, setLoadingAction] = useState(""); // "" | "password_auth" | "verify_otp" | "google" | "resend_otp" | "password_reset"
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -596,9 +675,32 @@ export default function AuthPage({ mode = "signin" }) {
         setError("You must agree to the Terms and Risk Disclosure.");
         return;
       }
+      // LEGAL-01. Checked here so the user is told before an account is created,
+      // rather than after -- the acceptance POST happens post-OTP, and failing
+      // there would leave an account with no recorded representations. The server
+      // enforces both regardless; this is the early, kinder refusal.
+      if (!confirmedAge) {
+        setError("You must confirm you meet the minimum age in our Terms of Service.");
+        return;
+      }
+      if (!declaredCountry) {
+        setError("Please select the country you are in.");
+        return;
+      }
+      if (RESTRICTED_COUNTRY_CODES.includes(declaredCountry)) {
+        const name =
+          COUNTRIES.find((c) => c.code === declaredCountry)?.name || declaredCountry;
+        setError(
+          `We cannot open an account for someone in ${name}. See section 3 of our `
+            + `Terms of Service.`,
+        );
+        return;
+      }
     }
 
     if (loadingAction) return;
+
+    if (isUp && !(await settleReferralBeforeSignup())) return;
 
     clearStatus();
     setLoadingAction("password_auth");
@@ -607,7 +709,7 @@ export default function AuthPage({ mode = "signin" }) {
     try {
       if (isUp) {
         // Sign Up Flow: Create account with password
-        const { error: signUpError } = await supabase.auth.signUp({
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email: targetEmail,
           password: password,
           options: {
@@ -626,6 +728,29 @@ export default function AuthPage({ mode = "signin" }) {
         });
 
         if (signUpError) throw signUpError;
+
+        // AUTH-DUP-01: an address that already has an account. Supabase answers `signUp`
+        // with success and a user whose `identities` list is EMPTY, and sends NO email (so
+        // the form cannot be used to discover who has an account). This page used to move to
+        // the code step anyway and ask for a code that never comes -- found in production
+        // 2026-11-20. Say what happened and send the user to sign in instead.
+        const identities = signUpData?.user?.identities;
+        if (Array.isArray(identities) && identities.length === 0) {
+          await supabase.auth.signOut();
+          setPasswordVerified(false);
+          setAuthState(AUTH_STATES.PASSWORD_REQUIRED);
+          setError(
+            "An account with this email already exists. Sign in instead, or use \"Forgot password\" if you can't remember it."
+          );
+          return;
+        }
+
+        // FE-04: if this project's email-confirmation requirement is off, `signUp` above
+        // already returns a live session -- the OTP screen below would then be decorative,
+        // not a second factor, exactly like the sign-in branch below. Torn down
+        // unconditionally so nothing live exists until the OTP step actually succeeds,
+        // whether or not this project's config would have granted a session here.
+        await supabase.auth.signOut();
 
         // Account registered. NOTHING IS DISPATCHED HERE - the only email is the confirm-signup
         // one `signUp` above already sent. This line used to claim it dispatched an OTP, which it
@@ -649,6 +774,18 @@ export default function AuthPage({ mode = "signin" }) {
         }
 
         // Password verified successfully!
+        // FE-04: `signInWithPassword` succeeding does not merely verify the password -- it
+        // is a complete Supabase sign-in. `persistSession: true` means the SDK has already
+        // written a live, fully-privileged session into its own storage at this point, with
+        // or without this app's OWN `sessionStorage` bookkeeping below. Leaving that session
+        // live made the OTP step that follows pure UI theatre: anyone who could read that
+        // already-established session (this tab, another tab sharing storage, a later bug)
+        // had full account access with zero second factor, which is exactly what this page's
+        // "two-factor" copy tells a trader cannot happen. Torn down immediately so nothing
+        // live exists between the password check and a successful `verifyOtp` below, which
+        // establishes its own fresh session and is the only session this flow ever keeps.
+        await supabase.auth.signOut();
+
         // DO NOT grant application access or persist session to sessionStorage yet.
         // Immediately dispatch the 2nd factor Email OTP challenge.
         let dispatched = false;
@@ -735,6 +872,43 @@ export default function AuthPage({ mode = "signin" }) {
       if (data?.session?.access_token) {
         setAuthState(AUTH_STATES.AUTHENTICATED);
         sessionStorage.setItem("token", data.session.access_token);
+
+        // LEGAL-01: PERSIST THE ACCEPTANCE. This is the only point in the signup
+        // flow where a session exists — the password step deliberately calls
+        // signOut() so nothing live exists before OTP succeeds — and the
+        // endpoint requires authentication, so it cannot be called earlier.
+        //
+        // Until now `agreedToPolicies` gated this form and was then discarded,
+        // so no record of any user's acceptance existed anywhere.
+        //
+        // DELIBERATELY NOT AWAITED AS A BLOCKER, AND DELIBERATELY NOT SILENT.
+        // The user has authenticated; refusing them the dashboard because an
+        // audit write failed would be the wrong trade. But a failure that
+        // vanished would recreate the original defect, so it is logged and the
+        // app re-prompts on next load (getMyAcceptance reports
+        // needs_acceptance: true while no row exists).
+        if (isUp) {
+          api.legal
+            .accept({
+              version: LEGAL_VERSION,
+              documents: SIGNUP_REQUIRED_DOCUMENTS,
+              context: "signup",
+              // LEGAL-01: the two representations Terms section 3 makes. The
+              // server REQUIRES both for a signup -- age must be true and the
+              // country must not be restricted -- so these are not decorative.
+              ageConfirmed: confirmedAge,
+              declaredCountry: declaredCountry,
+            })
+            .catch((acceptErr) => {
+               
+              console.error(
+                "[LEGAL-01] acceptance was NOT recorded for this signup; the "
+                  + "user will be re-prompted on next load.",
+                acceptErr,
+              );
+            });
+        }
+
         setSuccess("Authentication successful. Redirecting to dashboard...");
         navigate("/app/dashboard");
       } else {
@@ -838,9 +1012,77 @@ export default function AuthPage({ mode = "signin" }) {
     setOtpDigits(["", "", "", "", "", ""]);
   };
 
+  // ── PASSWORD RECOVERY: the half of the flow that did not exist ──────────────
+  //
+  // `/reset-password` and `pages/UpdatePasswordPage.jsx` have always existed, and
+  // `App.jsx`'s recovery handler has always intercepted a `type=recovery` hash and sent
+  // the user there. But NOTHING IN THE APP EVER ASKED SUPABASE TO SEND THE EMAIL: there
+  // was no call to `resetPasswordForEmail` anywhere in `src/`, and both `supabase.js` and
+  // `App.jsx` say so in their own comments. So the completion half was reachable only by
+  // an operator triggering a recovery email by hand from the Supabase dashboard, and a
+  // user who forgot their password had no way to recover their account from the product.
+  //
+  // THE EXPLICIT `redirectTo` IS THE SECOND HALF OF THE FIX, not decoration. Those same
+  // comments record that the app "does not control -- and cannot assert -- which path a
+  // legitimate recovery email actually lands on, or what flow type generated it", because
+  // an omitted redirect makes Supabase fall back to the project's dashboard Site URL.
+  // Naming `/reset-password` here means the link lands on the form that completes it, and
+  // the hash-interception path in `App.jsx` becomes a fallback for old links rather than
+  // the only thing holding the flow together.
+  //
+  // IT DOES NOT SAY WHETHER THE ACCOUNT EXISTS. Supabase deliberately answers the same way
+  // for a registered and an unregistered address, and the message below preserves that: a
+  // reset form that confirms "no account with that email" is an account-enumeration oracle
+  // for anyone who wants a list of this platform's customers.
+  const handlePasswordReset = async () => {
+    setEmailTouched(true);
+
+    const targetEmail = email.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!targetEmail || !emailRegex.test(targetEmail)) {
+      setError("Enter the email address for your account, then choose Forgot password.");
+      return;
+    }
+
+    if (loadingAction) return;
+
+    clearStatus();
+    setLoadingAction("password_reset");
+
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(targetEmail, {
+        redirectTo: getAuthRedirectUrl("/reset-password"),
+      });
+
+      // supabase-js RESOLVES with `{ error }` rather than throwing, which is the mistake
+      // the header records this page having made on the OTP dispatch: the call was awaited
+      // and its result never bound, so a rate limit was invisible and the screen reported
+      // success. Bound here for the same reason.
+      if (resetError) throw resetError;
+
+      setSuccess(
+        "If an account exists for that address, a password reset link is on its way. "
+        + "The link opens the page where you choose a new password, and it expires.",
+      );
+    } catch (err) {
+      const msg = err.message || "";
+      // Supabase rate-limits recovery dispatch per address. Saying so is more useful than
+      // "failed", because the action for the user is to wait rather than to retry.
+      if (msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("too many")) {
+        setError("Too many reset requests for that address. Wait a few minutes and try again.");
+      } else {
+        setError(msg || "Could not send a reset link. Please try again.");
+      }
+    } finally {
+      setLoadingAction("");
+    }
+  };
+
   // Google OAuth Fallback
   const handleGoogleAuth = async () => {
     if (loadingAction) return;
+    // REF-UI-01: a Google sign-up carries the typed referral code the same way.
+    if (isUp && !(await settleReferralBeforeSignup())) return;
     clearStatus();
     setLoadingAction("google");
     try {
@@ -1079,11 +1321,105 @@ export default function AuthPage({ mode = "signin" }) {
               </div>
             )}
 
+            {/* REF-UI-01: Referral code (Sign-Up only, optional) */}
+            {isUp && (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <label htmlFor="auth-referral-code" className={passwordLabelClass}>
+                    Referral code
+                  </label>
+                  <span className="text-micro uppercase tracking-wide text-content-muted">Optional</span>
+                </div>
+                <input
+                  id="auth-referral-code"
+                  type="text"
+                  value={referralCode}
+                  onChange={(e) => {
+                    setReferralCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 32));
+                    setReferralStatus(null);
+                    setReferralMessage("");
+                  }}
+                  onBlur={() => { checkReferral(); }}
+                  placeholder="e.g. VYOM1234"
+                  disabled={isLoading}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={32}
+                  aria-invalid={referralStatus === "invalid" ? "true" : undefined}
+                  aria-describedby={referralMessage ? "auth-referral-code-status" : undefined}
+                  className={passwordInputClass}
+                  style={{
+                    borderColor: referralStatus === "invalid" ? token.status.error.fg : token.line.default,
+                    opacity: isLoading ? 0.6 : 1,
+                    letterSpacing: "0.08em",
+                  }}
+                />
+                {referralStatus === "checking" && (
+                  <p id="auth-referral-code-status" className="text-body text-content-muted">Checking code…</p>
+                )}
+                {referralMessage && referralStatus !== "checking" && (
+                  <p
+                    id="auth-referral-code-status"
+                    className="inline-flex items-center gap-1 text-body"
+                    style={{
+                      color: referralStatus === "valid"
+                        ? statusToken("ok").fg
+                        : referralStatus === "invalid"
+                          ? token.status.error.fg
+                          : undefined,
+                    }}
+                  >
+                    {referralStatus === "valid" && <Check size={10} aria-hidden="true" />}
+                    {referralMessage}
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Terms Checkbox for Sign-Up */}
             {isUp && (
               <div className="mt-1 flex flex-col gap-1">
                 {/* fontSize: 11 → --text-body (sentence, and the one on this page a trader is
                     agreeing to). */}
+                {/* LEGAL-01: the country declaration that makes Terms section 3's
+                    restricted-jurisdiction clause enforceable. Starts EMPTY --
+                    defaulting to India would declare a country on the user's
+                    behalf, which is the opposite of a representation. */}
+                <label className="flex flex-col gap-1.5 text-body text-content-secondary">
+                  <span>Which country are you in?</span>
+                  <select
+                    required
+                    value={declaredCountry}
+                    onChange={(e) => setDeclaredCountry(e.target.value)}
+                    className="rounded-lg border border-line-default bg-surface-canvas px-3 py-2 text-content-primary"
+                  >
+                    <option value="" disabled>
+                      Select your country
+                    </option>
+                    {COUNTRIES.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {/* LEGAL-01: the age attestation. Not pre-ticked. */}
+                <label className="flex cursor-pointer items-start gap-2 text-body leading-relaxed text-content-secondary">
+                  <input
+                    type="checkbox"
+                    required
+                    checked={confirmedAge}
+                    onChange={(e) => setConfirmedAge(e.target.checked)}
+                    className="mt-0.5"
+                    style={{ accentColor: token.brand.base }}
+                  />
+                  <span>
+                    I am at least 18, or the age of majority where I live if that is
+                    higher, and I have legal capacity to enter this contract.
+                  </span>
+                </label>
+
                 <label className="flex cursor-pointer items-start gap-2 text-body leading-relaxed text-content-secondary">
                   <input
                     type="checkbox"
@@ -1122,6 +1458,33 @@ export default function AuthPage({ mode = "signin" }) {
             >
               {isUp ? "CREATE ACCOUNT & SEND OTP →" : "SIGN IN →"}
             </CommandButton>
+
+            {/* FORGOT PASSWORD — sign-in only. On the sign-up form there is no account to
+                recover yet, and offering it there would send a "no account exists" dead end
+                to someone in the middle of creating one.
+
+                `type="button"` is load-bearing: the default for a button inside a <form> is
+                `submit`, so without it a press would run `handlePasswordAuth` and attempt a
+                sign-in with whatever is in the password field instead of sending the email.
+
+                It takes the email from the field rather than opening a second screen, because
+                the field is already filled in by the time somebody discovers their password
+                is wrong, and a separate route would ask them to type it again. */}
+            {!isUp && (
+              <CommandButton
+                intent="ghost"
+                type="button"
+                data-testid="forgot-password-button"
+                onClick={handlePasswordReset}
+                loading={loadingAction === "password_reset"}
+                loadingLabel="Sending reset link..."
+                disabled={isLoading && loadingAction !== "password_reset"}
+                disabledReason={otherActionInFlight}
+                className="w-full justify-center"
+              >
+                Forgot password?
+              </CommandButton>
+            )}
 
             {/* Divider & Google OAuth. ONE Google command now, and one divider — see the
                 header on the duplicate this page carried. */}

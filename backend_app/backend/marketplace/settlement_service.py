@@ -922,55 +922,69 @@ async def _settle_once(
             attempts=attempt,
         )
 
-    # ── 2. The ledger row, first, and exactly once (Requirements 10.4, 10.5, 10.10). The split
-    #       arrived from :func:`settle`, which took it from ``money.split_ninety_ten`` once. ──
-    if not state.settlement_recorded:
-        duplicate = _insert_settlement(
-            supabase,
-            state,
+    # ── 2+3. The ledger row, the transition and its history row, ATOMICALLY (MKT-03).
+    #       Replaces what used to be `_insert_settlement` (step 2) and `_apply_transition`
+    #       (step 3) as two SEPARATE PostgREST statements -- the exact gap this finding
+    #       names: a crash or an exhausted retry budget between them left a payment
+    #       recorded as settled with the Subscription never activated. See
+    #       `_record_and_transition`'s own docstring and
+    #       backend_app/migrations/050_mkt03_settlement_atomic_transition.sql for the one
+    #       Postgres function this now calls through a single `.rpc()`. The split that
+    #       feeds it arrived from :func:`settle`, which took it from
+    #       ``money.split_ninety_ten`` once. ──
+    disposition = _record_and_transition(
+        supabase,
+        state,
+        reference=reference,
+        provider=provider,
+        subscription=subscription,
+        amount_minor=amount_minor,
+        owner_share_minor=owner_share_minor,
+        platform_fee_minor=platform_fee_minor,
+        currency=currency,
+        is_reversal=is_reversal,
+        reverses_reference=reverses_reference,
+        instant=instant,
+        actor_id=actor_id,
+        subscription_id=subscription_id,
+    )
+    if state.subscription is not None:
+        # Mirrors the original code's explicit `subscription = resumed_subscription`
+        # reassignment on the DUPLICATE_RESUMED path: `state.subscription` is updated
+        # to the FRESH read exactly there, so this keeps the local `subscription` the
+        # same image step 4 below (the entitlement grant) reads `user_id`/`library_id`
+        # from.
+        subscription = state.subscription
+
+    if disposition == "duplicate_ignored":
+        await _audit_duplicate_ignored(
             reference=reference,
+            subscription_id=subscription_id,
             provider=provider,
-            subscription=subscription,
+            amount_minor=amount_minor,
+            currency=currency,
+            is_reversal=is_reversal,
+        )
+        return SettlementResult(
+            outcome=SettlementOutcome.DUPLICATE_IGNORED,
+            provider_reference=reference,
+            is_reversal=is_reversal,
+            subscription_id=subscription_id,
             amount_minor=amount_minor,
             owner_share_minor=owner_share_minor,
             platform_fee_minor=platform_fee_minor,
             currency=currency,
-            is_reversal=is_reversal,
-            reverses_reference=reverses_reference,
-            settled_at=instant,
+            from_status=_normalise_status(_get(subscription, "status")),
+            attempts=attempt,
         )
-        if duplicate:
-            await _audit_duplicate_ignored(
-                reference=reference,
-                subscription_id=subscription_id,
-                provider=provider,
-                amount_minor=amount_minor,
-                currency=currency,
-                is_reversal=is_reversal,
-            )
-            return SettlementResult(
-                outcome=SettlementOutcome.DUPLICATE_IGNORED,
-                provider_reference=reference,
-                is_reversal=is_reversal,
-                subscription_id=subscription_id,
-                amount_minor=amount_minor,
-                owner_share_minor=owner_share_minor,
-                platform_fee_minor=platform_fee_minor,
-                currency=currency,
-                from_status=_normalise_status(_get(subscription, "status")),
-                attempts=attempt,
-            )
-
-    # ── 3. The transition, the period, the history row (Reqs 11.4, 11.5, 11.6, 11.12). ──
-    if not state.transition_written:
-        _apply_transition(
-            supabase,
-            state,
-            subscription=subscription,
-            is_reversal=is_reversal,
-            instant=instant,
-            actor_id=actor_id,
+    if disposition == "duplicate_resumed":
+        await _audit_duplicate_resumed(
             reference=reference,
+            subscription_id=subscription_id,
+            provider=provider,
+            amount_minor=amount_minor,
+            currency=currency,
+            is_reversal=is_reversal,
         )
 
     # ── 4. The entitlement, carrying the period expiry (never None). ──
@@ -1064,6 +1078,41 @@ def _read_subscription(supabase: Any, subscription_id: str) -> Optional[Mapping[
             f"the subscription read for {subscription_id} did not complete: {exc}"
         ) from exc
     return dict(rows[0]) if rows else None
+
+
+def _read_settlement_id(
+    supabase: Any, *, reference: str, is_reversal: bool
+) -> Optional[str]:
+    """The existing Settlement_Record's id for ``(provider_reference, is_reversal)``, if any.
+
+    MKT-03's resumption path only: read back the row ``uq_settlement_reference_reversal`` found
+    when a redelivery's own insert reported a duplicate, so the RECORDED/REVERSED result this
+    call goes on to return names the Settlement that actually carries the money instead of a
+    freshly generated id nothing refers to. ``find_settled_payment`` is not reused here because
+    it is hardcoded to ``is_reversal=False``; this needs either.
+    """
+    try:
+        response = (
+            supabase.table(SETTLEMENT_TABLE)
+            .select("id")
+            .eq("provider_reference", reference)
+            .eq("is_reversal", is_reversal)
+            .execute()
+        )
+        rows = _rows(response)
+    except SettlementPersistenceError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - re-raised as the defined outcome, never swallowed
+        raise SettlementPersistenceError(
+            f"reading back the existing settlement for {reference} did not complete: {exc}"
+        ) from exc
+    # The predicate is restated in the process, for the same reason ``find_settled_payment``
+    # restates ``is_reversal`` on its own rows: a double that lost one of the two ``.eq``
+    # filters must not let a reversal's row answer for its own payment, or the other way round.
+    for row in rows:
+        if bool(_get(row, "is_reversal")) == bool(is_reversal):
+            return _as_text(_get(row, "id"))
+    return None
 
 
 def find_settled_payment(
@@ -1340,7 +1389,212 @@ def _settlement_payload(
     return payload
 
 
-def _insert_settlement(
+def _rpc_error_code(exc: Exception) -> str:
+    """The SQLSTATE a failed ``.rpc()`` call raised, or ``""`` when none is readable.
+
+    ``record_and_transition_settlement`` (migration ``050_mkt03_settlement_atomic_
+    transition.sql``) raises ``RAISE EXCEPTION ... USING ERRCODE = 'MKxxx'``.
+    ``postgrest.exceptions.APIError`` carries that SQLSTATE on its own ``.code``
+    attribute (PostgREST relays the Postgres error code verbatim); a double that does
+    not wrap postgrest's exception type is read by falling back to ``str(exc)``, the
+    same two-step reading ``paper_repository._is_unique_violation`` already uses for
+    the same reason.
+    """
+    code = str(getattr(exc, "code", "") or "").strip()
+    if code:
+        return code
+    text = str(exc)
+    for candidate in ("MK001", "MK002"):
+        if candidate in text:
+            return candidate
+    return ""
+
+
+def _decide_transition(
+    subscription: Mapping[str, Any], *, is_reversal: bool, instant: datetime
+) -> Optional[Dict[str, Any]]:
+    """The pure decision ``_apply_transition`` used to make inline, with no I/O.
+
+    Extracted unchanged from the write-performing function this module replaced
+    (MKT-03), so that decision stays entirely in Python -- Requirements 11.4, 11.5's
+    period arithmetic, ``ELIGIBLE_FOR_ACTIVATION``, ``can_transition`` and the
+    ``renewal_in_place`` carve-out are exactly what they were, exercised by the same
+    property-test suite (``tests/property/test_subscription_state_machine.py``,
+    ``tests/property/test_entitlement_expiry_boundary.py``) -- and only the WRITE of
+    what this function decides moves into
+    ``backend_app/migrations/050_mkt03_settlement_atomic_transition.sql``.
+
+    Returns:
+        ``None`` when the transition is not permitted -- nothing is written and no
+        entitlement follows, matching ``_apply_transition``'s own "not permitted"
+        branch. Otherwise a dict carrying everything the atomic call and the history
+        row need: ``from_status``, ``to_status``, ``period_start``, ``period_expiry``,
+        ``cancelled_at`` (the UPDATE's own values -- unchanged, not nulled, for a
+        reversal) and ``prior_period_expiry`` / ``new_period_expiry`` for the history
+        row.
+    """
+    from_status = _normalise_status(_get(subscription, "status"))
+    stored_expiry = _parse_instant(_get(subscription, "period_expiry"))
+    stored_start = _parse_instant(_get(subscription, "period_start"))
+
+    target_state = SubscriptionState.REFUNDED if is_reversal else SubscriptionState.ACTIVE
+    target_status = STATUS_TEXT_FOR_STATE[target_state]
+
+    if is_reversal:
+        permitted = can_transition(normalise_subscription_state(from_status), target_state)
+    else:
+        permitted = from_status in ELIGIBLE_FOR_ACTIVATION
+        # REQUIREMENTS DECISION (Requirement 11.5, task 19.2): an ``ACTIVE -> ACTIVE``
+        # settlement extends the period even though ``can_transition`` says no
+        # (Requirement 11.2 lists no such pair) -- see the original `_apply_transition`
+        # docstring this was extracted from for the full reasoning, unchanged here.
+        renewal_in_place = not permitted and from_status == _STATUS_ACTIVE
+        permitted = permitted or renewal_in_place
+
+    if not permitted:
+        logger.warning(
+            "settlement recorded for subscription %s but %s -> %s is not a permitted "
+            "transition, so no state change and no entitlement follow",
+            _as_text(_get(subscription, "id")),
+            from_status,
+            target_status,
+        )
+        return None
+
+    if is_reversal:
+        new_start = stored_start
+        new_expiry = stored_expiry
+        cancelled_at: Optional[datetime] = instant
+    else:
+        # The anchor is the STORED ``period_expiry``, not ``now``: :func:`period_for_renewal`
+        # extends from the later of the two, so an early renewal lengthens the period
+        # instead of truncating it (Requirement 11.5). A row with no stored expiry is a
+        # first activation and takes :func:`period_for_activation` (Requirement 11.4).
+        if stored_expiry is None:
+            new_start, new_expiry = period_for_activation(instant)
+        else:
+            new_start = stored_start or instant
+            new_expiry = period_for_renewal(stored_expiry, instant)
+        cancelled_at = None
+
+    return {
+        "from_status": from_status,
+        "to_status": target_status,
+        "period_start": new_start,
+        "period_expiry": new_expiry,
+        "cancelled_at": cancelled_at,
+        "prior_period_expiry": stored_expiry,
+        "new_period_expiry": new_expiry,
+    }
+
+
+def _call_record_and_transition(
+    supabase: Any,
+    *,
+    subscription_id: str,
+    reference: str,
+    is_reversal: bool,
+    settlement_payload: Mapping[str, Any],
+    proceed_if_duplicate: bool,
+    expected_from_status: str,
+    decision: Optional[Mapping[str, Any]],
+    actor_id: Optional[str],
+    instant: datetime,
+    user_id: Optional[str],
+) -> Dict[str, Any]:
+    """One call to ``public.record_and_transition_settlement``
+    (``050_mkt03_settlement_atomic_transition.sql``). Translates this module's own
+    value types into the jsonb payloads that function expects, and its jsonb result
+    back into a plain dict.
+
+    Raises:
+        SettlementPersistenceError: the call did not complete, for any reason --
+            ``MK001`` (another writer moved the subscription between the read and this
+            call) included, which is the exact outcome ``_apply_transition``'s own
+            ``.eq("status", from_status)`` guard used to report, and which
+            ``settle()``'s Requirement 10.11 retry budget already retries today for it.
+    """
+    settlement_jsonb = {
+        "id": settlement_payload["id"],
+        "listing_id": settlement_payload["listing_id"],
+        "owner_id": settlement_payload["owner_id"],
+        "purchaser_id": settlement_payload["purchaser_id"],
+        "amount_minor": settlement_payload["amount_minor"],
+        "owner_share_minor": settlement_payload["owner_share_minor"],
+        "platform_fee_minor": settlement_payload["platform_fee_minor"],
+        "currency": settlement_payload["currency"],
+        "provider": settlement_payload["provider"],
+        "reverses_reference": settlement_payload["reverses_reference"],
+        "settled_at": settlement_payload["settled_at"],
+    }
+
+    transition_jsonb: Optional[Dict[str, Any]] = None
+    history_jsonb: Optional[Dict[str, Any]] = None
+    if decision is not None:
+        transition_jsonb = {
+            "status": decision["to_status"],
+            "period_start": (
+                decision["period_start"].isoformat() if decision["period_start"] else None
+            ),
+            "period_expiry": (
+                decision["period_expiry"].isoformat() if decision["period_expiry"] else None
+            ),
+            "cancelled_at": (
+                decision["cancelled_at"].isoformat() if decision["cancelled_at"] else None
+            ),
+        }
+        history_jsonb = {
+            "user_id": user_id,
+            "from_state": decision["from_status"],
+            "to_state": decision["to_status"],
+            "cause": _CAUSE_REFUND if is_reversal else _CAUSE_SETTLEMENT,
+            "actor_id": actor_id,
+            "prior_period_expiry": (
+                decision["prior_period_expiry"].isoformat()
+                if decision["prior_period_expiry"] else None
+            ),
+            "new_period_expiry": (
+                decision["new_period_expiry"].isoformat()
+                if decision["new_period_expiry"] else None
+            ),
+            "transitioned_at": instant.isoformat(),
+        }
+
+    try:
+        response = supabase.rpc("record_and_transition_settlement", {
+            "p_subscription_id": subscription_id,
+            "p_provider_reference": reference,
+            "p_is_reversal": is_reversal,
+            "p_settlement": settlement_jsonb,
+            "p_proceed_if_duplicate": proceed_if_duplicate,
+            "p_expected_from_status": expected_from_status,
+            "p_transition": transition_jsonb,
+            "p_history": history_jsonb,
+        }).execute()
+    except SettlementPersistenceError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - classified below, never swallowed
+        code = _rpc_error_code(exc)
+        if code == "MK001":
+            raise SettlementPersistenceError(
+                f"the subscription transition for {subscription_id} did not complete: "
+                f"another writer moved it while this settlement was in flight ({exc})"
+            ) from exc
+        raise SettlementPersistenceError(
+            f"record_and_transition_settlement for subscription {subscription_id} did "
+            f"not complete: {exc}"
+        ) from exc
+
+    data = getattr(response, "data", None)
+    if not isinstance(data, Mapping):
+        raise SettlementPersistenceError(
+            f"record_and_transition_settlement for subscription {subscription_id} "
+            f"returned no usable result"
+        )
+    return dict(data)
+
+
+def _record_and_transition(
     supabase: Any,
     state: _Attempt,
     *,
@@ -1353,26 +1607,43 @@ def _insert_settlement(
     currency: str,
     is_reversal: bool,
     reverses_reference: Optional[str],
-    settled_at: datetime,
-) -> bool:
-    """Insert the Settlement_Record. Returns ``True`` when it was a duplicate delivery.
+    instant: datetime,
+    actor_id: Optional[str],
+    subscription_id: str,
+) -> str:
+    """MKT-03. Steps 2 and 3 (the ledger row, the transition, the history row),
+    committed ATOMICALLY in one call to ``record_and_transition_settlement`` instead of
+    what used to be up to three separate PostgREST statements (``_insert_settlement``,
+    the subscription ``UPDATE``, ``_write_transition_row``'s ``INSERT``). This is what
+    closes the finding's own gap: a crash or an exhausted retry budget between the
+    ledger insert and the transition can no longer happen, because there is no commit
+    boundary between them any more for it to land on.
 
-    A ``UniqueViolation`` on ``uq_settlement_reference_reversal`` has two readings, and the
-    difference between them is whether *this call* already issued the insert:
+    The decision of WHAT to write -- whether the transition is permitted, the period
+    arithmetic, the renewal-in-place carve-out -- stays entirely in
+    :func:`_decide_transition`, called from here with no I/O of its own; this function
+    only commits what was decided. Mutates ``state`` exactly as ``_insert_settlement``
+    and ``_apply_transition`` used to, for the identical reason: a retry inside this
+    one ``settle()`` call must resume rather than repeat.
 
-    * ``state.insert_issued`` false - another delivery of the same provider reference got there
-      first. That is Requirement 10.10's duplicate: ``True`` is returned, the caller audits
-      ``MARKETPLACE_SETTLEMENT_DUPLICATE_IGNORED`` and nothing else happens, so ``n >= 1``
-      deliveries leave one row and one period extension (property P-6).
-    * ``state.insert_issued`` true - a previous attempt of this call committed the row and then
-      failed further along. The row is this call's own, so the attempt resumes at the transition
-      rather than reporting a duplicate and abandoning a payment it recorded.
-
-    Raises:
-        SettlementPersistenceError: the insert did not complete for any other reason.
+    Returns:
+        ``"fresh"`` -- the ledger row was inserted by this call and the decided
+            transition (if any) was applied together with it, atomically.
+        ``"duplicate_ignored"`` -- the ledger row already existed from another,
+            unrelated delivery, and a fresh read proved the transition is not (or no
+            longer) pending. The caller must return ``DUPLICATE_IGNORED`` without
+            proceeding to the entitlement step.
+        ``"duplicate_resumed"`` -- the ledger row already existed, but a fresh read
+            proved the transition is STILL pending (the MKT-03 case this migration
+            exists for: an earlier, now-superseded process recorded the money and never
+            finished activating it). This call finished it. The caller proceeds to the
+            entitlement step as normal.
     """
+    if state.settlement_recorded and state.transition_written:
+        return "fresh"
+
     settlement_id = state.settlement_id or str(uuid.uuid4())
-    payload = _settlement_payload(
+    settlement_payload = _settlement_payload(
         settlement_id=settlement_id,
         reference=reference,
         provider=provider,
@@ -1383,255 +1654,100 @@ def _insert_settlement(
         currency=currency,
         is_reversal=is_reversal,
         reverses_reference=reverses_reference,
-        settled_at=settled_at,
+        settled_at=instant,
     )
+    user_id = _as_text(_get(subscription, "user_id"))
+    from_status = _normalise_status(_get(subscription, "status")) or ""
+    decision = _decide_transition(subscription, is_reversal=is_reversal, instant=instant)
 
-    resumed = state.insert_issued
-    state.insert_issued = True
-    try:
-        response = supabase.table(SETTLEMENT_TABLE).insert(payload).execute()
-        _rows(response)
-    except SettlementPersistenceError as exc:
-        if _is_duplicate_reference(exc):
-            if resumed:
-                state.settlement_recorded = True
-                state.settlement_id = settlement_id
-                return False
-            return True
-        raise
-    except Exception as exc:  # noqa: BLE001 - either a duplicate outcome or the defined error
-        if _is_duplicate_reference(exc):
-            if resumed:
-                state.settlement_recorded = True
-                state.settlement_id = settlement_id
-                return False
-            return True
-        raise SettlementPersistenceError(
-            f"the settlement insert for provider reference {reference} did not complete: {exc}"
-        ) from exc
-
-    state.settlement_recorded = True
-    state.settlement_id = settlement_id
-    return False
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# THE TRANSITION, THE PERIOD AND THE HISTORY ROW
-# ══════════════════════════════════════════════════════════════════════════
-
-
-def _apply_transition(
-    supabase: Any,
-    state: _Attempt,
-    *,
-    subscription: Mapping[str, Any],
-    is_reversal: bool,
-    instant: datetime,
-    actor_id: Optional[str],
-    reference: str,
-) -> None:
-    """Move the Subscription, write its period, and append the history row.
-
-    A reversal goes to ``refunded`` and writes no period: the money came back, so there is no
-    Subscription_Period to extend, and ``REFUNDED`` is terminal.
-
-    A payment goes to ``active`` from one of :data:`ELIGIBLE_FOR_ACTIVATION`, and takes its period
-    from :func:`period_for_activation` on a first activation (no stored expiry) or from
-    :func:`period_for_renewal` on a renewal - which extends from the later of the current expiry
-    and the confirmation instant, so an early renewal lengthens the period instead of shortening
-    it (Requirements 11.4, 11.5).
-
-    A Subscription that is **already** ``active`` is an in-place renewal: no state changes, and the
-    period is extended by :func:`period_for_renewal` anchored on the stored ``period_expiry``. See
-    the module docstring's requirements decision 1 - a paid renewal that extended nothing was the
-    defect this branch closes, and the same-value UPDATE is exactly what
-    ``marketplace_subscription_guard``'s first branch admits.
-
-    A Subscription in a state with no edge to the target - ``refunded``, or ``active`` for a second
-    refund - is **not** moved: the ledger row still stands (the money did move, and Requirement
-    10.8 keeps it), but nothing is transitioned and no entitlement is granted. Inventing a
-    transition the state machine does not permit is what ``trg_subscription_transition_guard``
-    would refuse anyway.
-
-    Raises:
-        SettlementPersistenceError: the UPDATE or the history insert did not complete, or the
-            UPDATE matched no row because a concurrent writer moved it (the optimistic equivalent
-            of losing the ``FOR UPDATE`` race).
-    """
-    from_status = _normalise_status(_get(subscription, "status"))
-    subscription_id = _as_text(_get(subscription, "id")) or ""
-    stored_expiry = _parse_instant(_get(subscription, "period_expiry"))
-    stored_start = _parse_instant(_get(subscription, "period_start"))
-
-    target_state = SubscriptionState.REFUNDED if is_reversal else SubscriptionState.ACTIVE
-    target_status = STATUS_TEXT_FOR_STATE[target_state]
-
-    # ── Is this settlement allowed to move (or extend) the row? ──
-    #
-    # A reversal follows the state machine unchanged. A payment consults
-    # :data:`ELIGIBLE_FOR_ACTIVATION` - which carries ``payment_failed`` by the module docstring's
-    # requirements decision 2 - and additionally admits the ``active -> active`` renewal, which is
-    # not a transition at all and therefore is not the transition table's business.
-    if is_reversal:
-        permitted = can_transition(normalise_subscription_state(from_status), target_state)
-        renewal_in_place = False
-    else:
-        permitted = from_status in ELIGIBLE_FOR_ACTIVATION
-        # REQUIREMENTS DECISION (Requirement 11.5, task 19.2): an ``ACTIVE -> ACTIVE`` settlement
-        # extends the period. ``can_transition`` says no - Requirement 11.2 lists no such pair -
-        # and gating the period write behind it meant a confirmed renewal of a live Subscription
-        # recorded its money and extended nothing, which is a financial-correctness defect. The
-        # extension is anchored on the stored ``period_expiry`` below (never on ``now``), and it
-        # still requires the matching Settlement_Record, because the ledger insert is the step
-        # before this one and a call that did not record the money never reaches here.
-        renewal_in_place = not permitted and from_status == _STATUS_ACTIVE
-        permitted = permitted or renewal_in_place
-
-    if not permitted:
-        logger.warning(
-            "settlement %s recorded for subscription %s but %s -> %s is not a permitted "
-            "transition, so no state change and no entitlement follow",
-            reference,
-            subscription_id,
-            from_status,
-            target_status,
-        )
-        state.from_status = from_status
-        state.to_status = None
-        state.transition_written = True
-        return
-
-    if is_reversal:
-        payload: Dict[str, Any] = {
-            "status": _STATUS_REFUNDED,
-            "cancelled_at": instant.isoformat(),
-        }
-        new_expiry = stored_expiry
-        new_start = stored_start
-    else:
-        # The anchor is the STORED ``period_expiry``, not ``now`` and not the confirmation instant
-        # alone: :func:`period_for_renewal` extends from the later of the two, so a renewal
-        # confirmed while the current period is still running adds a month to the END of it
-        # instead of truncating it back to the payment date (Requirement 11.5). This is the
-        # arithmetic the ``active -> active`` renewal of requirements decision 1 uses as well - one
-        # implementation, not a second one beside it. A row with no stored expiry is a first
-        # activation and takes :func:`period_for_activation` (Requirement 11.4); an ``active`` row
-        # with no expiry is unrepresentable under ``chk_ls_active_has_period``, and if one is ever
-        # read anyway, treating it as a first activation writes a well-formed period rather than
-        # deriving one from a null.
-        if stored_expiry is None:
-            new_start, new_expiry = period_for_activation(instant)
-        else:
-            new_start = stored_start or instant
-            new_expiry = period_for_renewal(stored_expiry, instant)
-        payload = {
-            "status": _STATUS_ACTIVE,
-            "period_start": new_start.isoformat(),
-            "period_expiry": new_expiry.isoformat(),
-            # The retained mirrors. ``trg_lib_subs_period_mirror`` writes them too; they are
-            # written here as well so the row is correct on a database where 008 has not been
-            # applied, and so ``expires_at`` is provably the expiry rather than the NULL that
-            # ``check_deployment_permission`` reads as perpetual access.
-            "started_at": new_start.isoformat(),
-            "expires_at": new_expiry.isoformat(),
-            "cancelled_at": None,
-        }
-
-    # The UPDATE is skipped when a previous attempt already applied it. It is guarded by the
-    # status that was read, so re-issuing it after it has landed matches zero rows by
-    # construction - which the check below (correctly) reports as a lost race. Recomputing the
-    # period rather than caching it is safe and deliberate: both boundaries are pure functions of
-    # the cached Subscription image and the fixed confirmation instant, so every attempt derives
-    # the same two values.
-    if not state.status_moved:
-        try:
-            response = (
-                supabase.table(SUBSCRIPTION_TABLE)
-                .update(payload)
-                .eq("id", subscription_id)
-                # The optimistic lock: a concurrent writer that already moved the row makes this
-                # UPDATE match nothing, which is detected below rather than read as success.
-                .eq("status", from_status)
-                .execute()
-            )
-            touched = _rows(response)
-        except SettlementPersistenceError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - converted to the defined outcome, not swallowed
-            raise SettlementPersistenceError(
-                f"the subscription transition for {subscription_id} did not complete: {exc}"
-            ) from exc
-
-        if not touched:
-            raise SettlementPersistenceError(
-                f"the subscription transition for {subscription_id} matched no row at status "
-                f"{from_status!r}; another writer moved it while this settlement was in flight"
-            )
-
-        state.status_moved = True
-        state.from_status = from_status
-        state.to_status = target_status
-        state.period_start = None if is_reversal else new_start
-        state.period_expiry = None if is_reversal else new_expiry
-
-    _write_transition_row(
+    result = _call_record_and_transition(
         supabase,
-        subscription=subscription,
-        from_status=from_status,
-        to_status=target_status,
-        cause=_CAUSE_REFUND if is_reversal else _CAUSE_SETTLEMENT,
+        subscription_id=subscription_id,
+        reference=reference,
+        is_reversal=is_reversal,
+        settlement_payload=settlement_payload,
+        proceed_if_duplicate=False,
+        expected_from_status=(decision["from_status"] if decision else from_status),
+        decision=decision,
         actor_id=actor_id,
         instant=instant,
-        prior_period_expiry=stored_expiry,
-        new_period_expiry=new_expiry,
+        user_id=user_id,
     )
 
+    disposition = "fresh"
+    if not result.get("inserted"):
+        # MKT-03: a duplicate AT THE LEDGER is not necessarily a duplicate at the
+        # Subscription. See this module's own header and
+        # ``050_mkt03_settlement_atomic_transition.sql`` for why: the row found here
+        # belongs to an EARLIER process (a prior delivery that crashed or exhausted its
+        # own Requirement 10.11 retry budget before this fix existed, or before THIS
+        # call's own ledger insert -- which is itself now atomic with its transition --
+        # ever ran). The ``subscription`` read in step 1 may be exactly as stale as the
+        # finding describes, so it is re-read here rather than trusted.
+        #
+        # RESUMABLE MEANS EXACTLY "THE TRANSITION IS STILL PENDING", computed the same
+        # way :func:`_decide_transition` decides ``permitted`` -- deliberately WITHOUT
+        # its ``renewal_in_place`` addition for a payment, which EXTENDS an
+        # already-``active`` period and is ambiguous here between "this exact
+        # settlement already activated it" and "a separate, later renewal already
+        # did" -- excluded by construction rather than guessed at. A reversal has no
+        # analogous extension to double: ``can_transition(..., REFUNDED)`` is already
+        # ``False`` once a Subscription IS refunded.
+        resumed_subscription = _read_subscription(supabase, subscription_id)
+        fresh_status = (
+            _normalise_status(_get(resumed_subscription, "status"))
+            if resumed_subscription is not None
+            else None
+        )
+        if is_reversal:
+            transition_pending = resumed_subscription is not None and can_transition(
+                normalise_subscription_state(fresh_status), SubscriptionState.REFUNDED
+            )
+        else:
+            transition_pending = (
+                resumed_subscription is not None and fresh_status in ELIGIBLE_FOR_ACTIVATION
+            )
+
+        if resumed_subscription is not None and transition_pending:
+            disposition = "duplicate_resumed"
+            state.subscription = resumed_subscription
+            state.settlement_recorded = True
+            state.settlement_id = settlement_id
+            decision = _decide_transition(
+                resumed_subscription, is_reversal=is_reversal, instant=instant
+            )
+            result = _call_record_and_transition(
+                supabase,
+                subscription_id=subscription_id,
+                reference=reference,
+                is_reversal=is_reversal,
+                settlement_payload=settlement_payload,
+                proceed_if_duplicate=True,
+                expected_from_status=(
+                    decision["from_status"] if decision else (fresh_status or "")
+                ),
+                decision=decision,
+                actor_id=actor_id,
+                instant=instant,
+                user_id=_as_text(_get(resumed_subscription, "user_id")),
+            )
+        else:
+            return "duplicate_ignored"
+    else:
+        state.settlement_recorded = True
+        state.settlement_id = settlement_id
+
+    state.from_status = decision["from_status"] if decision else from_status
+    if decision is None:
+        state.to_status = None
+        state.period_start = None
+        state.period_expiry = None
+    else:
+        state.to_status = decision["to_status"]
+        state.period_start = None if is_reversal else decision["period_start"]
+        state.period_expiry = None if is_reversal else decision["period_expiry"]
     state.transition_written = True
-
-
-def _write_transition_row(
-    supabase: Any,
-    *,
-    subscription: Mapping[str, Any],
-    from_status: Optional[str],
-    to_status: str,
-    cause: str,
-    actor_id: Optional[str],
-    instant: datetime,
-    prior_period_expiry: Optional[datetime],
-    new_period_expiry: Optional[datetime],
-) -> None:
-    """Append one ``library_subscription_transitions`` row (Requirement 11.12).
-
-    Append-only by ``trg_lib_sub_transitions_append_only``: the entry is retained for the life of
-    the Subscription and no later write can alter it. Both expiries travel on the row, which is
-    what lets an audit reconstruct *which* period a payment bought without joining the ledger.
-
-    Raises:
-        SettlementPersistenceError: the insert did not complete.
-    """
-    payload: Dict[str, Any] = {
-        "subscription_id": _as_text(_get(subscription, "id")),
-        "user_id": _as_text(_get(subscription, "user_id")),
-        "from_state": from_status,
-        "to_state": to_status,
-        "cause": _truncate(cause),
-        "actor_id": actor_id,
-        "prior_period_expiry": (
-            prior_period_expiry.isoformat() if prior_period_expiry else None
-        ),
-        "new_period_expiry": new_period_expiry.isoformat() if new_period_expiry else None,
-        "transitioned_at": instant.isoformat(),
-    }
-    try:
-        response = supabase.table(TRANSITION_TABLE).insert(payload).execute()
-        _rows(response)
-    except SettlementPersistenceError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - converted to the defined outcome, not swallowed
-        raise SettlementPersistenceError(
-            f"the transition history row for {payload['subscription_id']} did not complete: {exc}"
-        ) from exc
+    return disposition
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1845,6 +1961,46 @@ async def _audit_duplicate_ignored(
         reason=(
             "this provider reference has already been settled, so the redelivery added no "
             "settlement record and extended no period"
+        ),
+        metadata=_audit_metadata(
+            provider_reference=reference,
+            provider=provider,
+            subscription_id=subscription_id,
+            amount_minor=amount_minor,
+            currency=currency,
+            is_reversal=is_reversal,
+            constraint=SETTLEMENT_REFERENCE_UNIQUE_CONSTRAINT,
+        ),
+        required=True,
+    )
+
+
+async def _audit_duplicate_resumed(
+    *,
+    reference: str,
+    subscription_id: str,
+    provider: str,
+    amount_minor: int,
+    currency: str,
+    is_reversal: bool,
+) -> None:
+    """``MARKETPLACE_SETTLEMENT_DUPLICATE_RESUMED`` (MKT-03).
+
+    Written when a redelivery's own ledger insert found a row an EARLIER process already wrote,
+    and the Subscription's fresh state showed the transition that should have followed it never
+    landed. Distinct from ``MARKETPLACE_SETTLEMENT_DUPLICATE_IGNORED``, which an operator reads as
+    "nothing to see" - this line says a payment was found recorded but unactivated, and names
+    which provider reference it was, so "how often does this happen" is answerable without
+    reconstructing it from the transition history.
+    """
+    await _write_audit(
+        "MARKETPLACE_SETTLEMENT_DUPLICATE_RESUMED",
+        reference=reference,
+        subscription_id=subscription_id,
+        reason=(
+            "this provider reference was already recorded in the ledger by an earlier attempt "
+            "that did not finish; the Subscription's transition and entitlement are being "
+            "completed now rather than left stuck behind an already-written settlement row"
         ),
         metadata=_audit_metadata(
             provider_reference=reference,

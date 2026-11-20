@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import JSON, Column, DateTime
 from sqlalchemy import Enum as SQLEnum
+from sqlalchemy import Uuid
 from sqlalchemy import (Float, Index, Integer, String, Text, and_, asc, desc,
                         func)
 from sqlalchemy.orm import Session
@@ -51,9 +52,23 @@ class DAGTaskModel(Base):
     
     __tablename__ = "dag_tasks"
     
-    # Primary identification
-    task_id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    tenant_id = Column(String(36), nullable=False, index=True)
+    # Primary identification.
+    #
+    # Both columns were String(36) and are now `Uuid(as_uuid=False)` -- a native `uuid`
+    # on PostgreSQL, CHAR(32) on SQLite, and a plain `str` in Python either way. See
+    # alembic revision a1b2c3d4e5f6 for why (BUG-033): `tenant_id` is supposed to
+    # reference `profiles.id`, which is `uuid`, and PostgreSQL has no equality operator
+    # between uuid and varchar -- so `fk_dag_tasks_tenant_id` could not be created and
+    # tenant ownership here had no referential integrity. `task_id` is converted because
+    # `execution_records.task_id` is already `uuid` and references it.
+    #
+    # `as_uuid=False` is deliberate and must stay. `routers/dag_tasks.py:149` compares
+    # `task.tenant_id != tenant["id"]` with no `str()` on either side; with `as_uuid=True`
+    # that compares a `uuid.UUID` against a `str`, never matches, and the endpoint answers
+    # 403 to the task's rightful owner. The `default` below still returns `str(uuid4())`,
+    # which is exactly what this type expects.
+    task_id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id = Column(Uuid(as_uuid=False), nullable=False, index=True)
     
     # Task status and priority
     status = Column(

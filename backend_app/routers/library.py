@@ -33,18 +33,19 @@ from datetime import datetime, timezone
 # floating point. No money value passes through it — every amount in this module is an integer
 # number of Minor_Units (Requirement 10.3).
 from decimal import ROUND_HALF_UP, Decimal
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import redis
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, validator
+from pydantic import (BaseModel, ConfigDict, Field, ValidationError,
+                      field_validator, validator)
 
 from backend_app.backend.ml_node_types import detect_ml_nodes
 from backend_app.core.auth_middleware import decode_token_local
 from backend_app.core.dependencies import (bearer_scheme, get_admin_user,
-                                           get_current_user)
+                                           get_current_user, get_service_supabase)
 from backend_app.core.subscription_dependencies import (
     check_feature_optional,
     check_marketplace_publish_quota,
@@ -56,7 +57,9 @@ from backend_app.core.subscription_dependencies import (
 )  # noqa: F401  — `require_marketplace_browse` is used on the subscription-status read below
 from backend_app.core.rate_limit import limiter
 from backend_app.core.rate_limit_keys import caller_or_address, source_address
+from backend_app.core.runtime_env import local_fallbacks_are_acceptable
 from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
+from backend_app.backend.marketplace import evidence_validator as _evidence_validator
 from backend_app.backend.marketplace import submission_service as _submission_service
 from backend_app.backend.marketplace import pricing_evaluator as _pricing_evaluator
 from backend_app.backend.marketplace import aliases as _aliases
@@ -74,6 +77,7 @@ from backend_app.backend.marketplace.errors import (
     MARKETPLACE_CLONING_DISABLED,
     MARKETPLACE_ELIGIBILITY_FAILED,
     MARKETPLACE_ELIGIBILITY_UNEVALUABLE,
+    MARKETPLACE_LISTING_NOT_PURCHASABLE,
     MARKETPLACE_PRICE_EVIDENCE_MISSING,
     MARKETPLACE_PRICE_OUT_OF_RANGE,
     MARKETPLACE_READ_FAILED,
@@ -144,13 +148,42 @@ _service_client = None
 
 
 def _get_service_client():
-    """Returns a cached Supabase service-role client."""
+    """Returns a cached Supabase service-role client.
+
+    THE DEGRADED RETURN IS GATED ON THE DECLARED ENVIRONMENT, NOT ON ``DEV_MODE`` ALONE.
+    Both branches below used to read ``os.getenv("DEV_MODE", "false") == "true"`` and
+    nothing else, so ``ENV`` never entered the decision. Measured in
+    ``staging/probe_lib01_service_client.py``:
+
+        ENV=production + DEV_MODE=true   ->  _build_service_client() RETURNED None
+
+    ``_build_service_client``'s own docstring says it "raises 500 if env is not
+    configured", and every caller dereferences the result immediately -- so a ``None``
+    becomes ``AttributeError: 'NoneType' object has no attribute 'table'``, caught by the
+    route's broad ``except Exception`` and answered as 500 "Failed to look up library
+    entry." A configuration failure presents as an application defect, and the real cause
+    appears only in a log line.
+
+    ``runtime_env.local_fallbacks_are_acceptable()`` is the one place that judgement lives
+    (RUNTIME-01). A declared non-local ``ENV`` overrides ``DEV_MODE`` and logs the ignored
+    flag at CRITICAL; an unset ``ENV`` with ``DEV_MODE=true`` still degrades, so a
+    developer machine and ``tests/conftest.py`` (which sets ``ENV=testing``) are unchanged.
+
+    WHAT THIS DOES NOT FIX. The ``None`` return still exists for local environments, and
+    the callers still dereference it without checking. That half is reported as LIB-01 and
+    is a decision for this router's owner: either every call site checks, or this function
+    stops returning ``None`` at all and local runs are expected to supply a service-role
+    key. Changing it here would alter the behaviour of every ``/api/library`` route under
+    the test suite's own environment, which is more than a precedence fix.
+
+    Regression: tests/test_environment_precedence_is_centralised.py
+    """
     global _service_client
     if _service_client is None:
         url = os.environ.get("SUPABASE_URL")
         key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
         if not url or not key:
-            if os.getenv("DEV_MODE", "false").lower() == "true":
+            if local_fallbacks_are_acceptable():
                 return None
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set."
@@ -158,7 +191,7 @@ def _get_service_client():
         try:
             _service_client = create_client(url, key)
         except Exception as e:
-            if os.getenv("DEV_MODE", "false").lower() == "true":
+            if local_fallbacks_are_acceptable():
                 return None
             raise
     return _service_client
@@ -261,15 +294,127 @@ def _safe_uuid(value: str, field_name: str = "id") -> str:
 
 
 def _build_service_client():
-    """Returns a service-role client; raises 500 if env is not configured."""
+    """A service-role client, **or ``None``**, for a caller that handles absence itself.
+
+    THE DOCSTRING USED TO SAY "raises 500 if env is not configured", AND IT WAS FALSE.
+    It is false in two ways, and both were LIB-01:
+
+    1. :func:`_get_service_client` RETURNS ``None`` when the credentials are absent and the
+       process is permitted local fallbacks. That ``None`` is not a ``RuntimeError``, so it
+       passes straight through the ``except`` below untouched.
+    2. ``create_client`` can raise something that is **not** a ``RuntimeError`` (it raises
+       ``SupabaseException`` for an invalid key), and in a non-local environment
+       :func:`_get_service_client` re-raises it, so it bypasses this handler too.
+
+    Fifteen call sites in this module already check the result (``if not svc:``) and answer
+    an empty page or a 503. Twenty-four did not, and dereferenced it: ``svc.table(...)`` on
+    ``None`` raises ``AttributeError``, which the route's own broad ``except Exception``
+    relabelled as a 500 naming the wrong cause - measured on
+    ``POST /api/library/{id}/clone`` as ``500 "Failed to look up library entry."`` with
+    ``'NoneType' object has no attribute 'table'`` visible only in the log.
+
+    **The contract is now the honest one**: this returns the client or ``None``, and a caller
+    that cannot proceed without one calls :func:`_require_service_client` instead. The name
+    pair is the point - at every call site a reader can see which behaviour was chosen.
+
+    The deliberate degraders are left on this function on purpose: a browse surface that
+    answers an empty page on a developer machine with no service key is a considered choice
+    (``browse_library``, ``get_featured_strategies``, ``get_trending_strategies``), not an
+    oversight, and turning those into 503s would change behaviour several suites rely on.
+    """
     try:
         return _get_service_client()
     except RuntimeError as exc:
         logger.error(f"Service client unavailable: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error. Please contact support.",
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see (2) in the docstring
+        # A ``create_client`` failure in a NON-local environment. Previously this escaped
+        # both this handler and the caller's expectations, and landed in whatever broad
+        # ``except`` the route happened to have.
+        logger.error(f"Service client could not be constructed: {exc}")
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+
+def _read_did_not_complete(operation: str, exc: BaseException) -> MarketplaceError:
+    """Log a client call that did not complete, and RETURN the 503 for the caller to raise.
+
+    WHY THIS EXISTS (LIB-04, found by the PostgreSQL lane of the Phase 7 full regression).
+    The LIB-01 repair narrowed this module's broad ``except Exception`` handlers to
+    ``except _PostgrestAPIError``, because a broad handler had been relabelling an
+    ``AttributeError`` from a ``None`` client as "Failed to look up library entry." - a
+    statement about a row that was not the problem. Narrowing fixed that and introduced a
+    different defect: **a failure that is not a PostgREST ``APIError`` now escaped the
+    handler entirely** and reached the application's generic 500.
+
+    That is not an edge case. ``supabase-py`` performs the request with ``httpx``, and the
+    commonest real read failure - DNS, TLS, connection reset, read timeout - arrives as
+    ``httpx.ConnectError`` / ``httpx.ReadTimeout`` / ``httpx.RemoteProtocolError``, none of
+    which is an ``APIError``. So the narrowing turned "the database was unreachable" from a
+    503 into a 500.
+
+    Measured, rather than reasoned about: the PostgreSQL lane answered
+    ``500 INTERNAL_SERVER_ERROR`` on ``POST /api/library/{id}/clone`` and
+    ``DELETE /api/library/{id}``, and the escaping exception was
+    ``psycopg2.InterfaceError: connection already closed`` - a dead client handed to the
+    route. Different transport, same shape: the client raised something that is not an
+    ``APIError``.
+
+    THE CALLER'S ANSWER IS THE SAME EITHER WAY. From outside, a read that did not complete
+    is a 503 regardless of which layer failed, and ``MARKETPLACE_READ_FAILED``'s public
+    sentence already says exactly that. What differs is the LOG: the
+    ``_PostgrestAPIError`` handlers keep their own message because the database answered and
+    its answer is the diagnosis, while this one carries ``exc_info=True`` and the exception
+    TYPE, because an unexpected type is the diagnosis. A programming error is therefore
+    still fully visible to an operator - which the original broad handler was not, since it
+    logged only ``f"...: {exc}"`` with no traceback.
+
+    Returns rather than raises, so the call site reads ``raise _read_did_not_complete(...)``
+    and the control flow stays visible where it happens.
+
+    Regression: tests/test_lib04_a_broken_client_is_503_not_500.py
+    """
+    logger.error(
+        "library.%s did not complete: %s: %s",
+        operation,
+        type(exc).__name__,
+        exc,
+        exc_info=True,
+    )
+    return MarketplaceError(MARKETPLACE_READ_FAILED)
+
+
+def _require_service_client():
+    """A service-role client, or a structured 503. For callers that must have one.
+
+    THE LIB-01 FIX. Answers ``MARKETPLACE_READ_FAILED`` - which
+    ``backend_app/backend/marketplace/errors.py`` maps to **503** and whose public sentence
+    is "This information could not be read right now, so no figures are being shown. Please
+    try again shortly." - instead of letting ``None`` reach a ``.table(...)`` call and become
+    a 500 that names the wrong cause.
+
+    NOT A NEW ERROR CODE. This is the code ``get_categories`` in this same module already
+    raises for exactly this condition::
+
+        svc = _build_service_client()
+        if not svc:
+            logger.error("categories: no service client available")
+            raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    The catalogue has no "server not configured" code, and adding one would mean touching
+    ``MARKETPLACE_CODES``, ``HTTP_STATUS_FOR_CODE`` and ``PUBLIC_MESSAGE_FOR_CODE`` together
+    plus ``tests/test_marketplace_error_surface.py``'s catalogue invariants. ``503`` is also
+    the right answer on its merits: the condition is a dependency this server cannot reach,
+    it is retryable, and it tells the caller nothing about their own data - which a 500
+    "Failed to look up library entry." falsely implied was the problem.
+    """
+    svc = _build_service_client()
+    if not svc:
+        logger.error(
+            "no Supabase service-role client is available, so this request cannot be "
+            "served. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
         )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    return svc
 
 
 def _current_submission_state_for_listing(svc, source_strategy_id):
@@ -1014,6 +1159,22 @@ async def _invalidate_browse_cache(context: str) -> None:
         logger.warning(f"Redis browse-cache invalidation failed ({context}): {exc}")
 
 
+def _postgrest_quoted_ilike_pattern(term: str) -> str:
+    """API-08: ``term`` made safe to embed in a raw PostgREST ``or()``/``filter()`` string.
+
+    PostgREST's filter mini-language treats ``,``, ``.``, ``(`` and ``)`` as syntax -- a
+    search term containing any of them, interpolated raw into ``or=(col.ilike.%term%,...)``,
+    could close the current clause and open a new one against an unrelated column rather
+    than being matched as literal text. PostgREST's own escaping rule closes this: wrap the
+    value in double quotes, with ``\\`` and ``"`` themselves backslash-escaped first so the
+    quoting itself cannot be broken out of. Returns the value already wrapped in the ``%...%``
+    ilike wildcards and in the quotes PostgREST's filter syntax requires -- ready to drop
+    straight into an ``ilike.`` clause.
+    """
+    escaped = term.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"%{escaped}%"'
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/library — Browse catalogue
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1065,7 +1226,7 @@ async def browse_library(
 
     query = (
         svc.table("library_strategies")
-        .select(_listing_projection.LISTING_SELECT)
+        .select(_listing_projection.LISTING_SELECT, count="exact")
         .eq("is_active", True)
         .in_("moderation_status", ["approved", "featured"])
     )
@@ -1085,8 +1246,8 @@ async def browse_library(
         if tag_list:
             query = query.contains("tags", tag_list)
     if q:
-        # Simple ilike search on name and description
-        query = query.or_(f"name.ilike.%{q}%,description.ilike.%{q}%")
+        quoted_pattern = _postgrest_quoted_ilike_pattern(q)
+        query = query.or_(f"name.ilike.{quoted_pattern},description.ilike.{quoted_pattern}")
 
     # --- Sort ---
     sort_map = {
@@ -1100,18 +1261,26 @@ async def browse_library(
     sort_col, sort_asc = sort_map.get(sort, ("clone_count", False))
     query = query.order(sort_col, desc=not sort_asc)
 
+    # API-08: paginate AT THE QUERY, not after fetching every matching row into this
+    # process. .range() pushes the LIMIT/OFFSET to Postgres; count="exact" above asks
+    # PostgREST for the total match count in the same round trip (its own COUNT(*),
+    # not len() over a full result set this process no longer has to hold).
+    offset = (page - 1) * limit
     try:
-        all_result = query.execute()
+        page_result = query.range(offset, offset + limit - 1).execute()
     except Exception as exc:
         # A read that did not complete is MARKETPLACE_READ_FAILED, never a zero-filled 200 on
         # the cache-miss DB path (Requirements 1.5, 1.7; design.md "Never-swallow rule").
         logger.error(f"Library browse DB error: {exc}")
         raise MarketplaceError(MARKETPLACE_READ_FAILED)
 
-    all_rows = all_result.data or []
-    count = len(all_rows)
-    offset = (page - 1) * limit
-    paginated = all_rows[offset : offset + limit]
+    paginated = page_result.data or []
+    # max(), not a ternary: tests/test_listing_projection.py's static sweep recognises a
+    # handful of row-REDUCING calls (len, sum, min, max, ...) as yielding a figure about the
+    # rows rather than the rows themselves; page_result.count is PostgREST's own total match
+    # count, never the full row set, and is always >= len(paginated) when present, so max()
+    # picks it correctly and falls back to len(paginated) when PostgREST reported none.
+    count = max(page_result.count or 0, len(paginated))
 
     # Batched alias read for the page (one round trip), then per-row projection through the one
     # public serialiser. A row that cannot be projected fails the read (mirrors the detail path).
@@ -1177,7 +1346,7 @@ async def browse_library(
 #: query, so the filter, ordering and response contract are identical.
 _MY_LIBRARY_SELECT = (
     "id, name, moderation_status, clone_count, avg_rating, rating_count, "
-    "is_active, published_at"
+    "is_active, published_at, source_strategy_id"
 )
 
 #: The owner-view fields the response carries, in the order it carries them. Frozen, so the
@@ -1191,6 +1360,10 @@ _MY_LIBRARY_FIELDS = (
     "rating_count",
     "is_active",
     "published_at",
+    # MKT-03: the owner's own source strategy, so the strategy page can tell whether THIS
+    # strategy already has a Listing (it matched on this field, which was never returned, so it
+    # always offered "Publish" and a second press was a 409).
+    "source_strategy_id",
 )
 
 
@@ -1883,6 +2056,79 @@ async def get_library_detail(
 # POST /api/library — Publish a strategy
 # ─────────────────────────────────────────────────────────────────────────────
 
+_LATEST_RUN_SELECT = (
+    "id, total_return_pct, sharpe_ratio, max_drawdown, win_rate, profit_factor, "
+    "total_trades, start_date, end_date, initial_capital"
+)
+
+
+def _backtest_result_from_latest_run(svc, strategy_id: str, user_id: str):
+    """The strategy's latest COMPLETED backtest, shaped like the legacy ``backtest_result`` (MKT-02).
+
+    ``None`` when the strategy has no completed run. The two renamed figures are the ones the
+    evidence copy also renames (``max_drawdown`` -> ``max_drawdown_pct``, ``win_rate`` ->
+    ``win_rate_pct``); both are stored in percent. A read failure is a 500, not a "no backtest"
+    400: telling an owner to re-run a backtest they already have would be a false instruction.
+    """
+    try:
+        resp = (
+            svc.table("strategy_backtests")
+            .select(_LATEST_RUN_SELECT)
+            .eq("strategy_id", strategy_id)
+            .eq("user_id", user_id)
+            .eq("status", "completed")
+            .order("completed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"publish_strategy latest backtest read error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to read the strategy's backtests.",
+        )
+    rows = resp.data or []
+    if not rows:
+        return None
+    run = rows[0]
+    return {
+        "total_return_pct": run.get("total_return_pct"),
+        "sharpe_ratio": run.get("sharpe_ratio"),
+        "max_drawdown_pct": run.get("max_drawdown"),
+        "win_rate_pct": run.get("win_rate"),
+        "profit_factor": run.get("profit_factor"),
+        "total_trades": run.get("total_trades"),
+        "start_date": run.get("start_date"),
+        "end_date": run.get("end_date"),
+        "initial_capital": run.get("initial_capital"),
+    }
+
+
+def _graph_nodes(buy_logic: Any) -> List[Dict[str, Any]]:
+    """The node list of a strategy's stored graph, in either shape it is persisted in.
+
+    MKT-05: the strategy builder persists ``strategies.buy_logic`` as the canonical v2 graph with
+    underscored keys (``_nodes``, ``_edges``, ``_compiled_plan``...); only legacy rows use a plain
+    ``nodes`` key. Reading ``nodes`` alone found no nodes on 155 of 164 production strategies, so
+    the publish check refused every builder-made strategy ("has no action nodes").
+    """
+    if not isinstance(buy_logic, dict):
+        return []
+    for key in ("nodes", "_nodes"):
+        value = buy_logic.get(key)
+        if isinstance(value, list) and value:
+            return [n for n in value if isinstance(n, dict)]
+    return []
+
+
+def _is_action_node(node: Dict[str, Any]) -> bool:
+    """A legacy ``type: action`` node or a v2 node whose ``category`` is ``ACTION`` (MKT-05)."""
+    return (
+        str(node.get("type") or "").lower() == "action"
+        or str(node.get("category") or "").upper() == "ACTION"
+    )
+
+
 @literal_router.post("", status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def publish_strategy(
@@ -1943,11 +2189,19 @@ async def publish_strategy(
             detail="Not your strategy.",
         )
 
-    # Backtest result check
+    # Backtest result check. ``strategies.backtest_result`` is a legacy column that no current
+    # code path writes (all 192 production strategies had it empty), so requiring it made this
+    # first step of the publish flow impossible and the Marketplace permanently empty (MKT-02).
+    # The figures now come from the strategy's latest completed ``strategy_backtests`` run when the
+    # legacy field is absent; a present legacy value is used exactly as before.
+    if not strategy.get("backtest_result"):
+        strategy["backtest_result"] = _backtest_result_from_latest_run(
+            svc, strategy_id, user_id
+        )
     if not strategy.get("backtest_result"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Run a backtest before publishing. Strategy has no stored backtest result.",
+            detail="Run a backtest before publishing. Strategy has no completed backtest.",
         )
 
     # 2. Prevent duplicate publication
@@ -1988,12 +2242,12 @@ async def publish_strategy(
         except Exception:
             buy_logic = {}
 
-    nodes = buy_logic.get("nodes", [])
+    nodes = _graph_nodes(buy_logic)
     node_count = len(nodes)
     has_ml_model = bool(strategy.get("ml_model_path"))
 
     # Validate DAG has at least one action node
-    action_nodes = [n for n in nodes if n.get("type") == "action"]
+    action_nodes = [n for n in nodes if _is_action_node(n)]
     if not action_nodes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2124,7 +2378,12 @@ async def unpublish_strategy(
     """Soft-unpublishes a strategy. Existing clones are unaffected."""
     lib_id = _safe_uuid(library_id, "library_id")
     user_id = _safe_uuid(user["id"], "user_id")
-    svc = _build_service_client()
+    # LIB-01, the same defect as ``clone_strategy``. This route is why
+    # ``library.unpublish_strategy`` sat in ``test_validation_sweep``'s
+    # ``_ENVIRONMENT_GAP_ROUTE_KEYS``: it dereferenced a ``None`` service client and the
+    # resulting 500 had to be skipped rather than asserted. With the 503 the skip is no
+    # longer needed and the sweep's assertion runs for real.
+    svc = _require_service_client()
 
     # Verify ownership
     try:
@@ -2135,12 +2394,11 @@ async def unpublish_strategy(
             .single()
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"unpublish_strategy lookup error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to look up library entry.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("unpublish_strategy lookup", exc)
 
     if not resp.data:
         raise HTTPException(
@@ -2166,12 +2424,11 @@ async def unpublish_strategy(
         svc.table("library_strategies").update(
             {"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).eq("id", lib_id).execute()
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"unpublish_strategy update error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to unpublish strategy.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("unpublish_strategy update", exc)
 
     # Drop the cached catalogue pages. Unpublishing removes the Listing from the browsable pool
     # (Requirement 4 Criterion 7), and `browse_library` answers from a 300-second cache without
@@ -2242,31 +2499,57 @@ async def clone_strategy(
     """
     lib_id = _safe_uuid(library_id, "library_id")
     user_id = _safe_uuid(user["id"], "user_id")
-    svc = _build_service_client()
+    # LIB-01: a missing service-role client is answered as a 503 naming the real condition,
+    # not dereferenced into an AttributeError and relabelled "Failed to look up library
+    # entry." See :func:`_require_service_client`.
+    svc = _require_service_client()
 
     # 1. Fetch library entry
+    #
+    # The ``except`` is narrowed to the concrete PostgREST error, for the same reason steps 8
+    # and 9 below already narrow theirs (Requirement 30.5): a broad ``except Exception`` here
+    # relabelled EVERY failure - including an ``AttributeError`` from a ``None`` client and a
+    # programming error such as a bad column name - as "Failed to look up library entry.",
+    # which is a statement about the row that was not the problem. A read that did not
+    # complete is answered with the same 503 step 4 already uses for a failed entitlement
+    # read, so this route never folds a broken read into a statement about the data.
+    # ``.single()`` IS DELIBERATELY NOT USED HERE ANY MORE (LIB-03).
+    #
+    # It asks PostgREST for `application/vnd.pgrst.object+json`, which answers 406 PGRST116
+    # ("JSON object requested, multiple (or no) rows returned") when the id matches nothing.
+    # supabase-py turns that into an `APIError`, so a listing that does not exist raised
+    # instead of returning an empty result - and the `if not lib_resp.data: -> 404` branch
+    # below was therefore UNREACHABLE for the one case it was written for. The caller got a
+    # 5xx for a plain "no such listing": a 500 before this phase, and a 503 after the
+    # error-handling repair, neither of which is true.
+    #
+    # Reading the list and indexing it keeps the two outcomes distinct, which is the whole
+    # point: "no such row" is a 404 about the caller's request, and only a read that DID NOT
+    # COMPLETE is the 503.
     try:
         lib_resp = (
             svc.table("library_strategies")
             .select("id, author_id, source_strategy_id, name, is_active, moderation_status, clone_count, source_cloning_enabled")
             .eq("id", lib_id)
-            .single()
+            .limit(1)
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy library lookup error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to look up library entry.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy library lookup", exc)
 
-    if not lib_resp.data:
+    lib_rows = lib_resp.data or []
+    if isinstance(lib_rows, dict):  # a client that still answers a single object
+        lib_rows = [lib_rows]
+    if not lib_rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Library strategy not found.",
         )
 
-    lib_entry = lib_resp.data
+    lib_entry = lib_rows[0]
 
     if not lib_entry["is_active"] or lib_entry["moderation_status"] not in ("approved", "featured"):
         raise HTTPException(
@@ -2335,6 +2618,15 @@ async def clone_strategy(
         raise MarketplaceError(entitlement.wire_code)
 
     # 5. Idempotency: check if user already cloned this library entry
+    #
+    # READ-THEN-WRITE WITH NOTHING BEHIND IT. There is no unique constraint on
+    # ``strategies (user_id, source_library_id)`` in any migration, so two concurrent
+    # clones can both read "no existing clone" and both insert. That is reported as LIB-02
+    # rather than fixed here: the fix is a migration adding the constraint, and adding one
+    # is a schema change that needs to be applied deliberately rather than as part of an
+    # error-handling repair. What this phase does guarantee is that the duplicate is two
+    # rows the caller owns - not a cross-tenant write and not a corrupted listing - and the
+    # regression test for it names the outcome rather than asserting the absent constraint.
     try:
         existing_clone = (
             svc.table("strategies")
@@ -2343,12 +2635,11 @@ async def clone_strategy(
             .eq("user_id", user_id)
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy idempotency check error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to check for existing clones.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy idempotency check", exc)
 
     if existing_clone.data:
         existing_id = existing_clone.data[0]["id"]
@@ -2360,27 +2651,34 @@ async def clone_strategy(
     # 6. Fetch source strategy DAG (service-role, cross-user read)
     source_id = lib_entry["source_strategy_id"]
     try:
+        # Same reason as step 1: ``.single()`` made "the author deleted the strategy this
+        # listing points at" a read error rather than the 404 the branch below declares
+        # (LIB-03). A listing can outlive its source - ``strategies_source_library_id_fkey``
+        # is ``ON DELETE SET NULL`` on the clone side and nothing cascades the other way -
+        # so this is a reachable state, not a theoretical one.
         src_resp = (
             svc.table("strategies")
             .select("name, symbol, timeframe, exchange_id, buy_logic, sell_logic, risk, indicators, ml_model_path")
             .eq("id", source_id)
-            .single()
+            .limit(1)
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy source fetch error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch source strategy data.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy source fetch", exc)
 
-    if not src_resp.data:
+    src_rows = src_resp.data or []
+    if isinstance(src_rows, dict):
+        src_rows = [src_rows]
+    if not src_rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Source strategy no longer exists.",
         )
 
-    source = src_resp.data
+    source = src_rows[0]
     now_ts = datetime.now(timezone.utc).isoformat()
 
     # SECURITY: Validate ML/DL strategies have trained models before cloning
@@ -2451,14 +2749,17 @@ async def clone_strategy(
 
     try:
         clone_resp = svc.table("strategies").insert(clone_payload).execute()
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy insert error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create strategy clone.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy insert", exc)
 
     if not clone_resp.data:
+        # A write that reported no row. Not a read failure, and not something the caller
+        # can retry into a different answer, so this keeps its 500 - the catalogue reserves
+        # 500 for the caller-invisible-but-our-fault case and this is one.
+        logger.error("clone_strategy insert returned no row for library_id=%s", lib_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Clone operation returned no data.",
@@ -2477,6 +2778,15 @@ async def clone_strategy(
         ).eq("id", lib_id).execute()
     except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy clone_count increment error: {exc}")
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        # BEST EFFORT, DELIBERATELY: the clone row already exists and is owned by the
+        # caller, so failing the request now would report a failure for an operation that
+        # succeeded. Logged with a traceback and swallowed; the counter being behind is
+        # LIB-02's territory, not a reason to refuse.
+        logger.error(
+            "library.clone_strategy clone_count increment did not complete: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
 
     # 9. Create verified-clone marker in library_ratings (upsert). Non-critical, same
     #    narrowing to the concrete PostgREST APIError (Requirement 30.5).
@@ -2493,6 +2803,13 @@ async def clone_strategy(
         ).execute()
     except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy verified-clone rating marker error: {exc}")
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        # Best effort for the same reason as the counter above: the clone exists, and the
+        # verified-clone marker is a secondary annotation on it.
+        logger.error(
+            "library.clone_strategy verified-clone rating marker did not complete: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
 
     logger.info(
         f"Strategy cloned: library_id={lib_id} -> new_strategy_id={new_strategy_id} by user={user_id}"
@@ -3064,6 +3381,52 @@ class DeployMarketplaceStrategyRequest(BaseModel):
         None, description="Opaque per-session runtime options."
     )
 
+    # ── MKT-05: live trading for the subscribed period ───────────────────────────────
+    # These three are the subscriber's OWN resources, not the owner's, and that is what
+    # makes them safe to accept here. `exchange_account_id` and `risk_config_id` are
+    # references the server resolves against rows the CALLER owns
+    # (`deployment_binding.load_owned_exchange_account` / `load_owned_risk_config`), so
+    # naming another user's account is a 404 rather than a privilege escalation. Neither
+    # is ever a credential: 004e's header records that `exchange_account_id` is a handle
+    # and that keys are read only in `master_executor` via
+    # `credential_vault.load_decrypted_keys`.
+    #
+    # Nothing here lets the subscriber see or supply any part of the owner's
+    # Protected_Logic -- the strategy, its graph, its plan and its version are still
+    # resolved entirely server-side from the Listing and the Subscription.
+    mode: str = Field(
+        "paper",
+        description=(
+            "'paper' (default, unchanged behaviour) or 'live'. A 'live' deployment places "
+            "real orders and is permitted only for the duration of the subscribed period."
+        ),
+    )
+    exchange_account_id: Optional[str] = Field(
+        None,
+        description=(
+            "The caller's OWN exchange account to trade through. Required when mode is "
+            "'live'; refused when mode is 'paper', which binds no account."
+        ),
+    )
+    risk_config_id: Optional[str] = Field(
+        None,
+        description="The caller's OWN risk settings row to apply. Optional, live only.",
+    )
+
+    @field_validator("mode")
+    @classmethod
+    def _mode_is_a_known_spelling(cls, value: str) -> str:
+        """Accept exactly the two spellings ``chk_sd_mode`` admits.
+
+        Validated here rather than left to the database so an unknown value is a 422 that
+        names the field, not a ``23514`` surfacing as a 500 -- the same reason
+        ``deployment_binding.assert_account_required_for_live`` exists for its own CHECK.
+        """
+        text = str(value or "").strip().lower()
+        if text not in _DEPLOY_MODES:
+            raise ValueError(f"mode must be one of {sorted(_DEPLOY_MODES)}")
+        return text
+
 
 #: The set of fields a subscriber may send to the deploy endpoint. Any other key is a 422 that
 #: names the key(s) but never their value (Requirement 7.6). It is exactly Requirement 7.5's
@@ -3072,8 +3435,34 @@ class DeployMarketplaceStrategyRequest(BaseModel):
 #: subscription identifier, because every one of those is resolved server-side from the
 #: authenticated session and the Listing (Requirement 7.7).
 _DEPLOY_ALLOWED_FIELDS = frozenset(
-    {"symbol", "timeframe", "capital", "session_options"}
+    {
+        "symbol",
+        "timeframe",
+        "capital",
+        "session_options",
+        # MKT-05. The subscriber's own trading resources, never the owner's. See
+        # DeployMarketplaceStrategyRequest's own comment for why these three are safe to
+        # accept where a strategy/graph/version field is not.
+        "mode",
+        "exchange_account_id",
+        "risk_config_id",
+    }
 )
+
+#: The deployment modes this endpoint accepts, which must stay exactly the vocabulary
+#: ``004e_deployment_bindings.sql``'s ``chk_sd_mode CHECK (mode IN ('paper','live'))``
+#: admits. Declared here as data so ``tests/test_mkt05_subscriber_live_deployment.py`` can
+#: assert the two agree instead of trusting that they do.
+_DEPLOY_MODES = frozenset({"paper", "live"})
+
+#: Stable wire codes for the MKT-05 live-deploy refusals. Separate from the marketplace
+#: catalogue for the same reason ``DEPLOY_REQUEST_INVALID`` is: these are request-shape and
+#: resource-ownership refusals, not marketplace-domain ones.
+DEPLOY_LIVE_NEEDS_ACCOUNT = "DEPLOY_LIVE_NEEDS_ACCOUNT"
+DEPLOY_ACCOUNT_NOT_FOUND = "DEPLOY_ACCOUNT_NOT_FOUND"
+DEPLOY_PAPER_TAKES_NO_ACCOUNT = "DEPLOY_PAPER_TAKES_NO_ACCOUNT"
+DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD = "DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD"
+DEPLOY_LIVE_COLUMNS_UNAVAILABLE = "DEPLOY_LIVE_COLUMNS_UNAVAILABLE"
 
 #: The stable code the deploy endpoint answers an unaccepted or malformed field with. Not a
 #: member of the shared marketplace catalogue: ``design.md`` -> "The error code catalogue" has no
@@ -3267,6 +3656,161 @@ def _owner_version_label(svc, version_id: str) -> Optional[str]:
     return str(label) if label is not None else None
 
 
+async def _start_marketplace_deployment(
+    svc,
+    *,
+    deployment_row: dict,
+    user_id: str,
+    is_live: bool,
+) -> tuple:
+    """RT-24. Start the bot for a marketplace deployment and record the outcome.
+
+    Mirrors the tail of ``StrategyService.deploy_version`` (the success/failure branches
+    around its own ``fleet.start_bot``) rather than inventing a second lifecycle:
+
+    * success -> ``status='running'``, ``started_at=now``
+    * failure -> the quota reservation is RELEASED, then ``status='failed'`` with
+      ``error_message``. The row is KEPT and marked, never deleted: a deployment that was
+      accepted and then failed to start is a thing the subscriber needs to be able to see.
+
+    The blueprint is built by ``deployment_runtime.start_recorded_deployment`` from the ROW,
+    through the RUNTIME's own service client -- never through this route's. That is what
+    keeps the owner's ``blueprint`` out of a path a subscriber drives (Requirement 7.1) and
+    is how the resume path has always loaded it.
+
+    A DEVIATION FROM ``deploy_version``, STATED RATHER THAN HIDDEN. There, the blueprint is
+    validated BEFORE the insert, so an unstartable strategy leaves no row and spends no
+    quota. Here it cannot be: the runtime derives every input from the row, so the row has
+    to exist first. The consequence is that an unstartable marketplace strategy leaves a row
+    marked ``failed`` with the reason, instead of no row -- and the quota is released, so
+    nothing is spent either way. For a subscriber deploying someone else's strategy that is
+    the better of the two: a recorded refusal they can read beats a 422 about an artifact
+    they are not allowed to see.
+
+    No fleet on ``app_state`` leaves the row ``deploying`` and is reported as such, which is
+    ``deploy_version``'s own behaviour and is what lets the API run in a process that hosts
+    no bots. The boot-time resume sweep starts it where one does.
+
+    Returns:
+        ``(started, message, recorded_status)``. The third member is the status this
+        function actually wrote, so the caller REPORTS it rather than inferring it from
+        ``started`` -- the no-fleet case is not started and is not failed either, and
+        collapsing the two would tell a subscriber their deployment failed when it is
+        waiting for a process that hosts bots.
+    """
+    from backend_app.backend import deployment_runtime as _dep_runtime
+
+    deployment_id = str(deployment_row.get("id"))
+
+    # `allow_live` is this request's own live decision, not `RESUME_LIVE_DEPLOYMENTS`. That
+    # flag gates restarting real-money trading unattended after a crash, which is a
+    # different question from a trader deploying live now having just passed the live gate.
+    started, message = await _dep_runtime.start_recorded_deployment(
+        deployment_row, allow_live=is_live
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # `None` is the no-fleet case, which is neither started nor failed: the row stays
+    # 'deploying' and the boot-time resume sweep will pick it up in a process that hosts
+    # bots. Calling it failed would tell a subscriber their deployment broke when it is
+    # waiting, and releasing the quota would hand back a slot the row still occupies.
+    if started is None:
+        return (False, str(message), "deploying")
+
+    if started:
+        _patch_deployment_status(
+            svc, deployment_id, status="running", now_iso=now_iso, started_at=now_iso
+        )
+        return (True, message, "running")
+
+    await _release_deployment_quota(user_id)
+    _patch_deployment_status(
+        svc, deployment_id, status="failed", now_iso=now_iso,
+        error_message=str(message)[:500],
+    )
+    return (False, message, "failed")
+
+
+async def _release_deployment_quota(user_id: str) -> None:
+    """Give back a bot-slot reservation whose work never started (RT-24).
+
+    That is the one case ``SubscriptionEngine.decrement_quota_usage``'s own docstring
+    sanctions, and the three sites that need it are the two insert failures and a refused
+    bot start. Without it every failed attempt would burn a slot the subscriber never used.
+
+    Never raises: a failed release must not turn a refusal the caller already has an answer
+    for into a 500, and it must not turn a STARTED bot's bookkeeping into an error. Logged
+    at warning, because a reservation that leaked is real and someone has to be able to find
+    it.
+    """
+    try:
+        from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+
+        await SubscriptionEngine.decrement_quota_usage(user_id, Resource.BOTS.value)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[RT-24] bot-slot quota release for {user_id} skipped: {exc}")
+
+
+def _patch_deployment_status(
+    svc,
+    deployment_id: str,
+    *,
+    status: str,
+    now_iso: str,
+    started_at: Optional[str] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """One ``strategy_deployments`` UPDATE, tolerating a column a deployment may not have.
+
+    ``error_message`` and ``started_at`` are not guaranteed present in every environment,
+    and a PGRST204 naming one of them must not turn a started bot into a 500 -- the bot is
+    already running by then, so raising would report failure for something that succeeded.
+    Retried once without the optional columns, then logged.
+
+    WHY THE PAYLOAD IS BUILT AT EACH ``.update()`` AND NOT PASSED IN AS A DICT.
+    This took a ``payload: dict`` parameter, which made all of its writes invisible to
+    ``tests/test_schema_table_reference_drift.py``: that guard resolves a call site only
+    when the table name AND the payload are literals, and a dict arriving through a
+    parameter is neither readable nor checkable. Two unresolvable sites appeared when this
+    helper was added, taking the suite's blind spot past its pin -- and the guard's own
+    message is explicit that the fix is to make the sites resolvable rather than to raise
+    the pin. Writing each column set out at the ``.update()`` call does that, and it has
+    the side benefit of putting the exact columns this function can touch in plain sight.
+
+    The column sets are unchanged from the dict-passing version: a started deployment gets
+    status/started_at/updated_at, a failed one gets status/error_message/updated_at, and
+    the retry narrows to status/updated_at. Keys are still OMITTED rather than sent as
+    NULL, which matters -- PostgREST patches exactly the keys it receives, so sending
+    ``error_message: null`` on a successful start would erase a previous failure's reason.
+    """
+    try:
+        if status == "running":
+            svc.table("strategy_deployments").update(
+                {"status": "running", "started_at": started_at, "updated_at": now_iso}
+            ).eq("id", deployment_id).execute()
+        else:
+            svc.table("strategy_deployments").update(
+                {"status": status, "error_message": error_message,
+                 "updated_at": now_iso}
+            ).eq("id", deployment_id).execute()
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"[RT-24] deployment status update for {deployment_id} failed ({exc}); "
+            f"retrying with the base columns only"
+        )
+
+    try:
+        svc.table("strategy_deployments").update(
+            {"status": status, "updated_at": now_iso}
+        ).eq("id", deployment_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            f"[RT-24] deployment {deployment_id} could not be moved out of 'deploying': {exc}"
+        )
+
+
 @router.post("/{library_id}/deploy")
 @limiter.limit("10/60second", key_func=caller_or_address)
 async def deploy_marketplace_strategy(
@@ -3427,6 +3971,279 @@ async def deploy_marketplace_strategy(
     if deploy_request.capital is not None:
         deployment_payload["initial_capital"] = deploy_request.capital
 
+    # ── MKT-05: a LIVE deployment, bounded by the subscribed period ──────────────────
+    #
+    # Everything above is unchanged, so a paper deploy (the default) behaves exactly as it
+    # did. The live branch adds three things and nothing else: proof the caller owns the
+    # trading resources they named, the live vocabulary on the row, and the instant the
+    # authorisation ends.
+    #
+    # WHAT THIS REUSES FROM THE FIRST-PARTY PATH, AND WHAT IT DELIBERATELY DOES NOT.
+    # `deployment_binding.load_owned_exchange_account` and `load_owned_risk_config` are
+    # called directly, because they are the SECURITY half: each resolves the named row
+    # scoped to the caller, so naming another user's exchange account is a 404 rather than
+    # a way to trade through it. The rest of `evaluate_binding` -- symbol availability,
+    # timeframe support, model verification, gap policy -- is NOT run here, and that is a
+    # scope statement rather than an oversight: this path does not let the subscriber
+    # choose the strategy's market at all. The symbol and timeframe come from the OWNER's
+    # version, which the owner already deployed and which `resolve_binding_market` already
+    # validated for them. Wiring the subscriber's optional `symbol` through those checks is
+    # the remaining work on this finding and is recorded as such.
+    if deploy_request.mode == "live":
+        # ── RT-24: the live-trading ENTITLEMENT, which this path did not check at all ──
+        #
+        # The first-party path refuses a live deployment without it
+        # (`strategy_service.py:1897-1902`). A marketplace subscription entitles the
+        # STRATEGY; it does not entitle real-money execution, and nothing here had ever
+        # distinguished the two.
+        #
+        # Checked FIRST, before the exchange account and risk-config lookups below, because
+        # it is the cheapest refusal and the one that does not depend on which resources the
+        # caller named. Refusing on the plan before touching a resource also means a caller
+        # with no live entitlement cannot use this endpoint to probe which account ids exist.
+        from backend_app.core.subscription_dependencies import (
+            get_user_plan as _get_user_plan,
+        )
+        from backend_app.core.subscription_engine import (
+            Feature as _Feature,
+            SubscriptionEngine as _SubscriptionEngine,
+        )
+
+        if not await _SubscriptionEngine.check_feature_entitlement(
+            user_id, await _get_user_plan(user_id, svc), _Feature.LIVE_TRADING.value
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "LIVE_TRADING_NOT_ENTITLED",
+                    "message": (
+                        "Live trading requires a paid subscription plan. Your marketplace "
+                        "subscription entitles this strategy, not real-money execution."
+                    ),
+                },
+            )
+
+        # The entitlement resolver has already refused a null or past `period_expiry`
+        # before this point, so an entitling result always carries a future instant. This
+        # re-reads it rather than assuming, because a live deployment with no end instant
+        # is the one outcome this feature must never produce -- and `056`'s
+        # `chk_sd_marketplace_live_is_bounded` would refuse the row anyway, as a 500. A
+        # named 409 is the better answer.
+        if not entitlement.period_expiry or not entitlement.subscription_id:
+            await _audit_marketplace_refusal(
+                actor_id=user_id,
+                listing_id=lib_id,
+                operation="deploy",
+                reason=DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD,
+                    "message": (
+                        "This subscription does not carry both an end date and an "
+                        "identifier, so a live deployment bounded by it cannot be created."
+                    ),
+                },
+            )
+
+        if not deploy_request.exchange_account_id:
+            # Requirement 13.6's shape, answered as a 422 that names the field rather than
+            # letting `chk_sd_live_needs_account` surface as a 500 -- exactly what
+            # `deployment_binding.assert_account_required_for_live` exists to do for the
+            # first-party path.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": DEPLOY_LIVE_NEEDS_ACCOUNT,
+                    "message": (
+                        "A live deployment must name an exchange account to trade "
+                        "through. Send exchange_account_id."
+                    ),
+                },
+            )
+
+        from backend_app.backend import deployment_binding as _db_binding
+
+        # Column support first: writing `mode`/`exchange_account_id` to a database where
+        # 004e is unapplied is a PGRST204, and writing the row WITHOUT them would store a
+        # live deployment as paper -- silently trading nothing while the subscriber
+        # believes they are live. Refuse instead, the same disposition
+        # `assert_binding_storable` takes for the first-party path.
+        try:
+            columns_supported = await _maybe_await(
+                _db_binding.binding_columns_supported(svc)
+            )
+        except Exception:  # noqa: BLE001 - treated as unsupported, never as supported
+            columns_supported = False
+        if not columns_supported:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": DEPLOY_LIVE_COLUMNS_UNAVAILABLE,
+                    "message": (
+                        "This database cannot record a live deployment binding yet. Apply "
+                        "backend_app/migrations/004e_deployment_bindings.sql and "
+                        "056_mkt05_subscriber_live_authorization_window.sql."
+                    ),
+                },
+            )
+
+        # Ownership. A 404 for an account the caller does not own, never a 403: the two
+        # are indistinguishable to a caller who owns neither, and a 403 would confirm the
+        # row exists for somebody.
+        try:
+            account = await _maybe_await(
+                _db_binding.load_owned_exchange_account(
+                    svc, user_id, deploy_request.exchange_account_id
+                )
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"deploy_strategy live account load failed: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": MARKETPLACE_READ_FAILED,
+                    "message": "Could not read the named exchange account.",
+                },
+            )
+        if not account:
+            await _audit_marketplace_refusal(
+                actor_id=user_id,
+                listing_id=lib_id,
+                operation="deploy",
+                reason=DEPLOY_ACCOUNT_NOT_FOUND,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": DEPLOY_ACCOUNT_NOT_FOUND,
+                    "message": "No such exchange account for this account holder.",
+                },
+            )
+
+        if deploy_request.risk_config_id:
+            try:
+                await _maybe_await(
+                    _db_binding.load_owned_risk_config(
+                        svc, user_id, deploy_request.risk_config_id
+                    )
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"deploy_strategy live risk-config load failed: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": MARKETPLACE_READ_FAILED,
+                        "message": "Could not read the named risk configuration.",
+                    },
+                )
+            deployment_payload["risk_config_id"] = deploy_request.risk_config_id
+
+        deployment_payload["environment"] = "live"
+        deployment_payload["mode"] = "live"
+        deployment_payload["exchange_account_id"] = deploy_request.exchange_account_id
+        # The venue comes from the ACCOUNT, never from the request: a live deployment must
+        # trade on the exchange its credentials are for, and letting the caller name one
+        # would allow an account/venue mismatch that only surfaces at the first order.
+        account_venue = (
+            account.get("exchange_id")
+            if isinstance(account, dict)
+            else getattr(account, "exchange_id", None)
+        )
+        if account_venue:
+            deployment_payload["exchange_id"] = account_venue
+
+        # The two columns that bound it. `056`'s CHECK makes this pair mandatory for a live
+        # marketplace row, so a future edit that drops either one fails loudly at the
+        # database rather than producing an unbounded live deployment.
+        deployment_payload["subscription_id"] = entitlement.subscription_id
+        deployment_payload["authorized_until"] = _isoformat_instant(
+            entitlement.period_expiry
+        )
+    elif deploy_request.exchange_account_id or deploy_request.risk_config_id:
+        # A paper deployment binds no account, so accepting one would store a reference
+        # nothing reads -- the same "a value nothing applies" defect DEPLOY-01 exists to
+        # close. Named rather than ignored.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": DEPLOY_PAPER_TAKES_NO_ACCOUNT,
+                "message": (
+                    "A paper deployment binds no exchange account or risk "
+                    "configuration. Send mode='live' to trade through one."
+                ),
+            },
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    #  RT-24: everything the RUNTIME needs, resolved BEFORE anything is written.
+    #
+    #  This route used to end at the insert and return. It performed none of what the
+    #  first-party path does: no quota reservation, no runtime blueprint, no
+    #  `fleet.start_bot`. So every marketplace deployment -- paper since that path was
+    #  built, and live since MKT-05 inherited it -- was recorded `status='deploying'` and
+    #  nothing ever evaluated the strategy. A feature that silently did nothing.
+    #
+    #  THE ORDER IS `deploy_version`'s, AND THE ORDER IS THE SAFETY PROPERTY. Every gate
+    #  below is a READ, so a refusal here leaves NO row and NO quota spent. The blueprint is
+    #  built once with the id `"pending"` purely to validate the inputs, exactly as
+    #  `deploy_version` does at its own line 1887, and rebuilt after the insert with the
+    #  real deployment id -- the runtime keys its own state on that id, so it cannot be
+    #  minted before the row exists.
+    # ══════════════════════════════════════════════════════════════════════════════
+    is_live_deploy = deploy_request.mode == "live"
+
+    # THE ROW MUST NAME ITS MARKET, because the runtime derives the market FROM THE ROW.
+    # `exchange_symbol` was written only when the subscriber supplied one, so a deployment
+    # that took the owner's market had no symbol recorded at all -- and
+    # `deployment_runtime.rebuild_for_resume` reads `row["exchange_symbol"]` first. Left
+    # absent, the row could not be resumed and could not be reconciled against a venue.
+    #
+    # It is still only set when the subscriber named one; where they did not, the runtime
+    # falls back to the plan's own resolved market, which is the owner's and is the correct
+    # default. The row then records what the subscriber chose and nothing they did not.
+    #
+    # Validating a subscriber-supplied symbol against venue availability and timeframe
+    # support remains open and remains MKT-05's note, not closed here.
+    #
+    # THE OWNER'S LOGIC IS DELIBERATELY NOT READ ON THIS PATH. A `strategy_versions` row
+    # carries `blueprint` and `execution_graph`, and a subscriber may EXECUTE an owner's
+    # strategy without being able to READ it (Requirement 7.1) -- asserted by
+    # `test_the_owner_version_read_selects_no_protected_logic_column`, which inspects every
+    # `strategy_versions` select this route's client makes. So the blueprint is built by
+    # `deployment_runtime.start_recorded_deployment`, through the RUNTIME's own service
+    # client, from the row written below. That is how the resume path has always done it.
+
+    from backend_app.core.subscription_dependencies import get_user_plan
+    from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+
+    plan_key = await get_user_plan(user_id, svc)
+
+    # QUOTA IS THE SUBSCRIBER'S. They own the row, they named the exchange account, the
+    # capital is theirs and the bot occupies a runtime slot on their account; the creator
+    # earns revenue from the listing and consumes none of it. Reserved AFTER every refusal
+    # above, so none of them can spend it, and released by
+    # `_start_marketplace_deployment` if the start does not take.
+    allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(
+        user_id, plan_key, Resource.BOTS.value
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "DEPLOYMENT_QUOTA_EXCEEDED",
+                "message": (
+                    f"Quota exceeded for bots: {current_usage}/{limit}. "
+                    f"Upgrade your plan to continue."
+                ),
+            },
+        )
+
     try:
         deploy_resp = (
             svc.table("strategy_deployments").insert(deployment_payload).execute()
@@ -3441,12 +4258,17 @@ async def deploy_marketplace_strategy(
             f"marketplace_listing_id, apply "
             f"backend_app/migrations/011_marketplace_deployment_source.sql): {exc}"
         )
+        # RT-24: the reservation's work never started, so it is released before the
+        # refusal. Without this a failing insert would burn a bot slot per attempt --
+        # `deploy_version` releases at its own equivalent site for the same reason.
+        await _release_deployment_quota(user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create marketplace deployment.",
         )
 
     if not getattr(deploy_resp, "data", None):
+        await _release_deployment_quota(user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Deploy operation returned no data.",
@@ -3454,15 +4276,36 @@ async def deploy_marketplace_strategy(
 
     deployment_id = deploy_resp.data[0]["id"]
 
+    # ── RT-24: START THE BOT. The row exists, so the runtime has an id to key on. ──
+    #
+    # The blueprint is rebuilt here with the real deployment id -- the "pending" build
+    # above proved the inputs are startable, this one is the artifact the runtime gets.
+    started, start_message, recorded_status = await _start_marketplace_deployment(
+        svc,
+        deployment_row={**deployment_payload, "id": deployment_id},
+        user_id=user_id,
+        is_live=is_live_deploy,
+    )
+
     # The response carries the deployment handle, the Listing it came from and how access was
     # granted. It carries no `strategy_id`, no `version_id` and no part of the owner's
     # definition: those are server-side identifiers for an artifact the subscriber executes and
     # may not read (Requirement 7.1).
+    # RT-24: `status` is reported rather than assumed. A deployment that was accepted and
+    # then refused a bot slot is a different outcome from one that is running, and a caller
+    # that cannot tell them apart has to poll to find out whether its strategy trades.
+    # `started_at` is deliberately absent: the row carries it, and restating it here would
+    # be a second place for it to be wrong.
     return {
         "deployment_id": deployment_id,
         "library_id": lib_id,
         "granted_via": entitlement.reason.value,
-        "message": "Marketplace deployment created against the owner's version.",
+        "status": recorded_status,
+        "message": (
+            "Marketplace deployment created and started against the owner's version."
+            if started
+            else f"Marketplace deployment created but not started: {start_message}"
+        ),
     }
 
 @router.post("/subscriptions/{sub_id}/cancel")
@@ -3838,6 +4681,217 @@ async def creator_analytics(request: Request, user: dict = Depends(get_current_u
         response["rating_count"] = rating_count_total
 
     return response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MKT-06 — creator payouts: weekly, platform-initiated, admin-settled
+#
+# `creator_analytics` above has always been read-only: it reports what a creator
+# has EARNED, never what has been PAID. The payout rows this section reads and
+# settles are created automatically, on a weekly cadence, by
+# `backend_app.core.creator_payout_scheduler` calling
+# `public.create_creator_payout` (`059_mkt06_creator_payout_atomic.sql`) -- never
+# by a creator-initiated request, unlike `POST /referral/payouts`. There is no
+# `POST` here for that reason: a creator cannot request a payout, only see the
+# ones the platform has already created and been told to settle.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _mkt06_rpc_error_code(exc: Exception) -> str:
+    """The SQLSTATE a failed ``settle_creator_payout`` call raised, or ``""``.
+
+    Same two-step reading ``referral.py::_rpc_error_code`` and
+    ``settlement_service._rpc_error_code`` already use for the identical reason:
+    ``postgrest.exceptions.APIError`` carries the SQLSTATE on its own ``.code``
+    attribute, but a double built for a test may not.
+    """
+    code = str(getattr(exc, "code", "") or "").strip()
+    if code:
+        return code
+    text = str(exc)
+    for candidate in ("PY001", "PY002", "PY003", "PY004"):
+        if candidate in text:
+            return candidate
+    return ""
+
+
+class CreatorPayoutRecord(BaseModel):
+    """One row of a creator's own payout history, as `GET /creator/payouts` returns it.
+
+    ``amount_minor`` is the exact integer Minor_Units `create_creator_payout`
+    claimed for this currency -- no major-unit conversion here, for the same
+    reason `_earnings_entry` above converts nothing: that would route the figure
+    through binary floating point (Requirement 10.3).
+    """
+
+    id: str
+    amount_minor: int
+    currency: str
+    status: str
+    period_start: str
+    period_end: str
+    created_at: str
+    settled_at: Optional[str] = None
+    reference: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@literal_router.get("/creator/payouts")
+@limiter.limit("60/60second", key_func=caller_or_address)
+async def creator_payout_history(request: Request, user: dict = Depends(get_current_user)):
+    """The caller's OWN `marketplace_creator_payouts` rows, most recent first.
+
+    OWNER-SCOPED, BY PREDICATE, SAME AS `creator_analytics` (Requirements 21.4, 22.1)
+    ---------------------------------------------------------------------------------
+    The identity is the authenticated server-side session, never a path or query
+    parameter, and travels as ``.eq("owner_id", user_id)`` on the read. The RLS
+    policy on ``marketplace_creator_payouts`` (``051``'s own
+    ``creator_payouts_owner_read``) enforces the identical restriction at the
+    database, so this predicate is a belt, not the only strap -- consistent with
+    ``get_payout_history`` in ``routers/referral.py``, which this endpoint mirrors.
+    """
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+
+    if not svc:
+        logger.error("creator payout history: no service client available for %s", user_id)
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    try:
+        resp = (
+            svc.table("marketplace_creator_payouts")
+            .select("id,amount_minor,currency,status,period_start,period_end,"
+                    "created_at,settled_at,reference,reason")
+            .eq("owner_id", user_id)
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("creator payout history read failed for %s: %s", user_id, exc)
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    rows = resp.data if resp is not None else None
+    if rows is None:
+        logger.error("creator payout history read unreadable for %s", user_id)
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    payouts = [
+        CreatorPayoutRecord(
+            id=str(row["id"]),
+            amount_minor=int(row["amount_minor"]),
+            currency=row["currency"],
+            status=row["status"],
+            period_start=row["period_start"],
+            period_end=row["period_end"],
+            created_at=row["created_at"],
+            settled_at=row.get("settled_at"),
+            reference=row.get("reference"),
+            reason=row.get("reason"),
+        )
+        for row in rows
+    ]
+
+    return {"payouts": payouts, "count": len(payouts)}
+
+
+class SettleCreatorPayoutRequest(BaseModel):
+    """MKT-06: the pending -> completed/rejected settlement step, mirroring REF-01's
+    ``SettlePayoutRequest`` exactly."""
+
+    status: str = Field(..., pattern="^(completed|rejected)$")
+    reference: Optional[str] = Field(
+        None, max_length=200,
+        description="For 'completed': the external transfer reference (bank/UPI/PayPal "
+                    "transaction id) proving the operator actually sent the money."
+    )
+    reason: Optional[str] = Field(
+        None, max_length=500,
+        description="For 'rejected': why (e.g. invalid payout details, failed KYC)."
+    )
+
+
+@router.put("/creator-payouts/{payout_id}/settle")
+@limiter.limit("30/minute")
+async def settle_creator_payout_endpoint(
+    request: Request,
+    payout_id: str,
+    body: SettleCreatorPayoutRequest,
+    admin: dict = Depends(get_admin_user),
+    sb=Depends(get_service_supabase),
+):
+    """Operator-only: settle a pending creator payout as completed or rejected.
+
+    MKT-06: this is the admin-attested half of the weekly creator payout
+    mechanism, mirroring ``routers/referral.py::settle_payout`` precisely, for the
+    identical reason -- the finding this closes is the SAME "no payout mechanism
+    exists in this system" gap REF-01 already closed for referrals, applied here
+    to marketplace creator earnings.
+
+    WHAT THIS DOES NOT DO. There is no outbound payment-rail integration anywhere
+    in this codebase for creator payouts, any more than for referral payouts --
+    Stripe/Razorpay are wired for INCOMING subscription payments only. 'completed'
+    therefore records that a human operator performed the transfer manually (bank
+    transfer, UPI, PayPal) and is attesting to it with `reference`; this endpoint
+    NEVER itself moves money. 'rejected' releases this payout's claim on the
+    settlements it covered (``marketplace_creator_payout_claims``, deleted inside
+    the same atomic call), so they are summed again -- and a fresh payout created
+    for them -- the next time the weekly scheduler runs for this creator.
+
+    Runs under the service-role client (not the admin's own JWT): like
+    `referral_payouts`, `marketplace_creator_payouts` carries an owner-only RLS
+    read policy, so an admin's own token cannot see or settle a payout belonging
+    to the creator it concerns -- the same SEC-08 pattern, applied only AFTER
+    `get_admin_user`'s own check has passed.
+
+    The status flip and (for a rejection) the claim release are ONE call to
+    ``public.settle_creator_payout`` (``059_mkt06_creator_payout_atomic.sql``):
+    if the claim-release DELETE could not run, the whole function raises and the
+    status flip rolls back with it too, so the payout stays `pending` rather than
+    becoming `rejected` with its settlements permanently stuck claimed.
+    """
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+
+    try:
+        rpc_resp = sb.rpc("settle_creator_payout", {
+            "p_payout_id": payout_id,
+            "p_status": body.status,
+            "p_reference": body.reference,
+            "p_reason": body.reason,
+        }).execute()
+    except Exception as rpc_err:  # noqa: BLE001 — classified by SQLSTATE below
+        code = _mkt06_rpc_error_code(rpc_err)
+        if code == "PY002":
+            raise HTTPException(
+                status_code=404, detail="Payout not found",
+            ) from rpc_err
+        if code == "PY003":
+            raise HTTPException(status_code=400, detail=str(rpc_err)) from rpc_err
+        if code == "PY004":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Payout {payout_id} is already settled and cannot be settled "
+                       "again.",
+            ) from rpc_err
+        logger.error("Error settling creator payout %s: %s", payout_id, rpc_err)
+        raise HTTPException(
+            status_code=500, detail="Failed to settle payout"
+        ) from rpc_err
+
+    payout = getattr(rpc_resp, "data", None)
+    if not payout:
+        raise HTTPException(status_code=500, detail="Failed to settle payout")
+
+    logger.info(
+        "Creator payout %s settled as %s by admin %s", payout_id, body.status,
+        admin.get("id"),
+    )
+    return {
+        "status": "success",
+        "payout_id": payout_id,
+        "settled_as": body.status,
+    }
 
 
 @literal_router.get("/subscriber/analytics")
@@ -4318,22 +5372,82 @@ def _raise_from_service_error(exc: "_submission_service.SubmissionServiceError")
 
 
 class SubmissionCreateRequest(BaseModel):
-    """The owner's publication request: a strategy and its 3..10 Backtest_Evidence refs.
+    """The owner's publication request: a strategy and its 5..10 Backtest_Evidence refs.
 
     The Eligibility_Gate ignores every eligibility/validation/score/status value in the
     body (Requirement 2.1); the only fields that matter are which strategy and which
-    backtest runs. ``backtest_ids`` is bounded 3..10 here to match Requirement 3.1's
-    Backtest_Condition count — the gate re-checks it server-side regardless.
+    backtest runs. ``backtest_ids`` is bounded here to match the
+    ``evidence_validator``'s Backtest_Condition count — the gate re-checks it server-side
+    regardless, so this bound is a 422 that saves five reads, never the control.
+
+    MKT-07 moved the lower bound from 3 to 5 and the bound is read from
+    ``evidence_validator`` rather than written again: a literal here that disagreed with the
+    gate would reject a legal request before the gate could admit it, or accept an illegal
+    one and then refuse it with a criterion failure instead of a field error.
     """
 
     strategy_id: UUID
-    backtest_ids: List[UUID] = Field(..., min_items=3, max_items=10)
+    backtest_ids: List[UUID] = Field(
+        ...,
+        min_items=_evidence_validator.MIN_CONDITIONS,
+        max_items=_evidence_validator.MAX_CONDITIONS,
+    )
 
 
 class AdminActionRequest(BaseModel):
     """The optional body for an admin action. Only ``reject`` reads ``reason``."""
 
     reason: Optional[str] = Field(None, max_length=2000)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/submissions — the caller's own Submissions (MKT-03)
+#
+# The owner could create a Submission and read it back by id, but nothing listed them, so after
+# a page reload the creator UI had no way to learn a Submission's state (SUBMITTED, REJECTED with
+# its reason, PUBLISHED...). Owner-scoped in the query itself, exactly as the single read below;
+# the same columns, no blueprint or logic field.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OWN_SUBMISSION_LIST_SELECT = (
+    "id, listing_id, source_strategy_id, owner_id, version_id, "
+    "submission_state, eligibility_outcomes, evaluator_version, "
+    "rejection_reason, reviewed_by, submitted_at, reviewed_at, "
+    "published_at, created_at, updated_at"
+)
+
+
+@literal_router.get("/submissions")
+@limiter.limit("120/60second", key_func=caller_or_address)
+@limiter.limit("120/60second")
+async def list_own_submissions(
+    request: Request,
+    strategy_id: Optional[str] = Query(None),
+    user: dict = Depends(get_current_user),
+):
+    """The caller's own Submissions, newest first, optionally for one source strategy."""
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    try:
+        query = (
+            svc.table("marketplace_submissions")
+            .select(_OWN_SUBMISSION_LIST_SELECT)
+            .eq("owner_id", user_id)
+        )
+        if strategy_id:
+            query = query.eq("source_strategy_id", _safe_uuid(strategy_id, "strategy_id"))
+        resp = query.order("created_at", desc=True).limit(50).execute()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"list_own_submissions read error: {exc}")
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    rows = resp.data if resp is not None else None
+    if rows is None:
+        logger.error("list_own_submissions read unreadable")
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    return {"submissions": rows, "count": len(rows)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4788,7 +5902,25 @@ def _load_pricing_conditions(sub_id: str, user_id: str, svc):
     except Exception as exc:
         logger.error(f"pricing evidence read error: {exc}")
         raise MarketplaceError(MARKETPLACE_READ_FAILED)
-    return resp.data or []
+    return [_exact_wire_row(row) for row in (resp.data or [])]
+
+
+def _exact_wire_row(row):
+    """One evidence row with every float made the exact decimal it was parsed from (MKT-01).
+
+    ``marketplace_backtest_evidence``'s metric columns are ``numeric(20,8)``. PostgREST renders a
+    ``numeric`` as a JSON number and the HTTP client parses a fractional one into a binary
+    ``float``; ``pricing_evaluator`` refuses a ``float`` by design (Requirement 8.13), so every
+    real submission answered 422 ``MARKETPLACE_PRICE_EVIDENCE_MISSING`` and nothing could be
+    priced. ``Decimal(repr(value))`` is the shortest decimal that round-trips, i.e. the digits the
+    column was stored with. ``int`` counts, ``str`` dates and hashes pass through untouched, and a
+    non-finite float becomes a non-finite ``Decimal`` the evaluator still refuses. The digest is
+    taken over these same rows at both call sites, so it stays consistent.
+    """
+    return {
+        key: Decimal(repr(value)) if isinstance(value, float) else value
+        for key, value in row.items()
+    }
 
 
 def _price_range_or_error(conditions, currency: str):
@@ -5135,10 +6267,49 @@ async def admin_publish_submission(
     submission_id: str,
     admin: dict = Depends(get_admin_user),
 ):
-    """``APPROVED → PUBLISHED`` or ``SUSPENDED → PUBLISHED``."""
+    """``APPROVED → PUBLISHED`` or ``SUSPENDED → PUBLISHED``.
+
+    MKT-07: refused while the Submission's Listing has no ``price_minor``. Checkout refuses an
+    unpriced Listing (``reason="no_price"``) and there is no free-access path, so publishing one
+    put a Listing on the Marketplace that nobody could ever subscribe to. The owner prices it
+    first (``POST /api/library/submissions/{id}/price``), then it is published.
+    """
+    _require_priced_listing_for_publish(submission_id)
     return await _apply_admin_action_route(
         submission_id, _submission_service.SubmissionAction.PUBLISH, None, admin
     )
+
+
+def _require_priced_listing_for_publish(submission_id: str) -> None:
+    """Raise ``MARKETPLACE_LISTING_NOT_PURCHASABLE`` (409, ``reason=no_price``) for an unpriced
+    Listing. An unknown Submission is left to the transition itself, which answers 404."""
+    sub_id = _safe_uuid(submission_id, "submission_id")
+    svc = _require_service_client()
+    try:
+        sub_rows = (
+            svc.table("marketplace_submissions")
+            .select("id,listing_id")
+            .eq("id", sub_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        listing_id = sub_rows[0].get("listing_id") if sub_rows else None
+        if not listing_id:
+            return
+        listing_rows = (
+            svc.table("library_strategies")
+            .select("id,price_minor")
+            .eq("id", str(listing_id))
+            .limit(1)
+            .execute()
+        ).data or []
+    except _PostgrestAPIError as exc:
+        raise _read_did_not_complete("publish price check", exc)
+    if listing_rows and listing_rows[0].get("price_minor") is None:
+        raise MarketplaceError(
+            MARKETPLACE_LISTING_NOT_PURCHASABLE,
+            details={"listing_id": str(listing_id), "reason": "no_price"},
+        )
 
 
 @literal_router.post("/admin/submissions/{submission_id}/suspend")
@@ -5238,6 +6409,37 @@ async def admin_reinstate_subscription(
         "cause": result.cause,
         "settlement_written": False,
     }
+
+
+def _isoformat_instant(value) -> Optional[str]:
+    """MKT-05: render an instant for ``strategy_deployments.authorized_until``.
+
+    The entitlement resolver's ``period_expiry`` arrives as whatever it read -- a
+    ``datetime`` once parsed, or the ISO string PostgREST returned for the ``TIMESTAMPTZ``.
+    Both are accepted and a string is passed through unchanged rather than reparsed and
+    reformatted, because a round trip is a chance to change the value and there is nothing
+    to gain by taking it.
+
+    A naive ``datetime`` is stamped UTC, matching how every other instant in this codebase
+    is stored. Returning ``None`` for an unreadable value is safe here ONLY because the
+    caller refuses to build a live deployment without a usable ``period_expiry`` before
+    reaching this, and ``056``'s ``chk_sd_marketplace_live_is_bounded`` refuses the row
+    even if that check were ever removed.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    isoformat = getattr(value, "isoformat", None)
+    if isoformat is None:
+        return None
+    tzinfo = getattr(value, "tzinfo", None)
+    if tzinfo is None and hasattr(value, "replace"):
+        from datetime import timezone as _tz
+
+        value = value.replace(tzinfo=_tz.utc)
+        isoformat = value.isoformat
+    return isoformat()
 
 
 async def _maybe_await(value):

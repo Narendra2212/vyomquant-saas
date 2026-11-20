@@ -280,6 +280,112 @@ async def create_request_supabase_async(access_token: str) -> Optional[_PooledAs
         raise RuntimeError(f"Failed to initialize async request Supabase client: {e}")
 
 
+_service_supabase_client = None
+_service_supabase_lock = threading.Lock()
+
+_service_supabase_async_client: Optional[_PooledAsyncPostgrestClient] = None
+_service_supabase_async_lock = asyncio.Lock()
+
+
+async def get_service_supabase_async() -> Optional[_PooledAsyncPostgrestClient]:
+    """Process-wide **async**, connection-pooled service-role PostgREST client.
+
+    PERF-01: ``core/risk_manager.py``'s per-trade risk-settings read used to call
+    ``supabase.create_client`` (a brand-new, synchronous ``httpx.Client``) and then a
+    blocking ``.execute()`` on EVERY trade, from inside an ``async def`` -- blocking the
+    whole event loop, not just that one request, for the duration of a Supabase round
+    trip on every single order. ``get_service_supabase()`` above already fixed the
+    "brand-new client" half for other service-role callers (it is a memoized
+    singleton), but its ``.execute()`` is still synchronous network I/O.
+
+    This mirrors ``create_request_supabase_async`` and its
+    ``_PooledAsyncPostgrestClient``/``get_shared_async_transport()`` connection pool --
+    same pooled transport, so this costs no additional connections -- but with the
+    SERVICE_ROLE_KEY as both ``apiKey`` and bearer token instead of a per-request user
+    JWT, matching what ``get_service_supabase()`` already grants.  Memoized the same way
+    ``get_service_supabase()`` is: built once, reused for the life of the process.
+
+    Fails closed exactly like ``get_service_supabase()``: missing credentials raise
+    outside DEV_MODE rather than silently handing a caller a client that cannot work.
+    """
+    global _service_supabase_async_client
+    if _service_supabase_async_client is None:
+        async with _service_supabase_async_lock:
+            if _service_supabase_async_client is None:
+                url = os.environ.get("SUPABASE_URL")
+                key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+                if not url or not key:
+                    if DEV_MODE:
+                        logger.warning(
+                            "SUPABASE_SERVICE_ROLE_KEY missing in DEV_MODE, async "
+                            "service client unavailable"
+                        )
+                        return None
+                    raise RuntimeError(
+                        "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY required for the "
+                        "async service-role client."
+                    )
+                try:
+                    transport = await get_shared_async_transport()
+                    headers = {"apiKey": key, "Authorization": f"Bearer {key}"}
+                    rest_url = f"{url.rstrip('/')}/rest/v1"
+                    _service_supabase_async_client = _PooledAsyncPostgrestClient(
+                        base_url=rest_url,
+                        schema="public",
+                        headers=headers,
+                        timeout=DEFAULT_POSTGREST_CLIENT_TIMEOUT,
+                        transport=transport,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Failed to construct async service-role client: %s", exc)
+                    if DEV_MODE:
+                        return None
+                    raise RuntimeError(
+                        f"Failed to initialize async service-role client: {exc}"
+                    ) from exc
+    return _service_supabase_async_client
+
+
+def get_service_supabase():
+    """Process-wide **service-role** Supabase client for operator/platform actions.
+
+    SEC-08: operator endpoints (freeze a user, list users) used the *operator's own* JWT
+    identity, so row-level security limited them to the operator's own ``profiles`` row:
+    freezing another user updated 0 rows yet reported success. Platform actions that must
+    act on *other* tenants run under this client, and only AFTER the route's own
+    ``get_operator_user`` / ``get_admin_user`` check has passed.
+
+    Fails closed: if the service-role credentials are missing the caller gets a 503, never
+    a silent fallback to an identity that cannot do the job. (Local/test runs that cannot
+    construct a client get ``None``; route code treats that as "no database".)
+    """
+    global _service_supabase_client
+    if _service_supabase_client is None:
+        with _service_supabase_lock:
+            if _service_supabase_client is None:
+                url = os.environ.get("SUPABASE_URL")
+                key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+                if not url or not key:
+                    if DEV_MODE:
+                        logger.warning("SUPABASE_SERVICE_ROLE_KEY missing in DEV_MODE, using None")
+                        return None
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Platform database credentials are not configured.",
+                    )
+                from supabase import create_client
+
+                try:
+                    _service_supabase_client = create_client(url, key)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Failed to construct service-role Supabase client: %s", exc)
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Platform database is unavailable.",
+                    ) from exc
+    return _service_supabase_client
+
+
 async def get_request_supabase(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
@@ -326,7 +432,41 @@ async def get_current_user(
             "tenant_id": tenant_id,
             "access_token": token,
             "role": payload.get("role", "authenticated"),
-            "app_metadata": payload.get("app_metadata", {})
+            "app_metadata": payload.get("app_metadata", {}),
+            # ── SC-3: `aal` MUST be propagated, or `require_aal2` rejects everyone ──────
+            #
+            # `aal` ("aal1" / "aal2") is a REQUIRED TOP-LEVEL claim in a Supabase access
+            # token — it is not inside `app_metadata`, which carries application data like
+            # `{"provider": "email"}`. See
+            # https://supabase.com/docs/guides/auth/jwt-fields.
+            #
+            # This dict used to stop at `app_metadata`, so the claim was decoded by
+            # `decode_token_local` and then dropped on the floor here. `require_aal2`
+            # reads `app_metadata.get("aal") or user.get("aal", "aal1")`; against a real
+            # token the first is absent (wrong location) and the second was absent (never
+            # copied), so it resolved to the "aal1" default and answered 403 — for EVERY
+            # caller, including one who had just completed a TOTP challenge. The dependency
+            # was not merely unused, it was unusable: wiring it to an endpoint would have
+            # locked out MFA-enrolled and non-enrolled users alike.
+            #
+            # Why no test caught it: the three suites that cover `require_aal2`
+            # (`test_phase7b_auth_remediation`, `test_phase12a_production_security_validation`,
+            # `tests/regression/capture_baseline.py`) all call it with a hand-built user
+            # dict, and `create_test_jwt` sets `aal` in `app_metadata` as well as at the top
+            # level. The fixture is unrepresentative of a real Supabase token in precisely
+            # the field under test, so the gate's logic was verified while its integration
+            # with this function was not. `tests/test_sc3_aal_claim_propagation.py` closes
+            # that by asserting through `get_current_user` itself.
+            #
+            # This is propagation only and changes no decision today: `require_aal2` is
+            # still applied to zero endpoints, so nothing reads this value yet. It is the
+            # prerequisite that makes enforcement possible rather than an outage.
+            "aal": payload.get("aal", "aal1"),
+            # `amr` (the authentication-methods array, e.g. [{"method": "totp", ...}]) is
+            # carried for the same reason and is not read by anything yet. It is what a
+            # factor-level decision ("TOTP specifically, not any second factor") or an audit
+            # record of how a session was elevated would need.
+            "amr": payload.get("amr", []),
         }
 
         # Verify frozen status.

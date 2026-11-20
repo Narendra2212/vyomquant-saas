@@ -5,14 +5,24 @@ Endpoints:
   GET  /api/support/faqs                        — List categorized FAQs with search
   GET  /api/support/categories                  — Available ticket categories & SLAs
   GET  /api/support/tickets                     — List user's support tickets
-  POST /api/support/tickets                     — Create new ticket with validation & attachments
+  POST /api/support/tickets                     — Create new ticket (attachment METADATA only)
   GET  /api/support/tickets/{ticket_id}         — Get ticket details with conversation history
   POST /api/support/tickets/{ticket_id}/comments — Add comment / reply to ticket
   PUT  /api/support/tickets/{ticket_id}         — Update ticket status (close/reopen/resolve)
-  POST /api/support/tickets/{ticket_id}/attachments — Add safe attachment metadata
   GET  /api/support/admin/tickets               — Staff listing of tickets (admin/support role)
   POST /api/support/admin/tickets/{ticket_id}/reply — Staff reply to ticket
-  PUT  /api/support/admin/tickets/{ticket_id}/status — Staff status override
+
+SUP-02: this list previously named two endpoints that do not exist in this
+module — `POST /tickets/{ticket_id}/attachments` and
+`PUT /admin/tickets/{ticket_id}/status`. There are nine `@router` decorators
+here and the list claimed eleven. A docstring is the first thing a reader
+trusts about a router, so the two phantoms are removed rather than left to be
+discovered by a 404. If either is wanted, it needs writing.
+
+ATTACHMENTS ARE METADATA ONLY. `AttachmentMeta` carries a filename, a content
+type and a size; no endpoint accepts file bytes and no storage bucket exists to
+hold them. The extension blocklist in `_check_attachment` is a real check on
+the declared filename, not a scan of uploaded content.
 """
 
 import inspect
@@ -122,8 +132,8 @@ FAQS_DATA = [
     {
         "id": "faq-2",
         "category": "trading",
-        "question": "What is the Anti-Bypass Execution Token?",
-        "answer": "VyomQuant issues a cryptographically verified, single-use execution token upon InstitutionalRiskManager approval. The CCXT execution boundary validates and consumes this token before transmitting orders to any exchange venue.",
+        "question": "What stops an order from bypassing the risk engine?",
+        "answer": "Every live order must go through execute_with_idempotency, the single entry point the execution engine enforces: it accepts orders only from the bot runner (a direct or manual call is rejected), requires a strategy_id that exists in the database, computes a deterministic idempotency key for the execution window, and takes a database lock before the order is placed. A duplicate or out-of-band call is refused rather than silently re-executed.",
     },
     {
         "id": "faq-3",
@@ -141,7 +151,7 @@ FAQS_DATA = [
         "id": "faq-5",
         "category": "exchanges",
         "question": "Which exchanges support Sandbox / Testnet mode?",
-        "answer": "Binance (Testnet), Bybit (Testnet), OKX (Demo Mode), Coinbase (Sandbox), and KuCoin (Sandbox) support simulated trading with real API contracts. Kraken runs on production endpoints exclusively.",
+        "answer": "Binance (Testnet), Bybit (Testnet), and OKX (Demo Mode) support simulated trading with real API contracts. Coinbase, KuCoin, and Kraken run on production endpoints exclusively and have no public CCXT sandbox.",
     },
     {
         "id": "faq-6",
@@ -189,7 +199,7 @@ FAQS_DATA = [
         "id": "faq-13",
         "category": "billing",
         "question": "How does subscription tiering affect my execution quotas?",
-        "answer": "Higher subscription tiers unlock increased concurrent live bots, sub-millisecond execution tick rates, and expanded backtesting data access.",
+        "answer": "Higher subscription tiers unlock more concurrent live bots and strategies, more exchange connections and ML models, and larger monthly allowances for backtests, optimization runs and ML training. Order submission speed is the same on every plan; tiering changes capacity, not execution latency.",
     },
     {
         "id": "faq-14",
@@ -212,14 +222,27 @@ FAQS_DATA = [
     {
         "id": "faq-17",
         "category": "general",
+        # SUP-02: this answered "Yes ... you can attach log files (.log, .txt,
+        # .json, .csv) or screenshots (.png, .jpg)". No endpoint accepts a file
+        # and no storage bucket exists to put one in -- production has exactly
+        # one bucket, `strategy-images`. What the ticket form actually offers is
+        # a text input labelled "Attachment Filename / Log Trace", marked in
+        # SupportCenter.jsx as a "Safe Attachment Simulation", and what the API
+        # stores is `AttachmentMeta` -- a filename, a content type and a size,
+        # with no bytes behind them. Telling a user their screenshot was
+        # uploaded when nothing received it is the same class of claim CLAIM-01
+        # (42c8ac96) corrected three of; this is a fourth, found by following
+        # the attachment path to the storage layer and finding no storage.
+        # The extension blocklist IS real and does apply to the filename, so
+        # that half of the old answer is kept rather than dropped.
         "question": "Can I attach diagnostic logs to my support request?",
-        "answer": "Yes. When creating a ticket or posting a reply, you can attach log files (.log, .txt, .json, .csv) or screenshots (.png, .jpg). Executable file types (.exe, .sh, .bat) are strictly blocked for security.",
+        "answer": "Not as uploaded files -- there is no file upload yet. Paste the relevant log lines or error text directly into the ticket description, which accepts up to 5000 characters. You can also record a filename or log trace in the optional attachment field so support knows what to ask you for; executable file types (.exe, .sh, .bat) are rejected there. Never paste API keys, secrets or private keys: submissions containing them are blocked automatically.",
     },
     {
         "id": "faq-18",
         "category": "general",
         "question": "How does the Emergency Kill Switch work?",
-        "answer": "Engaging the Emergency Kill Switch in Risk Settings immediately cancels all pending open orders across all connected exchanges and transitions all active strategies to PAUSED state within milliseconds.",
+        "answer": "Engaging the Emergency Kill Switch in Risk Settings immediately blocks every new order and strategy execution on your account. It does not retroactively cancel orders already resting at an exchange or change a running deployment's status by itself -- use Close Position / Close All in Portfolio to cancel resting orders and flatten existing exposure.",
     },
 ]
 
@@ -425,7 +448,14 @@ async def create_ticket(
     if body.attachment:
         _check_attachment(body.attachment)
 
-    ticket_id = f"tkt_{uuid4().hex[:12]}"
+    # SUP-01: support_tickets.id is `UUID PRIMARY KEY` (migrations/add_support_tables.sql).
+    # A "tkt_"-prefixed id is not a UUID, so the insert below always raised against Supabase
+    # (invalid input syntax for type uuid), caught by the except and silently rerouted to
+    # the in-memory fallback dict -- which answers this one request but is lost on the next
+    # worker restart and invisible to every OTHER worker process in the meantime. A real
+    # UUID lets the real insert succeed, which is the actual fix; the in-memory path below
+    # is now the genuine degraded-Supabase fallback it was always meant to be.
+    ticket_id = str(uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
     user_id = user["id"]
 
@@ -454,11 +484,46 @@ async def create_ticket(
             if result and hasattr(result, "data") and result.data:
                 ticket_data = result.data[0]
         except Exception as sb_err:
-            logger.warning(f"[SUPPORT] Supabase insert fallback: {sb_err}")
-            with _support_lock:
-                _in_memory_tickets[ticket_id] = ticket_data
-                _in_memory_comments[ticket_id] = []
+            # SUP-02: this used to log a WARNING, copy the ticket into
+            # `_in_memory_tickets` and fall through to `return` — so the user
+            # received HTTP 200 and a real ticket id for a ticket the database
+            # had rejected. The rejection was not hypothetical: until migration
+            # 072 this insert named four columns support_tickets did not
+            # declare, so PostgREST failed every statement with PGRST204 and
+            # this except body ran on EVERY ticket for ~2.5 months (last stored
+            # ticket 2026-08-18, keys added 2026-08-29).
+            #
+            # The in-memory dict cannot stand in for the table. The API runs
+            # WORKERS=2, so a ticket parked in one worker's memory 404s when the
+            # next request lands on the other, and it is gone on restart — and
+            # the API task was being replaced every ~9.5 minutes during the
+            # 2026-11-17 incident.
+            #
+            # So this now fails honestly. A 503 asks the user to retry, which
+            # can succeed; a fabricated 200 guarantees their report is lost and
+            # stops them retrying. Deliberately the OPPOSITE of the BILL-07
+            # decision, where the invoice handler must NOT raise — there, the
+            # caller is Razorpay, raising triggers webhook redelivery, and
+            # redelivery extends the paid period, granting a second month for
+            # one payment. Here the caller is a person who can press the button
+            # again, and nothing is granted by trying.
+            logger.error(
+                "[SUPPORT] ticket insert REJECTED, nothing stored: %s", sb_err
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Your ticket could not be filed because the support "
+                    "database rejected it. Nothing was saved. Please try "
+                    "again; if it keeps failing, contact support through "
+                    "another channel rather than resubmitting."
+                ),
+            ) from sb_err
     else:
+        # No Supabase configured at all — local development and the test suite.
+        # This is the genuine no-backend mode, and it is honest because there is
+        # no database that could have accepted the row. It is NOT the path for
+        # "a database exists and said no", which is handled above.
         with _support_lock:
             _in_memory_tickets[ticket_id] = ticket_data
             _in_memory_comments[ticket_id] = []
@@ -524,7 +589,20 @@ async def create_ticket(
         )
         if supabase and ws_mgr:
             try:
-                await create_notification(admin_notification, supabase, ws_mgr)
+                # NO CLIENT IS PASSED, DELIBERATELY. `create_notification` resolves the
+                # SERVICE-ROLE client when a caller supplies none
+                # (`notification_dispatcher._resolve_persistence_client`), and this row
+                # is addressed to `support_staff` -- NOT to the caller. Handing it the
+                # ticket submitter's own request-scoped client asked that customer to
+                # insert a row belonging to somebody else, which the owner policy on
+                # `notifications` refuses. The failure was swallowed by the `except`
+                # below and logged at debug, so this notification has never persisted;
+                # it is part of why production held zero notification rows.
+                #
+                # `supabase` is still the gate: it tells us a database is configured at
+                # all (the test suite overrides it to None). It is just no longer the
+                # client the write goes through.
+                await create_notification(admin_notification, ws_manager=ws_mgr)
             except Exception as notif_err:
                 logger.debug(f"[SUPPORT] In-app notification creation non-blocking fallback: {notif_err}")
     except Exception as e:
@@ -623,7 +701,8 @@ async def add_comment(
 
     user_id = user["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
-    comment_id = f"cmt_{uuid4().hex[:12]}"
+    # SUP-01: ticket_comments.id is `UUID PRIMARY KEY` too - see create_ticket's own comment.
+    comment_id = str(uuid4())
 
     ticket = None
     if supabase:
@@ -659,23 +738,54 @@ async def add_comment(
 
     if supabase:
         try:
-            supabase.table("ticket_comments").insert(comment_record).execute()
-            supabase.table("support_tickets").update({
+            # SUP-02: both calls were previously fire-and-forget. Neither
+            # result was awaited, and `get_request_supabase` may hand back an
+            # async client — in which case `.execute()` returns a coroutine
+            # that is never awaited, the statement never reaches the database,
+            # and the only symptom is a "coroutine was never awaited" warning.
+            # That is the bug class commit 475cf655 ("Fix un-awaited Postgrest
+            # coroutines") went through this codebase for; the ticket insert
+            # above already guards it and this path was missed.
+            res_ins = supabase.table("ticket_comments").insert(comment_record).execute()
+            if inspect.isawaitable(res_ins):
+                await res_ins
+
+            res_upd = supabase.table("support_tickets").update({
                 "has_unread": True,
                 "status": TicketStatus.IN_PROGRESS.value,
                 "updated_at": now_iso,
             }).eq("id", ticket_id).execute()
+            if inspect.isawaitable(res_upd):
+                await res_upd
         except Exception as sb_err:
-            logger.warning(f"[SUPPORT] Supabase comment insert fallback: {sb_err}")
-
-    with _support_lock:
-        if ticket_id not in _in_memory_comments:
-            _in_memory_comments[ticket_id] = []
-        _in_memory_comments[ticket_id].append(comment_record)
-        if ticket_id in _in_memory_tickets:
-            _in_memory_tickets[ticket_id]["updated_at"] = now_iso
-            _in_memory_tickets[ticket_id]["comment_count"] = len(_in_memory_comments[ticket_id])
-            _in_memory_tickets[ticket_id]["status"] = TicketStatus.IN_PROGRESS.value
+            # Same reasoning as the ticket insert above: until 072,
+            # `ticket_comments` had no `attachment` column, so this raised
+            # PGRST204 and the reply was dropped while the caller got 200.
+            logger.error(
+                "[SUPPORT] comment insert REJECTED, nothing stored: %s", sb_err
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Your reply could not be saved because the support "
+                    "database rejected it. Nothing was saved. Please try again."
+                ),
+            ) from sb_err
+    else:
+        # No Supabase configured — local development and the test suite, which
+        # overrides `get_request_supabase` to None throughout. Appending here
+        # only in that case: when the insert above DID succeed, a second copy
+        # in memory would be read back alongside the stored row.
+        with _support_lock:
+            if ticket_id not in _in_memory_comments:
+                _in_memory_comments[ticket_id] = []
+            _in_memory_comments[ticket_id].append(comment_record)
+            # Inside the lock: this reads len(_in_memory_comments[...]) that the
+            # line above just changed, so it is part of the same mutation.
+            if ticket_id in _in_memory_tickets:
+                _in_memory_tickets[ticket_id]["updated_at"] = now_iso
+                _in_memory_tickets[ticket_id]["comment_count"] = len(_in_memory_comments[ticket_id])
+                _in_memory_tickets[ticket_id]["status"] = TicketStatus.IN_PROGRESS.value
 
     # Broadcast WebSocket update
     if ws_mgr:
@@ -791,7 +901,27 @@ async def update_ticket(
             title=f"Support Ticket {action_verb}",
             message=f"Ticket '{ticket.get('subject', ticket_id)}' status updated to {new_status}.",
             metadata={"ticket_id": ticket_id, "status": new_status, "idempotency_key": f"ticket_status:{ticket_id}:{new_status}"},
-            supabase=supabase,
+            # NOTIF-04: NO CLIENT. This was `supabase=supabase` -- the caller's own
+            # request-scoped client -- and it is the third site of the defect NOTIF-03
+            # fixed at the other two (:592 and :1074). It was missed there because that
+            # change was scoped by the two sites the dispatcher's docstring happened to
+            # name.
+            #
+            # Two independent reasons the row could never land through that client:
+            #
+            #   1. `public.notifications` carries an owner-scoped policy, and this row is
+            #      addressed to the TICKET OWNER while a status change is performed by
+            #      support staff -- so `auth.uid()` is not the `user_id` being inserted
+            #      and PostgREST refuses it.
+            #   2. `999_privilege_hardening.sql` has since REVOKED `authenticated INSERT`
+            #      on `public.notifications`. Measured in production 2026-11-18:
+            #      `authenticated -> DELETE,SELECT,UPDATE`. So even an owner-performed
+            #      status change now fails on the privilege, with 42501.
+            #
+            # Either way the `except Exception: logger.debug` below swallowed it, so a
+            # customer whose ticket was resolved was never told. Passing no client lets
+            # `_resolve_persistence_client` resolve the service-role client, which is not
+            # subject to the owner policy and holds the privilege.
             ws_manager=ws_mgr,
         )
     except Exception as notif_err:
@@ -871,7 +1001,8 @@ async def staff_reply_ticket(
     """Support staff reply to user ticket with status transition and notification dispatch."""
     _scan_for_secrets(body.message)
     now_iso = datetime.now(timezone.utc).isoformat()
-    comment_id = f"cmt_staff_{uuid4().hex[:10]}"
+    # SUP-01: ticket_comments.id is `UUID PRIMARY KEY` - see create_ticket's own comment.
+    comment_id = str(uuid4())
 
     ticket = None
     if supabase:
@@ -904,23 +1035,44 @@ async def staff_reply_ticket(
 
     if supabase:
         try:
-            supabase.table("ticket_comments").insert(comment_record).execute()
-            supabase.table("support_tickets").update({
+            # SUP-02: awaited, for the reason given on the user reply path.
+            res_ins = supabase.table("ticket_comments").insert(comment_record).execute()
+            if inspect.isawaitable(res_ins):
+                await res_ins
+
+            res_upd = supabase.table("support_tickets").update({
                 "status": new_status,
                 "has_unread": True,
                 "updated_at": now_iso,
             }).eq("id", ticket_id).execute()
+            if inspect.isawaitable(res_upd):
+                await res_upd
         except Exception as sb_err:
-            logger.warning(f"[SUPPORT] Supabase staff reply fallback: {sb_err}")
-
-    with _support_lock:
-        if ticket_id not in _in_memory_comments:
-            _in_memory_comments[ticket_id] = []
-        _in_memory_comments[ticket_id].append(comment_record)
-        if ticket_id in _in_memory_tickets:
-            _in_memory_tickets[ticket_id]["status"] = new_status
-            _in_memory_tickets[ticket_id]["updated_at"] = now_iso
-            _in_memory_tickets[ticket_id]["comment_count"] = len(_in_memory_comments[ticket_id])
+            # A staff reply that is not stored is worse than the user's own
+            # dropped reply: the customer is waiting on it, and support believes
+            # it was sent. Fail loudly so the operator sees it and can resend,
+            # rather than logging a warning nobody is watching.
+            logger.error(
+                "[SUPPORT] staff reply REJECTED, nothing stored: %s", sb_err
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The reply could not be saved because the support database "
+                    "rejected it. Nothing was saved and the customer has not "
+                    "been answered. Please try again."
+                ),
+            ) from sb_err
+    else:
+        # No Supabase configured — see the user reply path.
+        with _support_lock:
+            if ticket_id not in _in_memory_comments:
+                _in_memory_comments[ticket_id] = []
+            _in_memory_comments[ticket_id].append(comment_record)
+            if ticket_id in _in_memory_tickets:
+                _in_memory_tickets[ticket_id]["status"] = new_status
+                _in_memory_tickets[ticket_id]["updated_at"] = now_iso
+                _in_memory_tickets[ticket_id]["comment_count"] = len(_in_memory_comments[ticket_id])
 
     # Broadcast notification to the ticket owner and create formal in-app notification
     if ws_mgr:
@@ -952,7 +1104,13 @@ async def staff_reply_ticket(
             message=f"VyomQuant Support replied: {body.message[:120]}...",
             metadata={"ticket_id": ticket_id, "status": new_status},
         )
-        await create_notification(user_notif, supabase, ws_mgr)
+        # Same reason as the admin notification on ticket creation: no client is passed,
+        # so the service-role one is resolved. This row is addressed to
+        # `target_user_id` -- the TICKET'S OWNER -- while the caller here is support
+        # staff, so writing it through the staff member's request-scoped client asked
+        # one user to insert a notification belonging to another. The owner policy
+        # refuses that, and the `except` below swallowed it.
+        await create_notification(user_notif, ws_manager=ws_mgr)
     except Exception as notif_err:
         logger.debug(f"[SUPPORT] Staff reply notification dispatch non-blocking: {notif_err}")
 

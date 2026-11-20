@@ -102,6 +102,7 @@ from hypothesis import strategies as st
 from tests.test_submission_state_agreement import (
     MIGRATION_012_SUBSCRIPTION_ADDENDUM,
     MIGRATIONS,
+    PAPER_SESSION_ADDENDUM_MIGRATION,
     SUBSCRIPTION_ADDENDUM_MIGRATION,
     _flatten_transitions,
     _read_seed_pairs,
@@ -377,6 +378,15 @@ def _machines() -> Tuple[_Machine, ...]:
             new_col="session_state",
             oracle_pairs=_session_oracle(),
             history_revoke_migration="009_paper_trading.sql",
+            # PAPER-04 widened this machine after 009 seeded it, which is precisely the
+            # case addendum_migrations exists for -- the same shape as Subscription_State's
+            # 012 addendum above. 054 adds the fifth state ABANDONED and two edges:
+            # ('RUNNING','ABANDONED'), the orphan being recorded, and
+            # ('ABANDONED','CREATED'), the reset-and-start path it shares with STOPPED.
+            # Without this the seed would be read from 009 alone, the Python oracle would
+            # hold two pairs the seed appeared not to, and P-49 would quantify over an
+            # 'absent' space that wrongly included an edge the database does permit.
+            addendum_migrations=(PAPER_SESSION_ADDENDUM_MIGRATION,),
         ),
     )
 

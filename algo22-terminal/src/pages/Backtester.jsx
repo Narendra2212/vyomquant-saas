@@ -202,9 +202,10 @@
  * — none of which can do anything without a strategy — and the results region stays.
  */
 
-import { lazy, Suspense, useCallback, useMemo, useState } from "react";
+// `lazy` and `Suspense` left with the chart bindings — see CHART-MODAL-01 below.
+import { useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Download, FlaskConical } from "lucide-react";
 
 import { endpoints } from "../api";
 import { dataQualityApi } from "../api/modules/dataQuality";
@@ -213,12 +214,14 @@ import { AssetSelector } from "../components/builder/AssetSelector";
 import { TimeframeSelector } from "../components/builder/TimeframeSelector";
 import { Accordion, partitionAdvanced } from "../components/ds/Accordion";
 import { Alert } from "../components/ds/Alert";
+// CHART-MODAL-01 (task 06): inline chart + an enlarged modal from one description.
+import { ExpandableChart } from "../components/ExpandableChart";
 import { CommandButton } from "../components/ds/CommandButton";
 import { DataTable } from "../components/ds/DataTable";
 import { EmptyState } from "../components/ds/EmptyState";
 import { ErrorState } from "../components/ds/ErrorState";
 import { Field } from "../components/ds/Field";
-import { LoadingState } from "../components/ds/LoadingState";
+// `LoadingState` left with the chart `Suspense` fallbacks — see CHART-MODAL-01 below.
 import { Metric } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { Panel } from "../components/ds/Panel";
@@ -230,6 +233,8 @@ import {
   TIER_PAGE_ATTRIBUTE,
 } from "../design/pageHierarchy";
 import { fromNullable } from "../design/reported";
+import { readRefusal } from "../design/entitlements";
+import { UpgradePrompt } from "../components/gates/UpgradePrompt";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
 import {
   REASON_UNREADABLE_EQUITY,
@@ -247,7 +252,18 @@ import {
  * exactly this call site. Task 23.2 is what took `pages/Backtester.jsx` off the static
  * recharts importer list `tests/unit/ds/Chart.test.jsx` pins.
  */
-const Chart = lazy(() => import("../components/ds/Chart"));
+/*
+ * CHART-MODAL-01: the lazy `ds/Chart` binding that stood here is GONE, and with it this
+ * page's `Suspense` and `LoadingState` imports.
+ *
+ * All three charts render through `components/ExpandableChart` now, which owns the same
+ * `lazy(() => import('./ds/Chart'))` boundary and wraps both of its render sites in the same
+ * `skeleton-chart` fallback. So the bundle split this page maintained for recharts (~350 KB)
+ * and the loading behaviour are both unchanged — they just live one module along.
+ *
+ * Kept as a note rather than deleted silently because the lazy import was deliberate and
+ * documented, and a reader who finds it absent should be able to see where it went.
+ */
 
 /* ══════════════════════════════════════════════════════════════════════════
  * THE RUN LIFECYCLE (Requirement 6.5, Property 11)
@@ -861,12 +877,25 @@ export function resultCurves(results) {
   const equity = Array.isArray(results?.equity) ? results.equity : [];
   const derived = absoluteDrawdownSeries(equity);
 
+  // The x axis is a DATE when every point carries an ISO-8601 string the engine reported, and the
+  // run's position otherwise. Never a guess: a nanosecond integer or a missing stamp keeps the
+  // honest "Point in the run" axis, which is what this page drew before.
+  const isoOf = (value) => (
+    typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value))
+      ? value
+      : null
+  );
+  const dates = equity.map((entry) => isoOf(entry?.timestamp));
+  const dated = dates.length > 0 && dates.every((value) => value !== null);
+
   return {
     rows: derived.map((entry, index) => ({
       point: index + 1,
+      ...(dated ? { date: dates[index] } : {}),
       equity: entry.equity,
       drawdown: entry.drawdown,
     })),
+    dated,
     readable: derived.filter((entry) => entry.readable === true).length,
     unreadable: countUnreadableDrawdownPoints(derived),
   };
@@ -1118,6 +1147,50 @@ const decimalText = (value, digits) => (
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : null
 );
 
+/**
+ * One row per trade for the P&L bars: the engine's net P&L under `win` or `loss` by its sign,
+ * the other side `null` so each bar is one colour. A trade whose net P&L is unreadable is left
+ * out rather than drawn as a zero.
+ */
+export function tradePnlRows(trades) {
+  const rows = [];
+  (Array.isArray(trades) ? trades : []).forEach((trade, index) => {
+    const pnl = trade?.net_pnl;
+    if (typeof pnl !== "number" || !Number.isFinite(pnl)) return;
+    rows.push({ trade: index + 1, win: pnl >= 0 ? pnl : null, loss: pnl < 0 ? pnl : null });
+  });
+  return rows;
+}
+
+/**
+ * What the run really covered, in words — or `null` when it covered what was asked (BT-05).
+ * A request for four years that simulated three months must say so next to the numbers.
+ */
+export function coverageNotice(coverage) {
+  if (!coverage || typeof coverage !== "object") return null;
+  const day = (iso) => (typeof iso === "string" ? iso.slice(0, 10) : null);
+  const first = day(coverage.first_bar);
+  const last = day(coverage.last_bar);
+  if (!first || !last) return null;
+  const covered = `${first} → ${last}`;
+  if (coverage.truncated_by_cap === true) {
+    return {
+      title: `This run only covers ${covered}`,
+      body: `The simulation is limited to ${Number(coverage.bar_cap).toLocaleString("en-US")} bars, so the later `
+        + `part of your period (up to ${day(coverage.requested_end) ?? "the end date"}) was not simulated. `
+        + "Pick a shorter period or a longer bar interval to cover the whole window.",
+    };
+  }
+  if (coverage.starts_after_request === true) {
+    return {
+      title: `This run only covers ${covered}`,
+      body: `The exchange holds no ${day(coverage.requested_start) ? `data before ${first}` : "earlier data"} for `
+        + `this market, so the part of your period before ${first} was not simulated.`,
+    };
+  }
+  return null;
+}
+
 /** The name the saved row itself carries, or the id it was saved under. */
 const savedRunName = (run) => {
   const name = run?.blueprint?.name;
@@ -1125,6 +1198,88 @@ const savedRunName = (run) => {
   const id = run?.strategy_id;
   return typeof id === "string" && id !== "" ? `Strategy ${id.slice(0, 8)}` : null;
 };
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * CSV EXPORT (BT-04) — the house convention `pages/TradeHistory.jsx` and
+ * `pages/SecurityLogs.jsx` already use: a `Blob` of comma-joined, quote-escaped lines,
+ * downloaded through a throwaway `<a>` and `URL.createObjectURL`. No new mechanism.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** One CSV cell, quoted and with its own quotes doubled — same rule `TradeHistory.jsx` uses. */
+const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+/** `rows` of plain objects → one CSV string, header first, in `columns`' own order. */
+function rowsToCsv(columns, rows) {
+  const lines = [
+    columns.map((column) => column.header),
+    ...rows.map((row) => columns.map((column) => row[column.key])),
+  ];
+  return lines.map((cells) => cells.map(escapeCsv).join(",")).join("\n");
+}
+
+/** A CSV string, downloaded under `filename` — the one place this page touches the DOM for it. */
+function downloadCsv(filename, csv) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * The trade list's CSV columns — exactly {@link TRADE_COLUMNS}' keys and headers, so the
+ * export carries the same fields the Trades tab already shows and in the same order. One
+ * row per trade.
+ */
+const TRADE_CSV_COLUMNS = Object.freeze(
+  TRADE_COLUMNS.map(({ key, header }) => Object.freeze({ key, header })),
+);
+
+/**
+ * The trade list, as a CSV string — one row per trade, the fields the Trades tab renders.
+ *
+ * @param {Array<Object>} tradeRows {@link tradeDetailRows}'s answer — already projected,
+ *   so `durationText` reads the same "2m 03s" / not-available text the table shows rather
+ *   than the raw seconds.
+ * @returns {string}
+ */
+export function tradesCsv(tradeRows) {
+  return rowsToCsv(TRADE_CSV_COLUMNS, Array.isArray(tradeRows) ? tradeRows : []);
+}
+
+/** The equity curve's CSV columns: the point's own reported timestamp, and its equity. */
+const EQUITY_CSV_COLUMNS = Object.freeze([
+  Object.freeze({ key: "timestamp", header: "Timestamp" }),
+  Object.freeze({ key: "equity", header: "Equity" }),
+]);
+
+/**
+ * The equity curve, as a CSV string — one row per point, `timestamp` then `equity`.
+ *
+ * Reads `results.equity` directly (`equitySeriesFromBacktestResults`'s own answer, each
+ * point already carrying the timestamp the engine reported for it — nanoseconds, an ISO
+ * string, or a positional fallback, exactly as that mapping left it) rather than
+ * {@link resultCurves}'s `rows`, which drop the timestamp for a chart axis that cannot
+ * mix those three shapes (see the module docblock's "A DATED X AXIS" bullet). A CSV cell
+ * has no such constraint, so the point's own timestamp is exported as reported — never
+ * reconstructed or re-dated — and an unreadable equity exports as an empty cell, never a
+ * fabricated `0`.
+ *
+ * @param {unknown} results `mapBacktestExecutionToUI`'s answer, or anything at all.
+ * @returns {string}
+ */
+export function equityCurveCsv(results) {
+  const equity = Array.isArray(results?.equity) ? results.equity : [];
+  const rows = equity.map((point) => ({
+    timestamp: point?.timestamp ?? "",
+    equity: typeof point?.equity === "number" && Number.isFinite(point.equity)
+      ? point.equity
+      : "",
+  }));
+  return rowsToCsv(EQUITY_CSV_COLUMNS, rows);
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
  * THE PAGE
@@ -1180,6 +1335,34 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const strategyIdParam = searchParams.get("strategy_id");
+
+  /*
+   * MKT-08: `?listing_id=` arrives here and there is nothing this page can do with it.
+   *
+   * The Strategies page offers a subscriber `run_backtest` when the server puts it in
+   * `allowed_actions` — which `library_entries.allowed_actions_for_subscribed` does for an
+   * entitling Subscription whose Listing permits it — and links it to
+   * `/app/backtest?listing_id=<id>`. Measured: this page read only `strategy_id`, and NO
+   * backend route accepts a listing for a backtest (every one is keyed on `strategy_id`:
+   * `routers/strategies.py:2889` and the seven in `routers/strategy_operations.py`).
+   *
+   * A subscriber therefore landed on a Backtester whose selector could not contain their
+   * listing — MKT-05 keeps the Listing's logic out of the subscriber's tenant, so they own no
+   * strategy row for it — with no explanation of why. A control that goes nowhere quietly is
+   * the thing the remediation brief forbids outright.
+   *
+   * So the parameter is RECOGNISED and answered honestly rather than ignored. The alternative
+   * — withholding `run_backtest` from the server's action list — would silently remove a
+   * capability the spec says to offer, and would hide the gap instead of naming it.
+   *
+   * What would close it properly is a route that takes a `listing_id`, resolves the
+   * entitlement, and runs the engine against the owner's version WITHOUT returning the
+   * definition: the same shape `POST /api/paper-trading/sessions` already has, where
+   * `listing_id` and `strategy_id` are mutually exclusive and the executable artifact is
+   * resolved server-side. That is a new execution path and is specified rather than guessed
+   * at here.
+   */
+  const listingIdParam = (searchParams.get("listing_id") || "").trim();
 
   /*
    * Three entry paths, one selection. A direct prop (inline use), route state (a `navigate`
@@ -1428,6 +1611,51 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
     }
   }, []);
 
+  /*
+   * The removal of a saved run, and the two pieces of state it needs.
+   *
+   * `deletingId` is the ROW whose request is in flight rather than a boolean, because the
+   * control lives in a table: a boolean would spin every row's control for one row's request.
+   *
+   * `deleteFailure` carries the row id alongside the error, so the refusal on screen belongs
+   * to a named run and the retry re-issues THAT delete rather than the last one attempted.
+   */
+  const [deletingId, setDeletingId] = useState(null);
+  const [deleteFailure, setDeleteFailure] = useState(null);
+
+  /**
+   * Remove one saved run. Reachable only from `ds/ConfirmDialog`'s explicit confirm, which is
+   * what `CommandButton`'s `confirm` spec guarantees — a click opens the dialog and does not
+   * call this.
+   *
+   * WHY IT RE-READS THE LIST INSTEAD OF TRUSTING THE RESPONSE. `DELETE /api/backtests/{id}`
+   * answers `{success: true}` for every caller, deliberately: Requirement 20.2 requires "this
+   * backtest is not yours" and "there is no such backtest" to be indistinguishable, so
+   * `routers/strategy_operations.delete_backtest` does not forward whether its ownership-scoped
+   * predicate (`id` AND `user_id`) matched. The body therefore cannot confirm that a row went,
+   * and dropping the row from local state on a 200 would paint a deletion that may never have
+   * happened. Re-reading is the only honest confirmation, so it is awaited here rather than
+   * left to a later render.
+   *
+   * The `catch` is the DELETE's own failure only. `refetchSaved` settles its own error into
+   * `savedState` and never rejects, so a history read that breaks cannot be reported here as a
+   * failed deletion.
+   */
+  const handleDeleteSavedRun = useCallback(async (backtestId) => {
+    if (typeof backtestId !== "string" || backtestId.trim() === "") return;
+    setDeletingId(backtestId);
+    setDeleteFailure(null);
+    try {
+      await endpoints.strategies.deleteBacktest(backtestId);
+      await refetchSaved();
+    } catch (err) {
+      console.error("Backtest delete failed:", err?.message);
+      setDeleteFailure({ id: backtestId, error: err });
+    } finally {
+      setDeletingId(null);
+    }
+  }, [refetchSaved]);
+
   /**
    * What stops this configuration from being run, in the order a trader should fix them.
    *
@@ -1522,11 +1750,30 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
 
   /** Both curves, derived once from the one equity series (task 23.3). */
   const curves = useMemo(() => resultCurves(results), [results]);
+  const coverage = useMemo(() => coverageNotice(results?.data_coverage), [results]);
   const curveState = curves.readable > 0 ? PANEL_STATES.READY : PANEL_STATES.EMPTY;
 
   /** The trade list, with its one projected column. */
   const tradeRows = useMemo(() => tradeDetailRows(results?.trades), [results]);
   const tradesReported = Array.isArray(results?.trades);
+
+  /* ── CSV export (BT-04) ──────────────────────────────────────────────────── */
+
+  const exportTradesCsv = useCallback(() => {
+    if (tradeRows.length === 0) return;
+    downloadCsv(
+      `backtest-trades-${results?.backtest_id ?? "run"}.csv`,
+      tradesCsv(tradeRows),
+    );
+  }, [tradeRows, results]);
+
+  const exportEquityCurveCsv = useCallback(() => {
+    if (curves.readable === 0) return;
+    downloadCsv(
+      `backtest-equity-curve-${results?.backtest_id ?? "run"}.csv`,
+      equityCurveCsv(results),
+    );
+  }, [curves.readable, results]);
 
   /**
    * Tier 3's three tabs (Requirement 6.4).
@@ -1540,17 +1787,38 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
       id: DETAIL_TABS.TRADES,
       label: labelOf("tradeList"),
       content: tradesReported && tradeRows.length > 0 ? (
-        <DataTable
-          caption="Simulated trades, in the order the run reported them"
-          columns={TRADE_COLUMNS}
-          rows={tradeRows}
-          getRowId={(row, index) => row?.trade_id ?? index}
-          page={tradesPage}
-          pageSize={TRADES_PER_PAGE}
-          onPageChange={setTradesPage}
-          density="compact"
-          stickyHeader
-        />
+        <div className="flex min-w-0 flex-col gap-4">
+          {/* P&L per trade — wins and losses side by side, from the engine's own net P&L.
+              Two series so the colour carries the sign without this page deciding anything. */}
+          {/* CHART-MODAL-01 (task 06): the chart is described once, as data, and rendered
+              inline and enlarged from that one description. `ExpandableChart` owns the lazy
+              `ds/Chart` boundary this `Suspense` used to own. */}
+          <ExpandableChart
+            title="Net P&L per trade"
+            chart={{
+              kind: "bar",
+              data: tradePnlRows(tradeRows),
+              xAxis: { key: "trade", label: "Trade number", format: "number" },
+              yAxis: { label: "Net P&L per trade (quote currency)", format: "number" },
+              series: [
+                { key: "win", name: "Winning trade", token: "profit" },
+                { key: "loss", name: "Losing trade", token: "loss" },
+              ],
+              emptyMessage: "No trade results to draw",
+            }}
+          />
+          <DataTable
+            caption="Simulated trades, in the order the run reported them"
+            columns={TRADE_COLUMNS}
+            rows={tradeRows}
+            getRowId={(row, index) => row?.trade_id ?? index}
+            page={tradesPage}
+            pageSize={TRADES_PER_PAGE}
+            onPageChange={setTradesPage}
+            density="compact"
+            stickyHeader
+          />
+        </div>
       ) : (
         <EmptyState
           headline={tradesReported
@@ -1621,16 +1889,33 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
    * not-available marker rather than an empty cell (Requirement 14.5).
    */
   const savedRunRows = useMemo(
-    () => savedRuns.map((run) => ({
-      ...run,
-      strategy: savedRunName(run),
-      returnText: percentText(run?.total_return_pct),
-      sharpeText: decimalText(run?.sharpe_ratio, 2),
-    })),
-    [savedRuns],
+    () => {
+      // A saved run names its strategy by the strategy's own current name when the listing holds
+      // it; an id prefix ("Strategy baff9ebb") told the trader nothing. A strategy that is no longer
+      // listed (archived or deleted) is said to be, rather than shown as an opaque id.
+      const namesById = new Map(
+        strategyRows.map((row) => namedStrategy(row)).filter(Boolean).map((entry) => [entry.id, entry.name]),
+      );
+      return savedRuns.map((run) => {
+        const listed = namesById.get(run?.strategy_id);
+        const own = run?.blueprint?.name;
+        const label = listed
+          ?? (typeof own === "string" && own.trim() !== "" ? own.trim() : null)
+          ?? (typeof run?.strategy_id === "string" && run.strategy_id !== ""
+            ? `Removed strategy · ${run.strategy_id.slice(0, 8)}`
+            : null);
+        return {
+          ...run,
+          strategy: label,
+          returnText: percentText(run?.total_return_pct),
+          sharpeText: decimalText(run?.sharpe_ratio, 2),
+        };
+      });
+    },
+    [savedRuns, strategyRows],
   );
 
-  /** The saved table's columns plus its one action, which needs this page's handler. */
+  /** The saved table's columns plus its two actions, both of which need this page's handlers. */
   const savedRunColumns = useMemo(
     () => [
       ...SAVED_RUN_COLUMNS,
@@ -1639,20 +1924,70 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
         header: "Action",
         align: "numeric",
         render: ({ row }) => (
-          <CommandButton
-            intent="ghost"
-            disabled={row?.status !== "completed"}
-            disabledReason={row?.status === "completed"
-              ? undefined
-              : "This run did not complete, so it holds no result to inspect."}
-            onClick={() => handleLoadSavedRun(row)}
-          >
-            Inspect
-          </CommandButton>
+          <div className="flex items-center justify-end gap-2">
+            <CommandButton
+              intent="ghost"
+              disabled={row?.status !== "completed"}
+              disabledReason={row?.status === "completed"
+                ? undefined
+                : "This run did not complete, so it holds no result to inspect."}
+              onClick={() => handleLoadSavedRun(row)}
+            >
+              Inspect
+            </CommandButton>
+            {/*
+              Deliberately NOT disabled for any row, unlike `Inspect`. A run that failed or is
+              still running holds no result to load, which is what makes inspecting it
+              meaningless — but it is still a row the account owns and may remove, and it is
+              the row a trader most wants gone. So there is no state to report under
+              Requirement 15.3, because there is no state in which this is unavailable.
+
+              `loading` rather than `disabled` while the request is in flight: `CommandButton`
+              makes a loading control inoperable too, so the second click that would issue a
+              second DELETE is refused — and `loadingLabel` says why, which is why Requirement
+              15.3's reason is not owed for it.
+
+              The confirmation is `confirm` rather than a page-level dialog: this is the simple
+              one-step case `CommandButton` owns, and keeping the pending row in the control
+              that was activated means the page holds no "which row was that" state. `intent`
+              is left off the spec on purpose — the dialog inherits `destructive` from this
+              button (design.md §5.1), so the treatment cannot drift from the control's.
+
+              NO `acknowledgement`: Requirement 8.4 wants the real-funds statement never
+              CONSTRUCTED outside Live, not merely hidden, and this removes a stored simulation
+              result. For the same reason there is no `environment` badge — nothing here reaches
+              a venue, and `ds/ConfirmDialog` asks callers to omit it when the decision is not
+              about trading.
+            */}
+            <CommandButton
+              intent="destructive"
+              loading={deletingId === row?.id}
+              loadingLabel="Deleting"
+              onClick={() => handleDeleteSavedRun(String(row?.id ?? ""))}
+              confirm={{
+                title: "Delete this backtest run?",
+                description: "This removes the saved run and its stored metrics permanently. "
+                  + "The strategy and the version it ran are not touched, and you can run the "
+                  + "same backtest again.",
+                // Requirement 8.1's review grid, from the row the trader clicked. An absent
+                // figure renders `ds/ConfirmDialog`'s not-available marker rather than a guess.
+                review: [
+                  { label: "Strategy", value: row?.strategy },
+                  { label: "Version", value: row?.version },
+                  { label: "Pair", value: row?.dataset },
+                  { label: "Status", value: row?.status },
+                  { label: "Return", value: row?.returnText },
+                ],
+                confirmLabel: "Delete run",
+              }}
+            >
+              Delete
+            </CommandButton>
+          </div>
         ),
       },
     ],
-    [handleLoadSavedRun],
+    [deletingId, handleDeleteSavedRun, handleLoadSavedRun],
   );
 
   /*
@@ -1680,6 +2015,51 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
           </CommandButton>
         )}
       />
+
+      {/*
+        MKT-08: the subscriber who followed "Run backtest" on a purchased Listing.
+
+        Named at the top of the page rather than inside the Strategy panel's empty state,
+        because this is not "you have no strategies" — the account may have plenty — it is
+        "the thing you asked to backtest cannot be backtested here". Conflating the two is
+        what made the dead end look like an ordinary empty page.
+
+        It says what IS available, because both of the subscriber's other execution actions
+        work today: the paper session resolves a `listing_id` server-side
+        (`routers/paper_trading.py`), and so does the live deployment
+        (`POST /api/library/{id}/deploy`).
+      */}
+      {listingIdParam ? (
+        <Alert
+          severity="info"
+          title="Backtesting a subscribed strategy is not available yet"
+          data-testid="backtester-listing-unavailable"
+        >
+          <p>
+            This Backtester runs a saved version of a strategy in your own workspace. A
+            strategy you subscribe to stays in its creator&apos;s workspace — that is what
+            keeps its logic private — so there is nothing here to select for it.
+          </p>
+          <p className="mt-2">
+            What you can do with it now: start a paper session, or deploy it live against your
+            own exchange connection. Both run the creator&apos;s version without exposing it.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <CommandButton
+              intent="secondary"
+              onClick={() => navigate(`/app/paper-trading?listing_id=${encodeURIComponent(listingIdParam)}`)}
+            >
+              Start paper trading
+            </CommandButton>
+            <CommandButton
+              intent="secondary"
+              onClick={() => navigate(`/app/marketplace?listing_id=${encodeURIComponent(listingIdParam)}`)}
+            >
+              View the listing
+            </CommandButton>
+          </div>
+        </Alert>
+      ) : null}
 
       <div className="grid min-w-0 grid-cols-3 gap-4">
 
@@ -1752,6 +2132,29 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                     + "version the server marks current is used."}
                   data-region="pinnedVersion"
                 />
+
+                {/*
+                 * BT-04: a single backtest has no walk-forward engine of its own — that lives
+                 * in `components/ResearchConsole.jsx`, reached from a strategy's own
+                 * "Research" tab (`pages/StrategyDetail.jsx`), and OPT-02/OPT-03 are what made
+                 * that engine's per-window fit and its tenant isolation real. This is a link
+                 * to that existing page, not a second implementation of it. Placed inside the
+                 * Strategy panel — after `backtest-configuration`'s own `data-region`, the
+                 * `standing-prose` guard's anchor on this page — so a sentence that exists
+                 * nowhere today does not add to the budget that guard only allows to shrink.
+                 */}
+                <CommandButton
+                  intent="ghost"
+                  icon={FlaskConical}
+                  disabled={strategy === null}
+                  disabledReason="Choose a strategy above first."
+                  onClick={() => navigate(`/app/strategies/${strategy.id}`, {
+                    state: { activeTab: "research" },
+                  })}
+                  data-testid="backtester-open-walk-forward"
+                >
+                  Walk-forward optimization
+                </CommandButton>
 
                 {/* The listing failed but this strategy is known, so the panel is usable and
                     the only thing missing is the ability to switch. Said here rather than
@@ -1944,6 +2347,13 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                   {runError}
                 </Alert>
               )}
+              {/* LAUNCH AUDIT: a run the PLAN refused (monthly backtest allowance) carries the
+                  plan that allows more — offer it, beside the server's sentence above. */}
+              {readRefusal(runFailure) && (
+                <div data-testid="backtester-run-refusal">
+                  <UpgradePrompt refusal={readRefusal(runFailure)} variant="inline" />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1978,6 +2388,11 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                 ) : null}
                 data-region="tier-1"
               >
+                {coverage === null ? null : (
+                  <Alert severity="warning" title={coverage.title} data-testid="backtester-coverage-notice">
+                    {coverage.body}
+                  </Alert>
+                )}
                 {/* Six equal-weight slots in ONE row: `flex-1` from a zero basis, not
                     `grid-cols-6` — the built stylesheet carries bare `grid-cols-1…4` plus
                     `lg:grid-cols-6`, so a bare `grid-cols-6` compiles to nothing and renders
@@ -2016,18 +2431,33 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                   level={3}
                   state={curveState}
                   empty={{ ...CURVE_EMPTY, action: { label: RETRY_LABEL, onClick: runBacktest } }}
+                  actions={(
+                    <CommandButton
+                      intent="secondary"
+                      icon={Download}
+                      onClick={exportEquityCurveCsv}
+                      disabled={curves.readable === 0}
+                      disabledReason="No readable equity point to export."
+                      data-testid="backtester-export-equity-csv"
+                    >
+                      Export CSV
+                    </CommandButton>
+                  )}
                   data-region="equityCurve"
                 >
-                  <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading the equity curve" />}>
-                    <Chart
-                      kind="area"
-                      data={curves.rows}
-                      xAxis={{ key: "point", label: "Point in the run", format: "number" }}
-                      yAxis={{ label: "Equity (quote currency)", format: "number" }}
-                      series={[{ key: "equity", name: "Equity", token: "brand" }]}
-                      emptyMessage="This run produced no equity series"
-                    />
-                  </Suspense>
+                  <ExpandableChart
+                    title="Equity curve"
+                    chart={{
+                      kind: "area",
+                      data: curves.rows,
+                      xAxis: curves.dated
+                        ? { key: "date", label: "Date", format: "date" }
+                        : { key: "point", label: "Point in the run", format: "number" },
+                      yAxis: { label: "Equity (quote currency)", format: "number" },
+                      series: [{ key: "equity", name: "Equity", token: "brand" }],
+                      emptyMessage: "This run produced no equity series",
+                    }}
+                  />
                 </Panel>
 
                 <Panel
@@ -2054,20 +2484,23 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                         {REASON_UNREADABLE_EQUITY}
                       </Alert>
                     )}
-                    <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading the drawdown curve" />}>
-                      <Chart
-                        kind="area"
-                        data={curves.rows}
-                        xAxis={{ key: "point", label: "Point in the run", format: "number" }}
+                    <ExpandableChart
+                      title="Drawdown curve"
+                      chart={{
+                        kind: "area",
+                        data: curves.rows,
+                        xAxis: curves.dated
+                          ? { key: "date", label: "Date", format: "date" }
+                          : { key: "point", label: "Point in the run", format: "number" },
                         // Absolute, in the equity curve's own units — the derivation is
                         // `peak − current`, not a percentage. Tier 1's max drawdown is the
                         // engine's `max_drawdown_pct` and stays the only percentage on
                         // screen, so the two cannot contradict each other.
-                        yAxis={{ label: "Drawdown from peak (quote currency)", format: "number" }}
-                        series={[{ key: "drawdown", name: "Drawdown from peak", token: "loss" }]}
-                        emptyMessage="No drawdown curve can be drawn without an equity series"
-                      />
-                    </Suspense>
+                        yAxis: { label: "Drawdown from peak (quote currency)", format: "number" },
+                        series: [{ key: "drawdown", name: "Drawdown from peak", token: "loss" }],
+                        emptyMessage: "No drawdown curve can be drawn without an equity series",
+                      }}
+                    />
                   </div>
                 </Panel>
               </div>
@@ -2085,6 +2518,18 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                   money
                   environment="BACKTEST"
                   level={3}
+                  actions={(
+                    <CommandButton
+                      intent="secondary"
+                      icon={Download}
+                      onClick={exportTradesCsv}
+                      disabled={tradeRows.length === 0}
+                      disabledReason="No trades in this run to export."
+                      data-testid="backtester-export-trades-csv"
+                    >
+                      Export trades CSV
+                    </CommandButton>
+                  )}
                   data-region="tier-3"
                 >
                   <Tabs
@@ -2144,6 +2589,20 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                 density="compact"
               />
             </Panel>
+          )}
+
+          {/* A deletion that was refused, which is NOT the read failure below: the list on
+              screen is current, one row simply did not go. Separated so a failed delete cannot
+              be read as "the history is unavailable", and its retry re-issues that row's
+              DELETE rather than the list read. */}
+          {deleteFailure === null ? null : (
+            <ErrorState
+              error={deleteFailure.error}
+              context="backtest"
+              onRetry={() => handleDeleteSavedRun(deleteFailure.id)}
+              compact
+              data-region="saved-runs-delete-error"
+            />
           )}
 
           {savedState === PANEL_STATES.ERROR ? (

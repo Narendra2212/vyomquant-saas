@@ -254,6 +254,27 @@ describe('deploymentRequest', () => {
     }
   });
 
+  it('binds the real exchange_keys id, never the synthesised composite (DEPLOY-ACCT-01)', () => {
+    // The shape `/api/exchange/connections` actually returns: a composite `id` for the
+    // exchange UI and the real row key as `account_id`.
+    const { body, query } = deploymentRequest({
+      environment: 'live',
+      account: { id: 'user-1_binance', account_id: 'key-uuid-1', exchange_id: 'binance' },
+      ...sizing,
+    });
+    expect(body.exchange_account_id).toBe('key-uuid-1');
+    expect(JSON.stringify({ body, query })).not.toContain('user-1_binance');
+  });
+
+  it('sends no account rather than the composite when the row has no handle (DEPLOY-ACCT-01)', () => {
+    const { body } = deploymentRequest({
+      environment: 'live',
+      account: { id: 'user-1_binance', account_id: null },
+      ...sizing,
+    });
+    expect(body).not.toHaveProperty('exchange_account_id');
+  });
+
   it('binds no account for paper, which uses none', () => {
     const { body } = deploymentRequest({
       environment: 'paper',
@@ -339,7 +360,7 @@ describe('preflightQueryKey', () => {
 // THE API MODULE — the two requests on the wire
 // ══════════════════════════════════════════════════════════════════════════════════════
 
-const { mockClient, mockStrategies, mockExchange } = vi.hoisted(() => ({
+const { mockClient, mockStrategies, mockExchange, mockPublicGet } = vi.hoisted(() => ({
   mockClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() },
   mockStrategies: {
     list: vi.fn(),
@@ -349,6 +370,8 @@ const { mockClient, mockStrategies, mockExchange } = vi.hoisted(() => ({
     deployPreflight: vi.fn(),
   },
   mockExchange: { list: vi.fn() },
+  // FE-03: the server's answer to "can this platform run Live at all?"
+  mockPublicGet: vi.fn(),
 }));
 
 vi.mock('../../src/apiClient', () => ({
@@ -509,6 +532,17 @@ describe('strategiesApi.deployPreflight', () => {
 
 vi.mock('../../src/api', () => ({
   endpoints: { strategies: mockStrategies, exchange: mockExchange },
+  publicGet: (...args) => mockPublicGet(...args),
+  // MKT-07: this file renders `pages/Strategies`, which now reads
+  // `useFeature(FEATURES.MARKETPLACE_PUBLISH)`, and `useEntitlements.load()` calls
+  // `isAuthenticated()` unguarded. A `vi.mock` factory replaces the module, so an omitted
+  // export throws on access — as an unhandled rejection out of a `useEffect`, with every
+  // assertion still passing and vitest exiting non-zero.
+  //
+  // `() => false` matters more here than elsewhere: an authenticated reader would make the
+  // entitlements hook issue its own GET, and this file counts `publicGet` calls to assert
+  // the preflight poll's repeat behaviour. Returning false keeps the request count exact.
+  isAuthenticated: () => false,
 }));
 
 // eslint-disable-next-line import/first
@@ -734,15 +768,34 @@ const PAPER = deployPresentation('paper');
  * modal itself as a `ds/ConfirmDialog`, so the surface is a `role="dialog"` named by
  * `deployPresentation`'s title rather than a `div` with a `DEPLOYMENT ORCHESTRATION` eyebrow.
  */
-const openDeployModal = async () => {
+const openDeployModalPaper = async () => {
   render(
     <MemoryRouter>
       <Strategies />
     </MemoryRouter>,
   );
   await screen.findByText('Momentum v2');
-  fireEvent.click(screen.getByRole('button', { name: 'More actions for Momentum v2' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: LIVE.confirmLabel }));
+  // UI-02: the deployment is a visible row button. FE-03: it opens on PAPER.
+  fireEvent.click(screen.getByRole('button', { name: 'Deploy Momentum v2' }));
+  return screen.findByRole('dialog', { name: PAPER.title });
+};
+
+/**
+ * Open the modal and switch it to Live, as a trader on a Live-capable platform would.
+ * FE-03: it opens on paper; Live is offered only when `/api/system/trading-capabilities`
+ * reports `live_trading_available`, so the live-flow tests below get that answer from
+ * `mockPublicGet` (see `beforeEach`) and must pick Live deliberately.
+ */
+const openDeployModal = async () => {
+  const paperDialog = await openDeployModalPaper();
+  await waitFor(() =>
+    expect(
+      within(paperDialog).getByLabelText('Execution mode').querySelector('option[value="live"]'),
+    ).not.toBeNull(),
+  );
+  fireEvent.change(within(paperDialog).getByLabelText('Execution mode'), {
+    target: { value: 'live' },
+  });
   return screen.findByRole('dialog', { name: LIVE.title });
 };
 
@@ -771,6 +824,7 @@ const acknowledge = () => fireEvent.click(screen.getByLabelText(ACKNOWLEDGEMENT_
 describe('Strategies deploy modal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPublicGet.mockResolvedValue({ mode: 'live', live_trading_available: true });
     mockStrategies.list.mockResolvedValue([strategyRow()]);
     mockExchange.list.mockResolvedValue([connectedAccount()]);
     mockStrategies.deployPreflight.mockResolvedValue(allPassed());
@@ -783,6 +837,27 @@ describe('Strategies deploy modal', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('FE-03: opens on paper, and a paper binding is what a bare confirm would send', async () => {
+    const dialog = await openDeployModalPaper();
+    expect(dialog.getAttribute('data-ds-intent')).toBe('neutral');
+    expect(within(dialog).getByLabelText('Execution mode').value).toBe('paper');
+    expect(screen.queryByLabelText(ACKNOWLEDGEMENT_LABEL)).toBeNull();
+  });
+
+  it('FE-03: Live is not even offered when the server does not report live availability', async () => {
+    mockPublicGet.mockResolvedValue({ mode: 'paper', live_trading_available: false });
+    const dialog = await openDeployModalPaper();
+    const select = within(dialog).getByLabelText('Execution mode');
+    expect(select.querySelector('option[value="live"]')).toBeNull();
+    expect(select.querySelector('option[value="paper"]')).not.toBeNull();
+  });
+
+  it('FE-03: if the capability read fails, Live stays un-offered (fail closed)', async () => {
+    mockPublicGet.mockRejectedValue(new Error('network'));
+    const dialog = await openDeployModalPaper();
+    expect(within(dialog).getByLabelText('Execution mode').querySelector('option[value="live"]')).toBeNull();
   });
 
   it('polls the preflight for the strategy’s current version while the modal is open', async () => {

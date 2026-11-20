@@ -176,22 +176,51 @@ class TestTransientFailuresAreStillRetried:
         assert ex.symbols == ["BTC/USDT"]
 
 
-def test_the_upstream_defect_is_still_present_on_the_pinned_ccxt():
-    """The PREMISE, so this file cannot pass while asserting against a fixed library.
+def test_the_upstream_okx_defect_is_fixed_and_the_branch_is_kept_anyway():
+    """The PREMISE, inverted on 2026-10-25 because upstream fixed the defect.
 
-    ccxt 4.3.92 concatenates base and quote with no empty-string guard. When upstream is
+    THIS TEST USED TO ASSERT THE DEFECT WAS STILL PRESENT, and it was written to fail on
+    an upgrade precisely so the change could not pass unnoticed: "When upstream is
     upgraded this test fails, which is the signal that the retry branch above is no longer
-    carrying an OKX-shaped case and the comment there should be revisited.
+    carrying an OKX-shaped case and the comment there should be revisited." WS-03's ccxt
+    upgrade (4.3.92 -> 4.5.90, forced because every websocket stream was broken) made it
+    fail exactly as designed.
+
+    MEASURED on 4.5.90, not inferred: okx.py carries the `weird preopen markets` guard,
+    and a real `okx.load_markets()` returns 4705 markets including CT/EUR -- the
+    CT-shaped pre-open instrument whose empty baseCcy used to raise
+    `TypeError: unsupported operand type(s) for +: NoneType and str` and cost every OKX
+    startup three attempts and six seconds of backoff before failing anyway. OKX's
+    markets load now, which they did not before.
+
+    THE BRANCH IS DELIBERATELY RETAINED, so this test asserts BOTH halves: that the
+    upstream guard is present, and that connection_engine still fails fast on a
+    deterministic parse error. A TypeError raised inside the client library while reading
+    a venue response is deterministic whatever venue produced it; the branch is now a
+    general guard with no known live instance rather than a workaround for one broken
+    venue. Deleting it because its anecdote was fixed would reintroduce the retry storm
+    for the next such defect.
     """
     import inspect
 
     import ccxt.async_support.okx as okx_mod
 
     src = inspect.getsource(okx_mod)
-    assert "symbol = base + " in src, "ccxt okx no longer builds symbol by concatenation"
-    assert "weird preopen markets" not in src, (
-        "the pinned ccxt now carries the upstream pre-open-market guard; OKX should load, "
-        "so re-read the comment on the deterministic-error branch in connection_engine.py"
+    assert "weird preopen markets" in src, (
+        "ccxt okx has LOST the upstream pre-open-market guard. If the pin moved "
+        "backwards, OKX startups are burning three attempts and six seconds of backoff "
+        "on a TypeError again -- and WS-03's websocket fix went with it, since both came "
+        "from the same upgrade. Re-read requirements-base.txt's ccxt note."
+    )
+
+    # The platform-side half: the fail-fast branch must still be there.
+    engine_src = inspect.getsource(CE)
+    assert "except (TypeError, AttributeError, KeyError, IndexError)" in engine_src, (
+        "connection_engine no longer fails fast on deterministic parse errors. The OKX "
+        "case that motivated it is fixed upstream, but the branch guards a CLASS of "
+        "defect -- a library-internal parse fault is deterministic whatever venue caused "
+        "it, and retrying it three times with backoff charges every container start for "
+        "attempts that cannot succeed."
     )
 
 

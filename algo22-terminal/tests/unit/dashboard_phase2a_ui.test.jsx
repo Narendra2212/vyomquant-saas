@@ -230,9 +230,35 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     // and the count is a `ds/Metric` beside the table, which is the field that renders the
     // marker when the read failed.
     expect(await screen.findByText('Open positions')).toBeDefined();
-    expect(
-      document.querySelector('[data-region="openPositionsCount"]').textContent,
-    ).toContain('2');
+
+    /*
+     * WAITED ON THE COUNT ITSELF, NOT ON THE TITLE ABOVE IT, and that distinction is the
+     * whole fix. `Open positions` is `labelOf("openPositions")` — the PANEL TITLE — while
+     * the count is `labelOf("openPositionsCount")` ("Open position count") on a `ds/Metric`
+     * among the panel's CHILDREN. `ds/Panel` renders its title in the loading state and its
+     * children only once `state` is loaded, so the title appearing says nothing about
+     * whether the metric exists: `findByText` could resolve a commit before the children
+     * mounted, the synchronous `querySelector` returned `null`, and the read died with
+     * "Cannot read properties of null (reading 'textContent')". It passed whenever the
+     * effect happened to land first, which is why it failed intermittently rather than
+     * always — it blocked a deploy on 61a2e0d0 while passing on the commits either side.
+     *
+     * This is the rule the latency test below already states for the same reason: wait on
+     * the CONTENT, never on the region, because the region is in the DOM while it is still
+     * a skeleton. Asserting through `waitFor` also turns the remaining failure mode into
+     * "the count never rendered", which names the problem, instead of a `TypeError` on
+     * `null` that names only the line that tripped over it.
+     *
+     * Everything below this point reads the panel's children, so this is also what makes
+     * those reads safe: `positions` and `risk.open_positions_count` are set in the same
+     * effect, so the metric and the table arrive in one commit.
+     */
+    const openPositionsCount = await waitFor(() => {
+      const el = document.querySelector('[data-region="openPositionsCount"]');
+      expect(el, 'the openPositionsCount metric has not rendered yet').not.toBeNull();
+      return el;
+    });
+    expect(openPositionsCount.textContent).toContain('2');
 
     /*
      * Scoped to the positions region rather than to the document. `BTC/USDT` is now on the
@@ -319,7 +345,7 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     expect(screen.getByText(/RISK CIRCUIT BREAKER TRIGGERED/i)).toBeDefined();
   });
 
-  it('correctly handles unmeasured latency with neutral fallback', async () => {
+  it('renders each venue\'s real measured latency, and the honest marker for a venue with none', async () => {
     vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue(mockLiveResponse);
 
     render(
@@ -329,15 +355,13 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     );
 
     /*
-     * The claim is unchanged — an unmeasured latency is never a number — but task 19.1b
-     * moved where it is decided, and made it stronger. The old row rendered
-     * `ex.latency_ms != null ? '${ex.latency_ms} ms' : 'Latency unavailable'` per venue, so
-     * bybit's `null` read as unavailable and binance's `42` read as a measurement. Neither
-     * per-venue field is a measurement: `pageFields`' `exchangeHealth` note records that
-     * `status` and `latency_ms` are constants in the aggregation service. So NO venue row
-     * reports latency now — `ds/ExchangeStatus` marks each one `data-latency-reported=false`
-     * with its own reason — and the measured figure is `health.exchange_api_latency_ms`,
-     * page-level and nullable, rendered as one `ds/Metric`.
+     * `dashboard_aggregation_service.get_exchange_data` used to publish a constant
+     * `"connected"` / `35` for every venue, and this page refused to read either field
+     * even after the backend was fixed to derive both from a real per-venue Redis probe
+     * (DASH-02). It is fixed now: binance's `42` is this venue's own measured latency and
+     * renders as one, and bybit's `null` means its probe measured nothing, so it renders
+     * `ds/ExchangeStatus`'s own "not reported" marker — never a fabricated number and
+     * never the OTHER venue's figure borrowed for it.
      */
     // Waited on the venue ROWS, not on the panel: `data-region` is on the `ds/Panel`
     // section, which is in the DOM in its loading state too, so querying on the region
@@ -347,14 +371,18 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     });
 
     const health = document.querySelector('[data-region="exchangeHealth"]');
-    const venues = health.querySelectorAll('[data-exchange]');
-    expect(venues.length).toBe(2);
-    for (const venue of venues) {
-      expect(venue.getAttribute('data-latency-reported')).toBe('false');
-      expect(venue.getAttribute('data-connection-state')).toBe('unreported');
-    }
-    // Neither the venue that reported 42 nor the constant 35 is presented as a reading.
-    expect(health.textContent).not.toContain('42 ms');
+    const binance = health.querySelector('[data-exchange="binance"]');
+    const bybit = health.querySelector('[data-exchange="bybit"]');
+
+    expect(binance.getAttribute('data-latency-reported')).toBe('true');
+    expect(binance.getAttribute('data-connection-state')).toBe('connected');
+    expect(binance.textContent).toContain('42 ms');
+
+    expect(bybit.getAttribute('data-latency-reported')).toBe('false');
+    expect(bybit.getAttribute('data-connection-state')).toBe('connected');
+    expect(bybit.textContent).not.toContain('0 ms');
+
+    // The old fabricated constant appears nowhere on the panel.
     expect(health.textContent).not.toContain('35 ms');
     expect(screen.queryByText('38 ms')).toBeNull();
     expect(screen.queryByText('38ms')).toBeNull();

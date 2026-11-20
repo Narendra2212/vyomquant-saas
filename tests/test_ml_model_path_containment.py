@@ -423,15 +423,32 @@ class TestTheLibraryCloneDoesNotCarryTheAuthorsModelPath:
             )
 
     def test_the_response_tells_the_cloner_training_is_needed(self):
-        """So the consequence arrives with the clone, not at the next deploy attempt."""
+        """So the consequence arrives with the clone, not at the next deploy attempt.
+
+        Parsed rather than sliced out of the source, for the same reason
+        ``_clone_payload_columns`` above is: the comment immediately before the real
+        assignment names ``requires_training`` too (explaining why it exists), so a bare
+        substring search would keep passing even if the key were dropped from the
+        returned dict, as long as the comment survived.
+        """
+        import ast
         import inspect
+        import textwrap
 
         from backend_app.routers import library as lib
 
-        source = inspect.getsource(lib.clone_strategy)
-        assert "requires_training" in source, (
+        tree = ast.parse(textwrap.dedent(inspect.getsource(lib.clone_strategy)))
+        returned_keys: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+                returned_keys |= {
+                    key.value
+                    for key in node.value.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+        assert "requires_training" in returned_keys, (
             "the clone response does not state that a cloned model strategy needs "
-            "training before it can deploy"
+            f"training before it can deploy. Returned keys seen: {sorted(returned_keys)}"
         )
 
     def test_the_source_side_gate_is_untouched(self):

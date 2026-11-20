@@ -88,18 +88,12 @@ upsert_secret "jwt_secret" \
 #  SECTION 5 — Payment Gateways (Optional)
 # =============================================================================
 echo ""
-echo "--- Payment Gateways (optional) ---"
-if [ -n "$STRIPE_SECRET_KEY" ]; then
-    upsert_secret "STRIPE_SECRET_KEY" "Stripe live secret key" "$STRIPE_SECRET_KEY"
-    echo "  Created Stripe secret key."
-else
-    echo "  STRIPE_SECRET_KEY not set — skipping."
-fi
-
-if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then
-    upsert_secret "STRIPE_WEBHOOK_SECRET" "Stripe webhook signing secret" "$STRIPE_WEBHOOK_SECRET"
-fi
-
+# Razorpay is the only gateway. The STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET
+# blocks were removed with the provider. If those secrets still exist in Secrets
+# Manager from an earlier run, nothing reads them -- delete them by hand; this
+# script deliberately does not, because destroying a secret is not something a
+# setup script should do on your behalf.
+echo "--- Payment Gateway (optional) ---"
 if [ -n "$RAZORPAY_KEY_ID" ]; then
     upsert_secret "RAZORPAY_KEY_ID" "Razorpay live key ID" "$RAZORPAY_KEY_ID"
 fi

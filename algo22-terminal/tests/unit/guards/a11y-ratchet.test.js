@@ -152,7 +152,7 @@ const WAIVER_FILE = 'eslint-rules/a11y-ratchet.js';
  * the line was not.
  */
 const IN_SCOPE_PAGES = Object.freeze([
-  // The eleven `In_Scope_Pages` this list started as.
+  // The eleven `In_Scope_Pages` this list started as, less Portfolio.jsx (PORTFOLIO-REMOVED-01).
   'src/pages/Dashboard.jsx',
   'src/pages/LiveTrading.jsx',
   'src/pages/Strategies.jsx',
@@ -160,7 +160,6 @@ const IN_SCOPE_PAGES = Object.freeze([
   'src/pages/StrategyBuilder.jsx',
   'src/pages/Backtester.jsx',
   'src/pages/SignalTrace.jsx',
-  'src/pages/Portfolio.jsx',
   'src/pages/TradeHistory.jsx',
   'src/pages/PaperTrading.jsx',
   'src/pages/StrategyMarketplace.jsx',
@@ -171,10 +170,35 @@ const IN_SCOPE_PAGES = Object.freeze([
   // with the file.
   'src/pages/RiskSettings.jsx',
   'src/pages/TwoFA.jsx',
-  'src/pages/SecurityLogs.jsx',
+  // `src/pages/SecurityLogs.jsx` stood here. SECLOG-REMOVED-01 (2026-11-15) withdrew the
+  // user-facing Security log page, and the line leaves with the file.
+  //
+  // This is the OPPOSITE call to `src/components/legal/LegalPage.jsx` below, and deliberately
+  // so. That page was MOVED and is still shipped, so its line followed it rather than being
+  // deleted -- dropping it would have stopped holding a live page. This page is not shipped at
+  // all any more, so a line naming it would hold nothing and would trip the list's own
+  // existence check. `Landing.jsx` set this precedent when task 9.2 discharged it by deletion.
+  //
+  // The count below goes 36 -> 35 for the same reason: a deletion is not a waiver.
   'src/pages/UpdatePasswordPage.jsx',
   'src/pages/Wizard.jsx',
-  'src/pages/LegalPage.jsx',
+  // Relocated, not removed. The LEGAL-01 work moved this page to
+  // `src/components/legal/` to sit with the consent banner and the re-acceptance gate; it
+  // is still the surface served at `/legal/*`. The line follows the file rather than being
+  // deleted, because deleting it would stop holding a page that is still shipped — the
+  // exact failure this list's own message warns about ("Either way the page is NOT being
+  // held"). The count below is unchanged: a move is not an addition.
+  'src/components/legal/LegalPage.jsx',
+  // The two surfaces that arrived with it, HELD from here rather than left to the glob --
+  // the same call the docblock records for the two new landing sections, and for the same
+  // reason: the glob lints, this list holds, and a file that is linted but unheld is the
+  // gap task 4.1 existed to close.
+  //
+  // They earn it more than most. A cookie banner and a re-acceptance gate are the two
+  // controls a user cannot proceed past, so a keyboard or screen-reader user who cannot
+  // operate them cannot use the product at all. Both measure zero findings today.
+  'src/components/legal/CookieConsent.jsx',
+  'src/components/legal/ReacceptanceGate.jsx',
   'src/pages/Profile.jsx',
   'src/pages/Billing.jsx',
   'src/pages/ExchangeManager.jsx',
@@ -239,6 +263,10 @@ const DS = await measure(['src/components/ds/**/*.{js,jsx}']);
  * they see.
  */
 const PAGES = await measure([
+  // `src/components/legal/**` mirrors the glob added to A11Y_ENFORCED_GLOBS when the
+  // LEGAL-01 work relocated `LegalPage.jsx` there. This list has to match the enforced
+  // globs or the guard measures a different scope than the lint enforces.
+  'src/components/legal/**/*.{js,jsx}',
   'src/pages/**/*.{js,jsx}',
   'src/components/landing/**/*.{js,jsx}',
 ]);
@@ -425,11 +453,18 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
         + `list exists to prevent. Fix the path or delete the line:\n${list(unlinted)}`,
     ).toEqual([]);
 
-    // Non-vacuity, and Requirement 6.1's scope as a number: 21 pages + 14 landing files.
-    // It was 22 pages until task 9.2 deleted the unmounted `pages/Landing.jsx`, and 15
-    // landing files until the redesign deleted three sections and added two — see the
-    // IN_SCOPE_PAGES docblock for which, and why the two new ones are listed here rather
-    // than left to the enforced glob.
+    // Non-vacuity, and Requirement 6.1's scope as a number: 21 pages + 14 landing files +
+    // 3 legal surfaces. It was 22 pages until task 9.2 deleted the unmounted
+    // `pages/Landing.jsx`, and 15 landing files until the redesign deleted three sections
+    // and added two — see the IN_SCOPE_PAGES docblock for which, and why the two new ones
+    // are listed here rather than left to the enforced glob.
+    //
+    // 35 -> 37: the LEGAL-01 work moved `LegalPage.jsx` into `src/components/legal/` (a
+    // move, so no change in count) and brought `CookieConsent.jsx` and
+    // `ReacceptanceGate.jsx` with it (+2). The move also took that directory out of
+    // `A11Y_ENFORCED_GLOBS` entirely until this change put it back.
+    // 37 -> 36: PORTFOLIO-REMOVED-01 deleted `src/pages/Portfolio.jsx`.
+    // 36 -> 35: SECLOG-REMOVED-01 deleted `src/pages/SecurityLogs.jsx`.
     expect(IN_SCOPE_PAGES).toHaveLength(35);
     expect(new Set(IN_SCOPE_PAGES).size).toBe(IN_SCOPE_PAGES.length);
   });
@@ -567,7 +602,6 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
 
     // And the cleared pages are really clean, at `error`, with no line left behind.
     for (const page of [
-      'src/pages/Portfolio.jsx',
       'src/pages/Strategies.jsx',
       'src/pages/SignalTrace.jsx',
       'src/pages/Backtester.jsx',

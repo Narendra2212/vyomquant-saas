@@ -336,8 +336,9 @@ def project_listing(
         A fresh ``dict`` whose key set is a subset of :data:`PUBLIC_LISTING_FIELDS`.
 
     Raises:
-        ValueError: ``creator_alias`` is missing, blank, or equal to the row's ``author_id`` -
-            each of which would put an owner identity in a public response (Requirement 6.5).
+        ValueError: ``creator_alias`` equals the row's ``author_id``, which would put an owner
+            identity in a public response (Requirement 6.5). A missing or blank alias is not an
+            error: the ``creator_alias`` key is omitted (MKT-06, Requirement 28.5).
             Also raised when ``rating_count`` is present but not a whole number.
         money.MoneyError: ``price_minor`` is present but is not an admissible integer number of
             Minor_Units, or ``currency`` has no persisted minor-unit exponent. The bad row is
@@ -387,7 +388,8 @@ def project_listing(
     out["subscription_period_days"] = SUBSCRIPTION_PERIOD_NOMINAL_DAYS
 
     # ── Creator, publication and social counters ─────────────────────────
-    out["creator_alias"] = alias
+    if alias is not None:
+        out["creator_alias"] = alias
     out["published_at"] = _read(row, "published_at")
     out["subscriber_count"] = _read(row, "subscriber_count")
     out["source_cloning_enabled"] = bool(_read(row, "source_cloning_enabled"))
@@ -456,19 +458,25 @@ def _price_display(price_minor: Any, currency: Any) -> Optional[str]:
     return str(money.to_major(price_minor, currency))
 
 
-def _checked_alias(creator_alias: Optional[str], row: Any) -> str:
-    """Return the alias, refusing anything that would disclose the creator's identity.
+def _checked_alias(creator_alias: Optional[str], row: Any) -> Optional[str]:
+    """Return the alias, ``None`` when there is none, refusing an identity disclosure.
 
-    Requirement 6.5 is the whole reason this check exists: the alias is the *only* creator
-    representation a public response carries, so an empty alias (which invites a caller-side
-    fallback to some other field) and an alias that is really the ``author_id`` are both
-    failures worth raising on rather than serving.
+    Requirement 6.5: the alias is the *only* creator representation a public response carries,
+    so an alias that is really the ``author_id`` is refused rather than served.
+
+    MKT-06: a creator WITHOUT an alias is not an error. ``aliases.resolve_aliases`` omits such a
+    creator by design and its contract says callers "omit the creator field for it rather than
+    substituting anything" (Requirement 28.5). Raising here instead turned every browse and
+    detail read into a 503 - in production no profile has a ``display_name`` (0 of 184), so the
+    first listing ever published could not be seen by anyone. ``None`` now means "omit the
+    field"; nothing is substituted, so no identity can leak through a fallback.
     """
-    if not isinstance(creator_alias, str) or not creator_alias.strip():
-        raise ValueError(
-            "creator_alias must be a non-empty display alias resolved server-side; "
-            "resolve it with marketplace.aliases.resolve_aliases before projecting"
-        )
+    if creator_alias is None or (
+        isinstance(creator_alias, str) and not creator_alias.strip()
+    ):
+        return None
+    if not isinstance(creator_alias, str):
+        raise ValueError("creator_alias must be a display alias string")
     author_id = _read(row, "author_id")
     if author_id is not None and creator_alias == str(author_id):
         raise ValueError(
@@ -497,6 +505,33 @@ def _whole_number(value: Any, what: str) -> Optional[int]:
 #: The floor on token length. Below it a token collides with ordinary prose - see the module
 #: docstring on why a vacuously failing assertion is worse than none.
 PROTECTED_LOGIC_TOKEN_MIN_LENGTH: int = 3
+
+#: A token made ENTIRELY of digits (optionally with one decimal point / sign), e.g. a
+#: threshold value like ``233`` or ``3.2502``.
+#:
+#: TEST-06. Such a token is matched on a NUMERIC-VALUE BOUNDARY, not as a bare substring,
+#: and the distinction is the whole fix.
+#:
+#: The containment check is substring containment, which is right for a distinctive string
+#: like a node id ``n_zzq_secret`` - it is a leak wherever it appears. But a bare integer
+#: is different: ``"233" in text`` is true of the timestamp ``1760036233``, the count
+#: ``2337``, the price ``233.90`` and a request id that happens to contain those digits.
+#: The seeded strategy carries ``"ema_zzq_secret_window": 233``, so every response whose
+#: body contained the digits 2-3-3 anywhere -- which depends on the wall clock, via
+#: timestamps -- failed or passed at random. Measured: the same test failed in one full
+#: run and passed in the next with no change to it or to the code it examines.
+#:
+#: Matching a numeric token only when it stands as its own value (not flanked by another
+#: digit or a decimal point, and not merely a prefix of a longer number) is DETERMINISTIC
+#: and still catches a real leak: a parameter value returned in its own field, as a list
+#: element, or as a word inside free text is a value boundary and matches; the same digits
+#: buried inside an unrelated larger number are not that value and do not. This neither
+#: exempts short tokens nor imposes a minimum length -- ``233`` is still a protected token
+#: and is still searched for; what changes is that it is searched for as the NUMBER 233
+#: rather than as the three characters "233".
+import re as _re
+
+_NUMERIC_TOKEN_RE = _re.compile(r"^[+-]?\d+(?:\.\d+)?$")
 
 #: The ``strategies`` columns that express how a strategy decides (Glossary: Protected_Logic).
 STRATEGY_PROTECTED_LOGIC_COLUMNS: Tuple[str, ...] = (
@@ -685,6 +720,25 @@ def assert_contains_no_protected_logic(
     if not candidates:
         return
 
+    # TEST-06. Partition the tokens by how they must be matched. A distinctive string
+    # (node id, indicator name, path segment, hash) is matched by substring containment,
+    # which is correct and deterministic for it. A purely numeric token is matched on a
+    # value boundary, because bare substring containment of a number collides with
+    # timestamps, counts and ids and makes the verdict depend on the wall clock. See
+    # `_NUMERIC_TOKEN_RE` for the full argument.
+    string_tokens = [t for t in candidates if not _NUMERIC_TOKEN_RE.match(t)]
+    numeric_tokens = [t for t in candidates if _NUMERIC_TOKEN_RE.match(t)]
+
+    # One compiled matcher per numeric token: the number must not be flanked by another
+    # digit or a decimal point on either side, so `233` matches the value 233, the word
+    # "233" in free text, and `233` as a list element, but NOT `1760036233`, `2337`,
+    # `233.9` or `0.2335`. `(?<![\d.])` / `(?![\d.])` are the value boundaries; the token
+    # itself may legitimately contain a decimal point (`3.2502`), so it is escaped.
+    numeric_matchers = [
+        (t, _re.compile(r"(?<![\d.])" + _re.escape(t) + r"(?![\d.])"))
+        for t in numeric_tokens
+    ]
+
     exempt: FrozenSet[str] = (
         STRUCTURAL_RESPONSE_KEYS
         if structural_keys is None
@@ -693,10 +747,16 @@ def assert_contains_no_protected_logic(
 
     for path, scalar in _walk_with_path(response, "$", set(), exempt):
         text = str(scalar)
-        for token in candidates:
+        for token in string_tokens:
             if token in text:
                 raise AssertionError(
                     f"Protected_Logic token {token!r} appears in the response at {path}"
+                )
+        for token, matcher in numeric_matchers:
+            if matcher.search(text):
+                raise AssertionError(
+                    f"Protected_Logic value {token!r} appears as a distinct number in the "
+                    f"response at {path}"
                 )
 
 

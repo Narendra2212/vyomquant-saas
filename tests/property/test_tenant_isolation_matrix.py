@@ -179,6 +179,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from backend_app.backend import ws_channels as channels
+from backend_app.backend.marketplace import evidence_validator as _evidence_validator
 from backend_app.backend.marketplace.listing_projection import DENIED_LISTING_COLUMNS
 from backend_app.backend.paper import paper_channel as pc
 from backend_app.backend.paper import paper_repository as repo
@@ -551,6 +552,107 @@ class MatrixStore(FakeSupabase):
             return _Resp(data[0] if data else None, count=len(data))
         return _Resp(data, count=len(data) if isinstance(data, list) else None)
 
+    def _execute_rpc(self, name: str, params: Dict[str, Any]) -> Any:
+        """``FakeSupabase._execute_rpc`` only knows ``paper_apply_fill_atomic`` -- this
+        matrix also drives routers that now call ``record_and_transition_settlement``
+        (``050_mkt03_settlement_atomic_transition.sql``, MKT-03). Adds that one function,
+        over the SAME generic, already-declared ``marketplace_settlements`` /
+        ``library_subscriptions`` / ``library_subscription_transitions`` row lists every
+        other operator above reads and writes through ``rows_of`` -- so a cross-tenant
+        snapshot still sees exactly what this call wrote, the same guarantee the matrix
+        gives every ``.table()`` write. Mirrors ``tests/test_settlement_service.py::
+        FakeSupabase._execute_rpc`` and ``tests/test_billing_e2e.py::_MarketplaceSupabase.
+        _execute_rpc``'s own simulation of the same real function; paper_apply_fill_atomic
+        is unchanged, delegated straight to the inherited implementation.
+        """
+        if name == "paper_apply_fill_atomic":
+            return super()._execute_rpc(name, params)
+        if name != "record_and_transition_settlement":
+            raise AssertionError(f"unexpected rpc: {name!r}")
+
+        settlements = self.rows_of("marketplace_settlements")
+        subscriptions = self.rows_of("library_subscriptions")
+        transitions = self.rows_of("library_subscription_transitions")
+
+        pair = (params["p_provider_reference"], bool(params["p_is_reversal"]))
+        existing = next(
+            (
+                row for row in settlements
+                if (row.get("provider_reference"), bool(row.get("is_reversal"))) == pair
+            ),
+            None,
+        )
+
+        inserted = False
+        if existing is None:
+            settlement_row = dict(params["p_settlement"])
+            settlement_row["subscription_id"] = params["p_subscription_id"]
+            settlement_row["provider_reference"] = params["p_provider_reference"]
+            settlement_row["is_reversal"] = params["p_is_reversal"]
+            self._fault(("insert", "marketplace_settlements"), payload=settlement_row)
+            settlements.append(settlement_row)
+            inserted = True
+        else:
+            if not params["p_proceed_if_duplicate"]:
+                return _Resp(
+                    {"settlement": dict(existing), "inserted": False, "transitioned": False}
+                )
+            settlement_row = existing
+
+        transition = params.get("p_transition")
+        if transition is None:
+            return _Resp(
+                {
+                    "settlement": dict(settlement_row),
+                    "inserted": inserted,
+                    "transitioned": False,
+                }
+            )
+
+        sub = next(
+            (row for row in subscriptions if str(row.get("id")) == str(params["p_subscription_id"])),
+            None,
+        )
+        if sub is None or sub.get("status") != params["p_expected_from_status"]:
+            raise RuntimeError(
+                "record_and_transition_settlement: subscription "
+                f"{params['p_subscription_id']} status changed under the caller "
+                f"(expected {params['p_expected_from_status']}); MK001"
+            )
+
+        update_payload = {
+            "status": transition["status"],
+            "period_start": transition.get("period_start"),
+            "period_expiry": transition.get("period_expiry"),
+            "cancelled_at": transition.get("cancelled_at"),
+        }
+        self._fault(
+            ("update", "library_subscriptions"),
+            filters=[
+                ("id", params["p_subscription_id"]),
+                ("status", params["p_expected_from_status"]),
+            ],
+            payload=update_payload,
+        )
+        sub.update(update_payload)
+        # trg_lib_subs_period_mirror (009) -- same mirror the other two doubles reproduce.
+        if update_payload["period_start"] is not None:
+            sub["started_at"] = update_payload["period_start"]
+        if update_payload["period_expiry"] is not None:
+            sub["expires_at"] = update_payload["period_expiry"]
+
+        history_row = dict(params.get("p_history") or {})
+        history_row["subscription_id"] = params["p_subscription_id"]
+        self._fault(("insert", "library_subscription_transitions"), payload=history_row)
+        transitions.append(history_row)
+
+        return _Resp({
+            "settlement": dict(settlement_row),
+            "subscription": dict(sub),
+            "inserted": inserted,
+            "transitioned": True,
+        })
+
     @staticmethod
     def _matching(rows: List[Dict[str, Any]], q: Any) -> List[Dict[str, Any]]:
         """``FakeSupabase._matching`` plus the six predicates added above.
@@ -766,6 +868,12 @@ def _identifiers(prefix: str) -> Dict[str, str]:
         "public_library_id": uid(11),  # the PUBLISHED Listing - public by design
         "deployment_id": uid(12),
         "job_id": uid(13),
+        # MKT-06's `marketplace_creator_payouts` row. Allocated so the parameter has an
+        # identifier of each kind -- the caller's own, the other tenant's, and an absent
+        # one -- which is what lets the settle route be ATTEMPTED at all. No payout row
+        # is seeded under any of these ids: the route is admin-gated and refused before
+        # it reads, so the attempt measures the role gate, not the row.
+        "payout_id": uid(14),
         "creator_id": prefix and (U1 if prefix.startswith("1") else U2),
     }
 
@@ -789,6 +897,23 @@ PARAM_COLUMN: Dict[str, str] = {
     "creator_id": USER,
     "session_id": PAPER_SESSION,
     "order_id": PAPER_ORDER,
+    # MKT-06. `PUT /api/library/creator-payouts/{payout_id}/settle` is the only route
+    # that names one.
+    #
+    # MAPPED TO `SETTLEMENT`, AND NOT TO A NEW KIND, because the ten kinds above are
+    # transcribed from Requirement 21.8 and asserted to BE ten by
+    # `test_the_matrix_columns_are_requirement_21_8s_ten_resource_kinds` -- inventing an
+    # eleventh here would break that assertion and quietly edit the requirement. A
+    # creator payout is not a new kind of resource anyway: it is an aggregation OF
+    # Settlement_Records, and `marketplace_creator_payout_claims.settlement_id`
+    # references `marketplace_settlements.id` directly, so the resource whose isolation
+    # is at stake when this parameter is tampered with is the settlement record.
+    #
+    # The route is gated on `get_admin_user`, which `_matrix_app` deliberately does not
+    # grant, so neither tenant reaches the handler and no payout row is read through it.
+    # This entry CLASSIFIES the parameter rather than measuring it; see the two `_D` rows
+    # for where the measurement actually lives.
+    "payout_id": SETTLEMENT,
 }
 
 #: The canary text this file writes into ``u2``'s rows. None of these strings occurs anywhere else
@@ -880,6 +1005,10 @@ _DRAWN_ID_SLOTS: Tuple[str, ...] = (
     "public_library_id",
     "deployment_id",
     "job_id",
+    # MKT-06. Kept in step with `_identifiers()` by this tuple's own assertion, which is
+    # exactly what caught its absence: a slot added there and not here leaves a drawn
+    # tenancy without it, which surfaces as a KeyError mid-example rather than a gap.
+    "payout_id",
 )
 
 
@@ -1328,14 +1457,19 @@ REQUIREMENT_21_4_GAPS: Dict[Tuple[str, str], _Gap] = {
         ),
     ),
     ("POST /api/library/submissions", STRATEGY): _Gap(
+        # MKT-07 added MP_LIVE_HISTORY to both sides. The gap itself is unchanged: the two
+        # answers still differ on MP_SUBMISSION_OPEN versus MP_VERSION_EXISTS/VALID, which is
+        # the oracle this entry records. A criterion that fails for BOTH a foreign and an
+        # absent identifier distinguishes nothing and so neither widens nor narrows the leak.
         foreign=(
             "422 MARKETPLACE_ELIGIBILITY_FAILED failures=EV_COUNT,EV_ONE_VERSION,"
-            "MP_EXECUTION_OK,MP_METRICS_COMPLETE,MP_OWNERSHIP,MP_SUBMISSION_OPEN,MP_TENANT"
+            "MP_EXECUTION_OK,MP_LIVE_HISTORY,MP_METRICS_COMPLETE,MP_OWNERSHIP,"
+            "MP_SUBMISSION_OPEN,MP_TENANT"
         ),
         absent=(
             "422 MARKETPLACE_ELIGIBILITY_FAILED failures=EV_COUNT,EV_ONE_VERSION,"
-            "MP_EXECUTION_OK,MP_METRICS_COMPLETE,MP_OWNERSHIP,MP_TENANT,MP_VERSION_EXISTS,"
-            "MP_VERSION_VALID"
+            "MP_EXECUTION_OK,MP_LIVE_HISTORY,MP_METRICS_COMPLETE,MP_OWNERSHIP,MP_TENANT,"
+            "MP_VERSION_EXISTS,MP_VERSION_VALID"
         ),
         note=(
             "same status and same code, but the eligibility verdict's failure LIST differs: a "
@@ -1559,6 +1693,44 @@ MATRIX_DECLARATIONS: Tuple[_RowDeclaration, ...] = (
         "GET /api/library/creator/analytics",
         exposes=(LISTING_PRIVATE, SUBSCRIPTION, SETTLEMENT),
     ),
+    # MKT-06's two new routes. Both are declared with NO exposure, and the reason is a
+    # property of the seed rather than of the endpoints:
+    #
+    # THIS MATRIX SEEDS NO PAYOUT ROWS. `marketplace_creator_payouts` and
+    # `marketplace_creator_payout_claims` are new in 059 and nothing in this file's seed
+    # creates one, so both routes answer an EMPTY list for either tenant. An empty answer
+    # exposes no row, which is why there is no exposure cell to declare -- and it is also
+    # why "every row is owned by the caller" would be VACUOUSLY true here. Saying that
+    # plainly is the point: a reader must not take these two rows as evidence that payout
+    # isolation has been measured.
+    #
+    # WHERE THE REAL COVERAGE IS. `GET /creator/payouts` reads with
+    # `.eq("owner_id", user_id)` from the authenticated session (never a path or query
+    # parameter) AND is covered at the database by 051's `creator_payouts_owner_read` RLS
+    # policy; `tests/test_cross_tenant_read_sweep_postgres.py` exercises that policy
+    # against both roles with real rows, which is the measurement this matrix cannot make
+    # without seeding payouts of its own.
+    _D("GET /api/library/creator/payouts"),
+    # Operator-only (`get_admin_user`), which `_matrix_app` deliberately does not grant,
+    # so neither tenant reaches the handler: the 403 is the role gate's and is
+    # byte-identical whoever asks. Same shape as the admin review routes below, and it
+    # returns a single payout object rather than a list.
+    _D(
+        "PUT /api/library/creator-payouts/{payout_id}/settle",
+        owner_control_note=(
+            "settle is OPERATOR-ONLY (get_admin_user), a role neither tenant holds and "
+            "_matrix_app deliberately does not grant, so the 403 is the role gate's and "
+            "is byte-identical whether the payout named exists, belongs to the caller, "
+            "belongs to the other tenant, or names nothing. There is therefore no owner "
+            "answer to draw a positive control from, and the equality this cell asserts "
+            "is an equality between two identical role refusals -- which is the correct "
+            "property for an admin route, and is NOT evidence about payout ownership. "
+            "That is covered at the database instead, by 051's "
+            "creator_payouts_owner_read RLS policy, which "
+            "tests/test_cross_tenant_read_sweep_postgres.py exercises against both roles "
+            "with real rows."
+        ),
+    ),
     _D("GET /api/library/subscriber/analytics", exposes=(SUBSCRIPTION,)),
     _D(
         "POST /api/library/compare",
@@ -1585,9 +1757,20 @@ MATRIX_DECLARATIONS: Tuple[_RowDeclaration, ...] = (
     _D(
         "POST /api/library/submissions",
         body_references={STRATEGY: "strategy_id"},
-        body={"backtest_ids": [ABSENT_IDS["strategy_id"]] * 3},
+        # The count is MIN_CONDITIONS, read rather than written: `SubmissionCreateRequest`
+        # bounds this field, and a body below the bound is refused by Pydantic before the
+        # route runs. That turns this cell's probe into "both answers are a field error",
+        # which looks like isolation and measures nothing (MKT-07 moved the bound to 5 and
+        # this is how it surfaced).
+        body={
+            "backtest_ids": [ABSENT_IDS["strategy_id"]]
+            * _evidence_validator.MIN_CONDITIONS
+        },
         owner_control=True,
     ),
+    # MKT-03: the owner's own Submissions, scoped by owner_id in the query. Another tenant's
+    # Submission must never appear in the caller's list.
+    _D("GET /api/library/submissions", exposes=(SUBMISSION,)),
     _D(
         "GET /api/library/submissions/{submission_id}",
         owner_control=True,
@@ -1975,13 +2158,32 @@ def _matrix_app(store: MatrixStore, caller: str) -> Iterator[TestClient]:
     * ``routers.library.redis_manager`` - replaced by a stub that never caches, so no endpoint can
       answer the second request of a pair from the first one's cached body. ``_CACHED_CATEGORIES``
       is cleared for the same reason.
-    * the plan gates ``require_marketplace_access`` / ``require_marketplace_publish`` /
-      ``check_marketplace_publish_quota``. These are SUBSCRIPTION-PLAN gates, not tenant gates:
-      left in place they refuse every write route with "requires a higher subscription plan", and
-      every cell would then pass on a refusal that says nothing about isolation. Overriding them is
-      what lets the attempt reach the tenant boundary. ``get_admin_user`` is deliberately NOT
-      overridden - the Admin_Reviewer role is an authorisation this file has no business granting
-      itself, and the admin rows say so in their ``owner_control_note``.
+    * EVERY plan gate a ``/api/library`` write can hit - the feature guards
+      ``require_marketplace_access`` / ``require_marketplace_subscribe`` /
+      ``require_marketplace_publish`` and the quota gates ``check_marketplace_publish_quota`` /
+      ``check_marketplace_subscription_quota`` / ``check_strategy_quota``. These are
+      SUBSCRIPTION-PLAN gates, not tenant gates: left in place they refuse every write route with
+      "requires a higher subscription plan", and every cell would then pass on a refusal that says
+      nothing about isolation. Overriding them is what lets the attempt reach the tenant boundary.
+      ``get_admin_user`` is deliberately NOT overridden - the Admin_Reviewer role is an
+      authorisation this file has no business granting itself, and the admin rows say so in their
+      ``owner_control_note``.
+
+      THE LIST MUST BE KEPT COMPLETE, AND HAS BEEN INCOMPLETE ONCE. It originally named only
+      ``require_marketplace_access``, ``require_marketplace_publish`` and
+      ``check_marketplace_publish_quota``. ``59b08de4`` ("Add the five-plan VyomQuant pricing
+      ladder and enforce it end to end") then put ``require_marketplace_subscribe`` +
+      ``check_marketplace_subscription_quota`` in front of ``POST /{library_id}/checkout`` and
+      ``check_strategy_quota`` in front of ``POST /{library_id}/clone``, and did not touch this
+      file. Those are route DEPENDENCIES, so they resolve before the handler body runs any lookup -
+      and the two cells stopped reaching the tenant boundary at all. Both then answered a plan
+      refusal identically for a foreign identifier and an absent one, which reads exactly like a
+      closed Requirement 21.4 gap and is not one: with the gates overridden, both reproduce their
+      pinned pair unchanged. A plan gate added in front of a route therefore SILENCES this sweep
+      on that route until it is named here; adding one without adding it here converts a recorded
+      disclosure into a false pass. ``require_marketplace_access`` is retained even though
+      ``subscription_dependencies`` now resolves it to BROWSE (which every plan holds), because a
+      route declaration may still reference the deprecated name.
 
     The rate limiter is suspended and restored: this sweep makes far more requests a minute from
     one address than any limit allows, and a 429 on the second request of a pair would be a
@@ -2037,10 +2239,18 @@ def _matrix_app(store: MatrixStore, caller: str) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[get_request_supabase] = lambda: store
+    # Every plan gate a `/api/library` write can hit. See the docstring: these are plan gates,
+    # not tenant gates, and a route dependency left in place refuses BEFORE the handler body
+    # performs the lookup whose two answers this sweep compares. Keep this complete - `59b08de4`
+    # added the subscribe and strategy-quota gates without adding them here, and the checkout and
+    # clone cells silently stopped reaching the tenant boundary.
     for gate in (
         plan_gates.require_marketplace_access,
+        plan_gates.require_marketplace_subscribe,
         plan_gates.require_marketplace_publish,
         plan_gates.check_marketplace_publish_quota,
+        plan_gates.check_marketplace_subscription_quota,
+        plan_gates.check_strategy_quota,
     ):
         app.dependency_overrides[gate] = lambda: True
 
@@ -4730,6 +4940,11 @@ LIST_SURFACES: Tuple[_ListSurface, ...] = (
         "the caller's own Listings, read by author_id",
     ),
     _L(
+        "GET /api/library/submissions",
+        OWNER_SCOPED_LIST,
+        "the caller's own Submissions, read by owner_id (MKT-03)",
+    ),
+    _L(
         "GET /api/library/my-strategies",
         OWNER_SCOPED_LIST,
         "the Strategies_Page combined list: the caller's own strategies, subscriptions and "
@@ -5275,3 +5490,8 @@ def test_p46_every_listed_row_is_owned_by_the_caller(request: Any) -> None:
             repo.reset_persistence_probe()
 
     recorder.assert_not_vacuous()
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

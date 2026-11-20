@@ -2,10 +2,18 @@
 INTERNAL BILLING STATE MACHINE HOSTILE ATTACK SUITE
 20 attacks + plan namespace + tenant isolation + crash/transaction tests.
 """
-import sys, os, asyncio, threading, concurrent.futures, json
+import sys, io, os, asyncio, threading, concurrent.futures, json
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, r"c:\aerora_quant_backend_updated_final1")
+
+# The section labels contain arrows and em dashes, and a Windows console is cp1252, so an
+# unreconfigured stdout raises UnicodeEncodeError inside P() and kills the run partway --
+# which is how ATTACK 13 onwards stayed unreported even after the dead-import crash at
+# ATTACK 1 was removed. The sibling attack scripts already do this.
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 import logging; logging.disable(logging.CRITICAL)
 
 PASS_COUNT = 0; BUG_COUNT = 0; BUGS = []
@@ -69,13 +77,34 @@ def with_redis(r=None):
     redis = r or AtomicRedis()
     return patch("backend_app.core.billing_lifecycle.redis_manager", redis)
 
-print("="*72); print("ATTACK 1 — NEW SUBSCRIPTION"); print("="*72)
-async def a1():
-    sb=FakeSupabase(); sb._ensure("usr1")
-    with with_redis(): r=await BillingLifecycle.activate_subscription("usr1","pro",sb,payment_id="pi_001")
-    assert sb._profiles["usr1"]["subscription_tier"]=="pro"
-    assert sb._profiles["usr1"]["subscription_status"]=="active"
-asyncio.run(a1()); P("1.1 New subscription: exactly one active 'pro' row created")
+# ──────────────────────────────────────────────────────────────────────────────
+# SEVEN SECTIONS WERE REMOVED FROM THIS FILE, AND THE REASON MATTERS
+# ──────────────────────────────────────────────────────────────────────────────
+# ATTACK 1 (new subscription), 5 (upgrade), the first half of 6 (downgrade), 10 (renewal),
+# 11 (cross-tenant), 12 (unknown user) and 20 (concurrent upgrade/downgrade) all drove
+# BillingLifecycle.activate_subscription / upgrade_subscription / downgrade_subscription /
+# renew_subscription against a FakeSupabase. All four methods are DELETED: none had a
+# production caller, and renew_subscription's only one was inside stripe_webhook's
+# invoice.payment_succeeded branch, which went with the provider.
+#
+# WHY THIS WAS URGENT RATHER THAN COSMETIC. The first of those calls was at line 75, inside
+# ATTACK 1, at module scope. An AttributeError there killed the WHOLE script, so every
+# section after it never ran -- including ATTACK 2, 3 and 4, the Redis SET NX idempotency
+# batteries, which are the most valuable thing in this file and have nothing to do with the
+# deleted methods. One dead name disabled twenty working sections.
+#
+# WHAT THE PRODUCT ACTUALLY DOES, so the removals are not read as lost coverage: a tier is
+# granted by the Razorpay webhook through _apply_billing_entitlement, and its paid period by
+# _record_plan_period. There is no trial, no grace period, no proration on upgrade and no
+# scheduled downgrade -- a plan change takes effect when the new plan is paid for, and a
+# renewal is a RE-PURCHASE that extends from the current period end. The behavioural
+# coverage lives in tests/test_billing_e2e.py, tests/test_bill01_razorpay_plans_expire.py
+# and tests/test_subscription_renewal_regression.py, and the surface itself is pinned by
+# tests/test_billing_lifecycle_surface.py.
+#
+# ATTACK 6 is HALVED rather than removed: its second half drives cancel_subscription, which
+# survived because cancellation is a real local state change, and it still runs below.
+# ──────────────────────────────────────────────────────────────────────────────
 
 print("\n"+"="*72); print("ATTACK 2 — DUPLICATE EVENT IDEMPOTENCY"); print("="*72)
 async def a2():
@@ -104,25 +133,14 @@ r1,r2=asyncio.run(a4())
 if r1 and not r2: P("4.1 Process-restart replay: idempotency persists, replay blocked")
 else: B("BUG-IB-04r","P0","Replay allowed after restart","r2=False",f"r2={r2}","Double mutation")
 
-print("\n"+"="*72); print("ATTACK 5 — UPGRADE FREE→PRO"); print("="*72)
-async def a5():
-    sb=FakeSupabase(); sb._ensure("usr5")
-    with with_redis(): await BillingLifecycle.upgrade_subscription("usr5","pro",sb)
-    tier=sb._profiles["usr5"]["subscription_tier"]
-    cfg=SubscriptionEngine.get_plan_config(tier)
-    return tier, cfg.quotas["bots"]
-tier5,bots5=asyncio.run(a5())
-if tier5=="pro" and bots5==5: P(f"5.1 Upgrade FREE→PRO: tier=pro bots_quota=5")
-else: B("BUG-IB-05","P1",f"Upgrade wrong","tier=pro bots=5",f"tier={tier5} bots={bots5}","Wrong entitlement")
-
-print("\n"+"="*72); print("ATTACK 6 — DOWNGRADE ENTERPRISE→STARTER"); print("="*72)
-async def a6():
-    sb=FakeSupabase(); sb._ensure("usr6"); sb._profiles["usr6"]["subscription_tier"]="enterprise"
-    with with_redis(): await BillingLifecycle.downgrade_subscription("usr6","starter",sb)
-    return sb._profiles["usr6"].get("pending_downgrade_tier")
-p6=asyncio.run(a6())
-if p6=="starter": P("6.1 Downgrade ENTERPRISE→STARTER: pending_downgrade_tier=starter")
-else: B("BUG-IB-06","P1","Downgrade failed","pending=starter",f"pending={p6}","Premium not removed")
+print("\n"+"="*72); print("ATTACK 6 — IMMEDIATE CANCEL"); print("="*72)
+# 6.1 drove BillingLifecycle.downgrade_subscription and asserted it stashed
+# profiles.pending_downgrade_tier. That method is deleted: it wrote a column NOTHING
+# anywhere reads, so a scheduled downgrade would never have executed, and deleting it
+# removed the last reference to an undeclared column (cleared from
+# tests/test_schema_table_reference_drift.py's KNOWN_UNDECLARED_COLUMN_DEFECTS).
+# 6.2 below is kept: cancel_subscription survived, because cancellation is a real local
+# state change rather than an instruction to a gateway.
 
 async def a6b():
     sb=FakeSupabase(); sb._ensure("usr6b"); sb._profiles["usr6b"]["subscription_tier"]="enterprise"
@@ -171,6 +189,19 @@ from fastapi import HTTPException, Response
 async def a9():
     mw=SubscriptionMiddleware(app=MagicMock())
     req=MagicMock(); req.url=MagicMock(); req.url.path="/api/bots/start"
+    # `scope` MUST be a real dict carrying the path. The middleware reads
+    # `request.scope["path"]`, not `request.url.path` -- a deliberate change, its own comment
+    # cites CVE-2026-48710 (BadHost): scope[path] is not rebuilt from the Host header. On a
+    # bare MagicMock, `request.scope["path"]` yields another MagicMock, and
+    # `MagicMock.startswith(...)` returns a truthy MagicMock, so
+    # `any(path.startswith(b) for b in BYPASS_PATHS)` was TRUE and the middleware returned
+    # call_next(request) before checking anything.
+    #
+    # That is why this section reported "BUG-IB-09 Frozen account allowed" as a P0. It was an
+    # artefact of the harness, not a defect: the frozen check below is reached and does
+    # refuse. The script had never run this far (it died at ATTACK 1 on a deleted method), so
+    # the false P0 had never been printed for anyone to chase.
+    req.scope={"path":"/api/bots/start","type":"http","headers":[]}
     req.state=MagicMock(); req.state.user={"id":"usr9","access_token":"t"}
     call_next=AsyncMock(return_value=Response(content=b"ok"))
     redis=AtomicRedis()
@@ -183,35 +214,6 @@ async def a9():
 r9=asyncio.run(a9())
 if r9.startswith("BLOCKED"): P(f"9.1 Frozen account: request blocked ({r9})")
 else: B("BUG-IB-09","P0","Frozen account allowed","BLOCKED_403",r9,"Frozen user trades")
-
-print("\n"+"="*72); print("ATTACK 10 — RENEWAL: no duplicates"); print("="*72)
-async def a10():
-    sb=FakeSupabase(); sb._ensure("usr10")
-    sb._profiles["usr10"]["subscription_tier"]="pro"; sb._profiles["usr10"]["subscription_status"]="active"
-    with with_redis():
-        for _ in range(3): await BillingLifecycle.renew_subscription("usr10",sb)
-    return sb._profiles["usr10"]["subscription_status"], sb._profiles["usr10"]["subscription_tier"]
-s10,t10=asyncio.run(a10())
-if s10=="active" and t10=="pro": P("10.1 Triple renewal: status=active tier=pro, no duplication")
-else: B("BUG-IB-10","P1","Renewal corrupted state","active/pro",f"{s10}/{t10}","Duplicate/lost subscription")
-
-print("\n"+"="*72); print("ATTACK 11 — CROSS-TENANT ISOLATION"); print("="*72)
-async def a11():
-    sb=FakeSupabase(); sb._ensure("ta"); sb._ensure("tb")
-    with with_redis(): await BillingLifecycle.activate_subscription("ta","enterprise",sb)
-    return sb._profiles["tb"]["subscription_tier"]
-if asyncio.run(a11())=="free": P("11.1 Cross-tenant: Tenant A upgrade did not mutate Tenant B")
-else: B("BUG-IB-11","P0","Tenant isolation broken","free","non-free","Cross-tenant leak")
-
-print("\n"+"="*72); print("ATTACK 12 — UNKNOWN USER"); print("="*72)
-async def a12():
-    sb=FakeSupabase()
-    try:
-        with with_redis(): await BillingLifecycle.activate_subscription("unknown_xyz","pro",sb)
-        return "EXECUTED"
-    except Exception as e: return f"RAISED:{e}"
-r12=asyncio.run(a12())
-P(f"12.1 Unknown user: {r12[:80]} (FakeSupabase upserts; real Supabase FK would fail)")
 
 print("\n"+"="*72); print("ATTACK 13 — MALFORMED EVENTS"); print("="*72)
 tests13=[
@@ -292,13 +294,26 @@ u3,u1,u0=asyncio.run(a17())
 if u3==3 and u1==1 and u0==0: P(f"17.1 Quota transitions: grant=3, release=1, floor=0 (no negatives)")
 else: B("BUG-IB-17","P1","Quota transitions wrong","3/1/0",f"{u3}/{u1}/{u0}","Quota accounting error")
 
+# The limit is READ FROM THE PLAN CONFIG, not hardcoded. This section asserted "5 granted,
+# 2 rejected (PRO bots=5)" and reserved exactly 7 times. PRO's bots quota is now 10, so all
+# 7 reservations are granted and the section reported "BUG-IB-17b Quota enforcement wrong /
+# Over-quota bots granted" as a P1 -- for a quota that was being enforced correctly. The
+# plan ladder changed and the hardcoded 5 did not, and because the script died at ATTACK 1
+# on a deleted method, nobody ever saw the false finding to correct it.
+#
+# Deriving the limit means the next ladder change does not turn this into a false alarm
+# again, and the assertion still has teeth: it reserves limit+2 and requires the last two to
+# be REFUSED, so a quota that stopped being enforced at all still fails here.
+_PRO_BOTS = SubscriptionEngine.get_plan_config("pro").quotas["bots"]
+
 async def a17b():
     redis=AtomicRedis()
     with patch("backend_app.core.subscription_engine.redis_manager",redis):
-        return [( await SubscriptionEngine.reserve_quota("u17b","pro","bots",1))[0] for _ in range(7)]
+        return [( await SubscriptionEngine.reserve_quota("u17b","pro","bots",1))[0] for _ in range(_PRO_BOTS+2)]
 qr=asyncio.run(a17b())
-if all(qr[:5]) and not any(qr[5:]): P("17.2 Quota enforcement: 5 granted, 2 rejected (PRO bots=5)")
-else: B("BUG-IB-17b","P1",f"Quota enforcement wrong","T*5+F*2",str(qr),"Over-quota bots granted")
+if all(qr[:_PRO_BOTS]) and not any(qr[_PRO_BOTS:]):
+    P(f"17.2 Quota enforcement: {_PRO_BOTS} granted, 2 rejected (PRO bots={_PRO_BOTS})")
+else: B("BUG-IB-17b","P1",f"Quota enforcement wrong",f"T*{_PRO_BOTS}+F*2",str(qr),"Over-quota bots granted")
 
 print("\n"+"="*72); print("ATTACK 18 — DOWNGRADE DURING BOT EXECUTION"); print("="*72)
 async def a18():
@@ -329,18 +344,12 @@ s19=asyncio.run(a19())
 if s19=="cancelled": P("19.1 DAG claim after cancel: subscription=cancelled detected (worker would reject)")
 else: B("BUG-IB-19","P0","Cancelled subscription not detected for DAG claim","cancelled",s19,"Cancelled user runs DAG")
 
-print("\n"+"="*72); print("ATTACK 20 — CONCURRENT UPGRADE/DOWNGRADE: deterministic"); print("="*72)
-async def a20():
-    sb=FakeSupabase(); sb._ensure("usr20"); sb._profiles["usr20"]["subscription_tier"]="starter"
-    async def up(): 
-        with with_redis(): await BillingLifecycle.upgrade_subscription("usr20","enterprise",sb)
-    async def dn():
-        with with_redis(): await BillingLifecycle.cancel_subscription("usr20",cancel_at_period_end=False,supabase=sb)
-    await asyncio.gather(up(),dn())
-    return sb._profiles["usr20"]["subscription_tier"], sb._profiles["usr20"]["subscription_status"]
-t20,s20=asyncio.run(a20())
-if s20 in ("active","cancelled"): P(f"20.1 Concurrent upgrade/downgrade: final state is deterministic ({t20}/{s20})")
-else: B("BUG-IB-20","P1","Impossible final state","valid","impossible",f"tier={t20} status={s20}")
+print("\n"+"="*72); print("ATTACK 20 — CONCURRENT CANCEL: removed"); print("="*72)
+# Raced BillingLifecycle.upgrade_subscription against cancel_subscription and asserted
+# the final state was one of two legal values. upgrade_subscription is deleted -- an
+# upgrade is a fresh checkout whose webhook overwrites the tier, and there was never any
+# proration -- so there is no second writer left to race. Racing cancel against itself
+# would assert something else, so the section is removed rather than quietly redefined.
 
 print("\n"+"="*72); print("PLAN NAMESPACE ATTACK"); print("="*72)
 plan_tests=[

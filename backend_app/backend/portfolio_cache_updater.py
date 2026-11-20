@@ -146,9 +146,9 @@ class PortfolioCacheUpdater:
             user_id: User identifier
             exchange_id: Exchange identifier (e.g., "binance")
         """
-        from backend_app.backend.connection_engine import \
-            get_or_create_exchange
-        from backend_app.backend.key_manager import KeyVault
+        from backend_app.backend.connection_engine import (get_or_create_exchange,
+                                                           key_sandbox)
+        from backend_app.backend.api_key_vault import APIKeyVault
 
         # Build cache keys
         balance_key = f"portfolio:{user_id}:{exchange_id}:balance"
@@ -156,7 +156,7 @@ class PortfolioCacheUpdater:
         
         try:
             # Get exchange connection
-            vault = KeyVault()
+            vault = APIKeyVault()
             keys = vault.load_decrypted_keys(user_id, exchange_id)
             exchange = await get_or_create_exchange(
                 user_id=user_id,
@@ -164,6 +164,7 @@ class PortfolioCacheUpdater:
                 api_key=keys["api_key"],
                 secret_key=keys["secret_key"],
                 password=keys.get("password"),
+                testnet=key_sandbox(keys),
             )
             
             # Fetch from exchange

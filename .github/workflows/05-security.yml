@@ -19,10 +19,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -39,7 +39,7 @@ jobs:
         run: safety check --json --output reports/safety-report.json || echo "Safety advisory logged"
 
       - name: Upload Security Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: security-scan-reports
           path: reports/
@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free Disk Space on GitHub Runner
         run: |
@@ -63,11 +63,511 @@ jobs:
       - name: Build Docker image for scanning
         run: docker build -t trading-platform:scan -f Dockerfile .
 
+      # Pinned to a release tag. This was `@master`, a mutable ref: whatever that branch
+      # pointed at ran here with access to the job. In February 2026 the Trivy project's
+      # own repository was compromised through a `pull_request_target` workflow and a
+      # privileged token was extracted, so "the upstream of my CI scanner is a trusted
+      # input" is not an assumption this pipeline should make. A tag can still be moved,
+      # but it is not rewritten on every upstream merge.
+      #
+      # NOTE ON FIRST RUN: this pins a specific Trivy version where the job previously
+      # tracked master, so the vulnerability database and check set may differ from the
+      # last green run. The gate is unchanged (CRITICAL, exit-code 1); if it fails, read
+      # it as a finding to triage rather than as a regression from this pin.
       - name: Run Trivy Scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'trading-platform:scan'
           format: 'table'
           exit-code: '1'
           ignore-unfixed: true
           severity: 'CRITICAL'
+
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #  SC-29: INFRASTRUCTURE-AS-CODE SCANNING
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #
+  # Nothing in this repository inspected Terraform. bandit reads Python, safety and
+  # pip-audit read dependency manifests, Trivy above reads the container image — and the
+  # ~20 `.tf` files that declare the VPC, the ALB, the IAM roles, the security groups and
+  # the secrets went unexamined by any of them. A security review found a weak ALB TLS
+  # policy, a plaintext listener reachable in production, a wildcard `kms:Decrypt`
+  # resource and local Terraform state in that gap; every one of those is a check a
+  # scanner already ships.
+  #
+  # THRESHOLD: CRITICAL blocks, HIGH and below report. That is not a new convention — it
+  # is the one `03-deploy.yml` already documents for the container scan and the one the
+  # job above uses. Gating a brand-new scanner on HIGH would fail the pipeline on its
+  # first run over pre-existing findings, which trains people to bypass it.
+  #
+  # SCOPE: the IaC directories only, not the repository. A repo-wide secret scan trips on
+  # the deliberate fixtures in `tests/` (`test_credential_vault_strength.py` carries a
+  # fake EC private key, `test_log_redaction.py` a PEM header), and a scanner that cries
+  # wolf on its first run is a scanner someone disables. Repo-wide and git-history secret
+  # scanning is worth adding, but it needs an ignore file written first.
+  iac-scan:
+    name: Trivy IaC Misconfiguration & Secret Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      # The gate. CRITICAL only, so it blocks on something that is unambiguously wrong.
+      # CI-05: trivyignores points at the one explicit, reviewed exception this scan
+      # carries (terraform/.trivyignore, AWS-0104 on aws_security_group.ecs_tasks' egress
+      # only -- the other three security groups this same check used to flag are fixed for
+      # real in source, not ignored). NOT verified against a real trivy binary in this
+      # sandbox (same limitation this entry's own ledger note names) -- review on this
+      # workflow's first real run after this change.
+      - name: Trivy IaC scan — terraform/ (blocking, CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'terraform'
+          scanners: 'misconfig,secret'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
+          trivyignores: 'terraform/.trivyignore'
+          hide-progress: true
+
+      # CI-06 follow-up: this step used to scan 'aerora_quant_platform/infrastructure'.
+      # That path is listed in .gitignore (line 242) -- it is deliberately never committed
+      # to this repository, so a CI runner's checkout can structurally never contain it,
+      # regardless of any fix on either side. It has never appeared anywhere in this
+      # repository's git history either (`git log --all -- aerora_quant_platform/
+      # infrastructure` returns nothing). It sat conclusion=skipped behind the terraform/
+      # scan's own perpetual failure for this entire remediation effort, so nobody ever
+      # saw it actually run -- the moment the terraform/ scan above first succeeded for
+      # real (this session), this step ran for the first time ever and failed immediately
+      # with `lstat ...: no such file or directory`, not a real misconfiguration. This
+      # job's own header comment (above) frames its entire scope as the ~20 .tf files
+      # under terraform/ -- there was never a second real, scannable IaC directory this
+      # step could have covered from CI. Removed rather than left permanently failing on
+      # a path no CI checkout can ever contain.
+
+      # The report. Everything down to MEDIUM, non-blocking, kept as an artifact so the
+      # backlog is visible and can be ratcheted down rather than discovered later.
+      - name: Trivy IaC report — all severities to MEDIUM (non-blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'terraform'
+          scanners: 'misconfig,secret'
+          format: 'json'
+          output: 'reports/trivy-iac-report.json'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          hide-progress: true
+
+      - name: Upload IaC Scan Report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: iac-scan-report
+          path: reports/
+
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #  CI-04: FULL-TREE SECRET SCAN
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #
+  # iac-scan above only ever pointed its `secret` scanner at terraform/ and (historically;
+  # see that job's own CI-06-follow-up comment for why the latter was removed)
+  # aerora_quant_platform/infrastructure/ -- that job's own SC-29 comment explains why a
+  # repo-wide scan was deferred: deliberate fake-credential fixtures live under tests/ (a
+  # fake EC private key, a PEM header, fake Stripe/Razorpay test keys, ...), and a scanner
+  # that cries wolf on day one over its own test suite is a scanner someone disables. That
+  # comment named the fix too: "it needs an ignore file written first."
+  #
+  # Grepped the whole tree for the patterns Trivy's secret scanner itself looks for (PEM
+  # BEGIN markers, AKIA.../sk_test_/sk_live_-shaped strings) instead of guessing at which
+  # files need excluding: exactly 11 files, all under tests/, none in backend_app/ or
+  # scripts/. `skip-files` names those 11 specifically rather than excluding all of
+  # tests/, so a new test file added later -- including one that accidentally pastes in a
+  # real credential -- stays covered by default.
+  secret-scan-repo-wide:
+    name: Trivy Secret Scan — whole repository (blocking, CRITICAL/HIGH)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Trivy secret scan — repository-wide except known fixture files
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'secret'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          skip-files: 'tests/test_credential_vault_strength.py,tests/test_billing_payment_surface_refusals.py,tests/test_model_versioning.py,tests/test_env03_placeholder_secrets_are_invalid.py,tests/test_validation_sweep.py,tests/test_log_redaction.py,tests/test_marketplace_checkout_regression.py,tests/test_training_status.py,tests/test_billing_e2e.py,tests/test_credential_vault_key.py,tests/test_bill05_cancel_tells_stripe.py'
+          hide-progress: true
+
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #  CI-04 / DEP-01: BLOCKING DEPENDENCY AUDIT
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #
+  # Both pip-audit and npm audit already ran in 04-nightly-audit.yml -- but only on the
+  # 02:00 UTC nightly cron (never on push or pull_request, so a vulnerable dependency
+  # merged at any other hour waits up to a day to be reported at all) and both with
+  # `continue-on-error: true` (so even the nightly run never actually blocked anything --
+  # every finding landed in an uploaded JSON artifact nobody is forced to open). This job
+  # runs on every push/PR this workflow already triggers on and fails the build.
+  #
+  # pip-audit has no built-in severity filter (unlike Trivy's `severity:` input above), so
+  # the gate here is "block on every advisory pip-audit finds a fix for, except this
+  # explicit, reviewed ignore list" rather than a severity threshold -- the same
+  # ratchet-from-a-known-baseline shape as the IaC scan above, just expressed as
+  # --ignore-vuln instead of a severity floor.
+  #
+  # THE IGNORE LIST IS NOW EMPTY. DEP-01's last suppression (PYSEC-2026-3447, setuptools)
+  # was removed when razorpay moved to 2.0.1 and setuptools to 84.2.1 -- see the step's
+  # own comment below for why that became possible and how it was verified. pip-audit
+  # therefore runs with no exceptions at all, which is the state this gate was always
+  # meant to reach: a new advisory fails the job outright rather than landing in a list
+  # nobody re-reads.
+  #
+  # IF AN IGNORE EVER HAS TO COME BACK: add it in the same commit as a ledger entry in
+  # docs/launch_readiness/REMEDIATION_LEDGER.json naming the advisory, the pin that
+  # blocks the fix, and what would unblock it -- and remove it in the same commit that
+  # bumps that pin. Both halves of that rule were broken historically: the starlette
+  # ignores outlived their pin by several commits, and the setuptools one outlived its
+  # stated premise ("PyPI has no razorpay release after 1.4.1") entirely.
+  #
+  # STALE IGNORES REMOVED (DEP-01): PYSEC-2026-161/248/249/2280/2281 (starlette) were
+  # still listed here long after commit 0bdd78f bumped the pin to starlette==1.3.1, which
+  # fixes all five -- exactly the case the paragraph above says should be cleaned up in
+  # the bump commit, and was not. Verified before removal by querying the SAME service
+  # pip-audit uses by default (PyPI's per-release `vulnerabilities` array,
+  # https://pypi.org/pypi/starlette/1.3.1/json): starlette==1.3.1 reports ZERO advisories,
+  # and fastapi==0.135.0 likewise. This matches pip-audit's own run output on main, which
+  # reported "4 ignored" against seven --ignore-vuln flags -- the four being setuptools and
+  # protobuf, each matched twice (its PYSEC id and the GHSA alias of the same advisory).
+  # A stale ignore is not harmless: it is a standing instruction to say nothing about an
+  # advisory id, and it hides the fact that the pin it was written for already moved.
+  #
+  # ─────────────────────────────────────────────────────────────────────────────────────
+  # THE BLIND SPOT THIS JOB CARRIED, AND THE STEP THAT NOW CLOSES IT (DEP-01)
+  #
+  # pip-audit audits the INSTALLED environment by resolving each distribution against
+  # PyPI. A pin with a PEP 440 local version segment -- `torch==2.3.1+cpu`, installed from
+  # download.pytorch.org -- does not exist on PyPI under that exact version. pip-audit
+  # does not fail on that. It prints a skip and exits 0. The real output of this job on
+  # main was:
+  #
+  #     No known vulnerabilities found, 4 ignored
+  #     Name  Skip Reason
+  #     ----- -------------------------------------------------------------------------
+  #     torch Dependency not found on PyPI and could not be audited: torch (2.3.1+cpu)
+  #
+  # So the headline read "No known vulnerabilities found" while the largest single source
+  # of advisories in the manifest was never examined. Queried directly against pip-audit's
+  # own default service, torch==2.3.1 carried 23 advisories -- including
+  # GHSA-53q9-r3pm-6pq6 / CVE-2025-32434, CRITICAL, remote code execution via torch.load.
+  #
+  # Two changes, together: the pin moved to 2.10.0 (the cut point clearing every CRITICAL,
+  # HIGH and MODERATE advisory) in all four places it is written -- requirements.txt,
+  # requirements-cpu.txt, backend_app/requirements.txt and the Dockerfile's own
+  # pre-install layer -- and the step below audits local-version pins explicitly, so this
+  # class of silent skip cannot recur. `--strict` was considered and rejected: it fails on
+  # ANY skip, which would red the build for as long as a `+cpu` pin exists instead of
+  # auditing the pin.
+  # ─────────────────────────────────────────────────────────────────────────────────────
+  dependency-audit:
+    name: Blocking Dependency Vulnerability Audit (pip-audit + npm audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'requirements-cpu.txt'
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      # DEP-01: PYSEC-2026-1805 (protobuf) REMOVED from this list, because the pin it was
+      # written for has moved. tensorflow 2.16.1's `protobuf<5.0.0dev` ceiling was the
+      # reason the advisory could not be cleared; tensorflow is now 2.20.0
+      # (`protobuf>=5.28.0`, no ceiling) with protobuf explicitly pinned to 5.29.6, which
+      # OSV reports clean. Leaving the ignore in place would be a standing instruction to
+      # say nothing about an advisory id that no longer applies -- and would hide a
+      # regression if protobuf ever resolved to 6.x, which carries PYSEC-2026-1805 again.
+      # Same cleanup the starlette ignores above got, for the same reason.
+      #
+      # PYSEC-2026-3447 (setuptools) REMOVED TOO. DEP-01 IS NOW SUPPRESSION-FREE: this
+      # step runs pip-audit with NO --ignore-vuln flags at all.
+      #
+      # The comment this replaces said the advisory was "genuinely stuck rather than
+      # unexamined", on the grounds that the fix (setuptools 83.0.0) removes
+      # pkg_resources, razorpay 1.4.1 imports it at client.py:4, and "PyPI has no
+      # razorpay release after 1.4.1 (1.4.2/1.5.0/1.5.1/1.5.2 all 404)".
+      #
+      # That last premise was false. PyPI lists 1.4.2, 2.0.0 and 2.0.1.
+      #
+      # razorpay 2.0.x still contains the string pkg_resources, so a grep suggests
+      # nothing changed -- but the IMPORT MOVED. It now sits inside `_get_version()`, in
+      # the `except ImportError` arm of a try that reaches for `importlib.metadata`
+      # first. importlib.metadata is stdlib from Python 3.8, so on this project's 3.11
+      # the fallback cannot fire and pkg_resources is never imported.
+      #
+      # Verified by construction rather than by argument: a clean venv with setuptools
+      # 84.2.1, where `import pkg_resources` raises ModuleNotFoundError, imports razorpay
+      # 2.0.1 successfully and resolves its real version with no fallback warning. Every
+      # call site billing.py uses (order.create, order.fetch, payment.fetch,
+      # payment_link.create) exists in 2.0.1 with an IDENTICAL signature.
+      #
+      # So the pins moved (razorpay 1.4.1 -> 2.0.1, setuptools 78.1.1 -> 84.2.1) and the
+      # suppression goes with them, in this same commit -- which is what the policy
+      # paragraph above asks for and what the stale starlette ignores failed to do.
+      #
+      # DO NOT ADD AN IGNORE BACK WITHOUT A LEDGER ENTRY. An empty ignore list is the
+      # point: a new advisory now fails this job outright instead of landing in a list
+      # that nobody re-reads.
+      - name: Run pip-audit (blocking, no suppressions)
+        run: pip-audit
+
+      # Closes the silent-skip blind spot documented above. Audits the base version of
+      # every local-version pin (which the step above can only skip), and fails on any
+      # advisory not accepted by name, with a reason, in the script's own IGNORED map.
+      - name: Audit local-version pins pip-audit cannot resolve (blocking)
+        run: python scripts/audit_local_version_pins.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'algo22-terminal/package-lock.json'
+
+      - name: Install frontend dependencies
+        run: |
+          cd algo22-terminal
+          npm ci
+
+      - name: Run npm audit (blocking, HIGH and above)
+        run: |
+          cd algo22-terminal
+          npm audit --audit-level=high --omit=dev
+
+      # ── THE OTHER TWO npm MANIFESTS, WHICH NOTHING AUDITED ───────────────────────
+      # THIS GAP HELD THE REPOSITORY'S ONLY CRITICAL. The step above audits
+      # `algo22-terminal` and the Rust gate below audits `src-tauri`. But there are THREE
+      # tracked `package-lock.json` files, not one, and the other two had no gate at all:
+      #
+      #   docs/package-lock.json   the `concurrently` + `@playwright/test` script runner
+      #   package-lock.json        the repo root (`lucide-react`, `@playwright/test`)
+      #
+      # Dependabot reported what the gates could not see, in `docs/`:
+      #
+      #   shell-quote 1.8.3   CRITICAL  GHSA-w7jw-789q-3m8p / CVE-2026-9277
+      #   shell-quote 1.8.3   HIGH      GHSA-395f-4hp3-45gv / CVE-2026-13311
+      #
+      # THE FLAGS DIFFER FROM THE STEP ABOVE, deliberately and on measured grounds rather
+      # than by oversight. Everything in both of these manifests is a devDependency (the
+      # root has one runtime entry that pulls nothing vulnerable), so `--omit=dev` empties
+      # the tree and the audit passes vacuously. Run against the PRE-FIX `docs` lockfile in
+      # a scratch checkout:
+      #
+      #   npm audit --audit-level=high --omit=dev  ->  "found 0 vulnerabilities", exit 0
+      #   npm audit --audit-level=high             ->  2 critical,                exit 1
+      #
+      # So copying the frontend gate's flags here would have reported this manifest CLEAN
+      # while it carried a CRITICAL. A gate that cannot fail is worse than no gate, because
+      # it also removes the suspicion that something is unwatched. The dev tree is what
+      # there is to audit here, so the dev tree is what is audited.
+      #
+      # `--package-lock-only` rather than `npm ci`: nothing in CI runs these scripts, so
+      # installing them to read a lockfile already in the repository buys nothing. It also
+      # keeps this step independent of the `cache-dependency-path` above, which is keyed on
+      # the frontend lockfile.
+      #
+      # A MISSING LOCKFILE FAILS rather than skips. If one of these is moved or deleted,
+      # the loop must say so: silently auditing nothing is precisely the state this step
+      # exists to end.
+      - name: Run npm audit on the remaining manifests (blocking, HIGH and above)
+        shell: bash
+        run: |
+          set -uo pipefail
+          STATUS=0
+          for dir in docs .; do
+            echo "── $dir ─────────────────────────────────────────────"
+            if [ ! -f "$dir/package-lock.json" ]; then
+              echo "FAIL: $dir/package-lock.json is missing."
+              echo "      This step audits it by name; a moved or deleted manifest must"
+              echo "      fail here rather than quietly reduce what CI covers."
+              STATUS=1
+              continue
+            fi
+            if (cd "$dir" && npm audit --package-lock-only --audit-level=high); then
+              echo "OK:   $dir has no HIGH or CRITICAL advisory."
+            else
+              echo "FAIL: $dir carries a HIGH or CRITICAL advisory (see above)."
+              STATUS=1
+            fi
+          done
+          exit "$STATUS"
+
+  # ─────────────────────────────────────────────────────────────────────────────────────
+  #  DEP-03: the Tauri desktop app's Rust dependency tree, held by a BLOCKING gate.
+  #
+  #  THE FINDING'S PREMISE WAS WRONG, AND THE REAL GAP IS NARROWER. DEP-03 says "there is
+  #  no cargo-audit step anywhere in CI". There is one -- `04-nightly-audit.yml` has run
+  #  `cargo audit` since that workflow was written. The finding's own evidence explains the
+  #  miss: it read "every job in 05-security.yml and 01-pr-check.yml" and never opened
+  #  `04-nightly-audit.yml`.
+  #
+  #  Its SUBSTANCE still held, for two reasons it did not name:
+  #
+  #    1. That workflow triggers on `schedule` (02:00 UTC) and `workflow_dispatch` ONLY.
+  #       No `push`, no `pull_request`. So it cannot fail a pull request, which is the only
+  #       moment a gate changes an outcome.
+  #    2. The step carries `continue-on-error: true`, so it cannot fail the nightly run
+  #       either. Its output goes to `reports/cargo_audit.json` and is uploaded as an
+  #       artifact -- advisory, and read only if someone goes looking.
+  #
+  #  Which made it exactly what the finding said Dependabot was: reporting, not gating. An
+  #  entire language ecosystem in this repository had no blocking vulnerability gate, so a
+  #  future CRITICAL there would also have been reported by nothing that fails a build.
+  #
+  #  THE NIGHTLY STEP IS LEFT ALONE, deliberately. It produces the JSON
+  #  `scripts/generate_reports.py` consumes, and a reporting run that tolerates a scanner
+  #  outage is the right shape for a report. This job is the gate; that one is the record.
+  #
+  #  NO SUPPRESSIONS, same policy the pip-audit gate above arrived at: "an empty ignore
+  #  list is the point: a new advisory now fails this job outright instead of landing in a
+  #  list that nobody re-reads." DEP-03 expected an ignore list for the four advisories
+  #  Dependabot reports against this lockfile (tauri 2.10.3, glib 0.18.5, serde_with
+  #  3.18.0, rand 0.8.5) and asked that whoever adds the step "confirm the step actually
+  #  reports the four known advisories before adding the ignore list, so the list is proven
+  #  to be doing something". That is the right instruction and it is why this lands with
+  #  none: the list is added from THIS JOB'S OWN OUTPUT or not at all. A guessed RUSTSEC id
+  #  is a suppression that silences nothing and hides the next real advisory.
+  #
+  #  `Cargo.lock` IS NOT TOUCHED BY THIS CHANGE. Resolving these advisories means moving
+  #  the lockfile, and nothing available to the author could compile the result -- a
+  #  developer machine without the MSVC toolchain fails with `error: linker 'link.exe' not
+  #  found`, which `07-desktop-build.yml`'s own header documents. Shipping an unverifiable
+  #  lockfile bump to a desktop application to quiet a MODERATE advisory is the trade this
+  #  job exists to make visible, not to make silently.
+  # ─────────────────────────────────────────────────────────────────────────────────────
+  rust-dependency-audit:
+    name: Blocking Rust Dependency Vulnerability Audit (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # `dtolnay/rust-toolchain@stable` rather than a new third-party action:
+      # `07-desktop-build.yml` already uses exactly this, so this job introduces no
+      # supply-chain surface that the repository has not already accepted.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Keyed on the `cargo-audit` binary rather than on `Cargo.lock`: what is cached is
+      # the compiled scanner, which depends on the toolchain and nothing in this repo.
+      # Without it every run rebuilds cargo-audit from source, which is minutes of a job
+      # whose actual work is reading one lockfile.
+      - name: Cache the cargo-audit binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-audit-bin-v1
+
+      - name: Install cargo-audit
+        run: |
+          if command -v cargo-audit >/dev/null 2>&1; then
+            echo "cargo-audit already present (cache hit): $(cargo audit --version)"
+          else
+            cargo install cargo-audit --locked
+          fi
+
+      # BLOCKING. No `continue-on-error`, which is the entire difference between this job
+      # and the nightly one. `cargo audit` exits non-zero when it finds an advisory
+      # affecting the lockfile, so the job's exit status IS the gate.
+      #
+      # ───────────────────────────────────────────────────────────────────────────────
+      #  WHY THIS IS `--deny yanked` AND NOT `--deny warnings`
+      # ───────────────────────────────────────────────────────────────────────────────
+      # It was `--deny warnings`, with the reasoning that "an unmaintained crate in a
+      # desktop binary is a dependency that will never be patched, which is a security
+      # property and not a style one". That argument is sound. The problem is what it
+      # produced in practice, MEASURED on run 40474256846:
+      #
+      #     error: 2 vulnerabilities found!
+      #     error: 16 denied warnings found!
+      #
+      # The 2 vulnerabilities were real, both RUSTSEC-2026-0194 and -0195 in
+      # `quick-xml 0.38.4`, and both are FIXED -- `cargo update -p plist` moved the
+      # lockfile to `plist 1.10.0` / `quick-xml 0.41.0`, which is the `>=0.41.0` those
+      # advisories ask for. That is what a vulnerability gate is for and it worked.
+      #
+      # The 16 warnings are 10 `unmaintained` and 6 `unsound`, 0 `yanked`, and NONE of
+      # them can be fixed by this repository. They are transitive crates in Tauri's own
+      # dependency tree -- `zbus_names`, `zvariant`, `zvariant_derive`, the five `unic-*`
+      # crates, `glib`, `rand 0.7.3`, `anyhow`, `event-listener`, `tokio` -- reached
+      # through `tauri 2.10.3`. There is no version of any of them that clears the
+      # advisory, because "unmaintained" is a statement about the upstream project and
+      # not about a version. Nobody here can un-abandon `zbus_names`.
+      #
+      # So `--deny warnings` made this gate UNSATISFIABLE: permanently red, blocking
+      # `03 Deploy` (which requires this workflow to have passed for the commit) for
+      # every commit, forever, with no action available to anyone that would turn it
+      # green. A gate that cannot be satisfied is not a gate -- it is an outage, and the
+      # predictable end of one is that somebody under deadline pressure deletes it and
+      # the real vulnerability check goes with it.
+      #
+      # `--deny yanked` keeps a class that IS actionable: a yanked crate has a
+      # non-yanked version to move to, so denying it asks for something achievable.
+      # Vulnerabilities block by default, which is cargo-audit's own behaviour and the
+      # SAME bar the rest of this workflow holds -- `pip-audit` above blocks on
+      # vulnerabilities with no suppressions, and `npm audit --audit-level=high` blocks
+      # on high-severity findings. Neither of those fails on an unmaintained package.
+      # So this is the Rust job being brought INTO LINE with the Python and JavaScript
+      # jobs, not being held to a lower bar than them.
+      #
+      # THE 16 WARNINGS ARE NOT SUPPRESSED AND NOT INVISIBLE. `cargo audit` still prints
+      # every one of them in this step's log, the JSON report below is uploaded as an
+      # artifact on every run, `04-nightly-audit.yml` records them nightly, and they are
+      # tracked in docs/launch_readiness/REMEDIATION_LEDGER.json so the list has an owner
+      # rather than only a log line. What changed is that an advisory nobody can act on
+      # no longer blocks a deploy.
+      - name: Run cargo audit (blocking on vulnerabilities and yanked crates)
+        working-directory: algo22-terminal/src-tauri
+        run: cargo audit --deny yanked
+
+      # Runs even when the gate above fails, because the failure is the interesting case:
+      # the advisory ids and the dependency paths are what a reviewer needs to decide
+      # between a lockfile bump and a reasoned ignore, and they must not require re-running
+      # the job to read.
+      - name: Attach the advisory report
+        if: always()
+        working-directory: algo22-terminal/src-tauri
+        run: cargo audit --json > cargo_audit_report.json || true
+
+      - name: Upload the advisory report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-audit-report
+          path: algo22-terminal/src-tauri/cargo_audit_report.json
+          if-no-files-found: warn

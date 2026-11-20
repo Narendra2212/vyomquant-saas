@@ -21,7 +21,7 @@ import os
 import sys
 import uuid
 from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 # ``Dict`` is used by ``_ConcurrentFakeDB.stores`` below. It was missing, which made this file a
 # hard ``F821 undefined name 'Dict'`` under the repository's CI gate
 # (``flake8 ... --select=E9,F63,F7,F82`` over ``backend_app`` and over ``tests`` -
@@ -200,6 +200,7 @@ import copy as _copy
 from unittest.mock import patch as _patch
 
 from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
+from backend_app.backend.marketplace import evidence_validator as _evidence_validator
 from backend_app.backend.marketplace import submission_service as _submission_service
 from backend_app.backend.marketplace.submission_service import (
     MARKETPLACE_SUBMISSION_ALREADY_OPEN,
@@ -273,6 +274,17 @@ class _ConcurrentSubmissionsTable:
         return self
 
     def limit(self, *a, **k):
+        return self
+
+    # MKT-07: the Eligibility_Gate's fifth read spells `exchange_id IS NOT NULL` as
+    # `.not_.is_(...)`, so `not_` is a PROPERTY returning something that carries `is_`.
+    # Without it the read raised AttributeError and every verdict in this battery came
+    # back `unevaluable` rather than admitted.
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, *a, **k):
         return self
 
     def single(self):
@@ -439,8 +451,54 @@ def _conc_backtest_row(start_date, end_date, dataset, checksum):
     }
 
 
+#: The distinct half-year windows the eligible evidence is built from, one per required
+#: Backtest_Condition. Non-overlapping, because ``MIN_CONDITIONS`` windows must each span
+#: ``MIN_WINDOW_DAYS`` and intersect pairwise by at most 25 percent.
+_CONC_WINDOWS = (
+    ("2024-01-01", "2024-06-30", "BTCUSD-2024H1", "chk-btc-h1"),
+    ("2024-07-01", "2024-12-31", "ETHUSD-2024H2", "chk-eth-h2"),
+    ("2023-01-01", "2023-06-30", "SOLUSD-2023H1", "chk-sol-h1"),
+    ("2023-07-01", "2023-12-31", "ADAUSD-2023H2", "chk-ada-h2"),
+    ("2022-01-01", "2022-06-30", "XRPUSD-2022H1", "chk-xrp-h1"),
+    ("2022-07-01", "2022-12-31", "DOTUSD-2022H2", "chk-dot-h2"),
+    ("2021-01-01", "2021-06-30", "LTCUSD-2021H1", "chk-ltc-h1"),
+    ("2021-07-01", "2021-12-31", "LNKUSD-2021H2", "chk-lnk-h2"),
+    ("2020-01-01", "2020-06-30", "BCHUSD-2020H1", "chk-bch-h1"),
+    ("2020-07-01", "2020-12-31", "ATOMUS-2020H2", "chk-atm-h2"),
+)
+
+
+def _conc_live_history_rows():
+    """Two verified live fills spanning past ``MIN_LIVE_HISTORY_HOURS`` (MKT-07).
+
+    ``MP_LIVE_HISTORY`` reads ``execution_records``, so an eligible strategy in this battery
+    needs live history as well as backtests — otherwise every attempt is refused on that
+    criterion and the create race these tests exist to arbitrate is never reached.
+    """
+    latest = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    earliest = latest - timedelta(
+        hours=_eligibility_gate.MIN_LIVE_HISTORY_HOURS + 1
+    )
+    return [
+        {
+            "execution_id": f"exec-{uuid.uuid4().hex[:12]}",
+            "strategy_id": _CONC_STRATEGY_ID,
+            "tenant_id": _CONC_OWNER_ID,
+            "user_id": _CONC_OWNER_ID,
+            "status": "COMPLETED",
+            "exchange_id": "binance",
+            "is_sandbox": False,  # EXEC-ENV-01: a real-money fill
+            "filled_size": "0.0100",
+            "filled_at": stamp.isoformat(),
+            "submitted_at": stamp.isoformat(),
+            "created_at": stamp.isoformat(),
+        }
+        for stamp in (earliest, latest)
+    ]
+
+
 def _seed_conc_eligible(db):
-    """Seed the saved version + three distinct eligible backtests; return their ids.
+    """Seed the saved version, the required backtests and the live history; return their ids.
 
     Leaves ``marketplace_submissions`` and ``library_strategies`` EMPTY so MP_SUBMISSION_OPEN
     passes for every concurrent attempt — each one is admitted and reaches the create race.
@@ -456,11 +514,11 @@ def _seed_conc_eligible(db):
     )
     db.stores["strategy_versions"].append(_conc_version_row())
     rows = [
-        _conc_backtest_row("2024-01-01", "2024-06-30", "BTCUSD-2024H1", "chk-btc-h1"),
-        _conc_backtest_row("2024-07-01", "2024-12-31", "ETHUSD-2024H2", "chk-eth-h2"),
-        _conc_backtest_row("2023-01-01", "2023-06-30", "SOLUSD-2023H1", "chk-sol-h1"),
+        _conc_backtest_row(*window)
+        for window in _CONC_WINDOWS[: _evidence_validator.MIN_CONDITIONS]
     ]
     db.stores["strategy_backtests"].extend(rows)
+    db.stores.setdefault("execution_records", []).extend(_conc_live_history_rows())
     return [r["id"] for r in rows]
 
 
@@ -573,7 +631,10 @@ class TestConcurrentSubmissionBattery:
         assert returned["submission_state"] == "SUBMITTED"
 
         evidence = db.stores["marketplace_backtest_evidence"]
-        assert len(evidence) == 3, f"expected only the winner's 3 evidence rows, got {len(evidence)}"
+        expected = _evidence_validator.MIN_CONDITIONS
+        assert len(evidence) == expected, (
+            f"expected only the winner's {expected} evidence rows, got {len(evidence)}"
+        )
         assert all(e["submission_id"] == winner_row["id"] for e in evidence)
 
         transitions = db.stores["marketplace_submission_transitions"]
@@ -752,6 +813,28 @@ class _MoneyPathResp:
         self.error = None
 
 
+class _MoneyPathConcurrencyConflict(Exception):
+    """What a real ``RAISE EXCEPTION ... USING ERRCODE = 'MK001'`` surfaces through
+    ``postgrest.exceptions.APIError``'s ``.code`` attribute.
+    """
+
+    def __init__(self, subscription_id: str) -> None:
+        self.code = "MK001"
+        super().__init__(f"subscription {subscription_id} status changed under the caller")
+
+
+class _MoneyPathRpcCall:
+    """One ``.rpc(name, params)`` call. Terminates in ``execute()``."""
+
+    def __init__(self, name: str, params: Dict[str, Any], client: "_MoneyPathSupabase") -> None:
+        self.name = name
+        self.params = params
+        self.client = client
+
+    def execute(self) -> _MoneyPathResp:
+        return self.client._execute_rpc(self.name, self.params)
+
+
 class _MoneyPathQuery:
     """A supabase-py-shaped, recording query builder.
 
@@ -825,6 +908,117 @@ class _MoneyPathSupabase:
 
     def table(self, name: str) -> _MoneyPathQuery:
         return _MoneyPathQuery(name, self)
+
+    def rpc(self, name: str, params: Dict[str, Any]) -> "_MoneyPathRpcCall":
+        """MKT-03: ``settlement_service`` issues one
+        ``.rpc("record_and_transition_settlement", ...)`` call for what used to be a
+        separate ``marketplace_settlements`` INSERT and ``library_subscriptions``
+        UPDATE + ``library_subscription_transitions`` INSERT. This double commits all
+        three to ``self.tables`` only once every sub-step has been checked -- no
+        partial state from one call can ever be observed, matching the real atomic
+        function.
+        """
+        return _MoneyPathRpcCall(name, params, self)
+
+    def _execute_rpc(self, name: str, params: Dict[str, Any]) -> _MoneyPathResp:
+        if name != "record_and_transition_settlement":
+            raise RuntimeError(f"_MoneyPathSupabase.rpc: unexpected function {name!r}")
+        self.ops.append(("rpc", name))
+
+        settlements = self.tables.setdefault("marketplace_settlements", [])
+        pair = (params["p_provider_reference"], bool(params["p_is_reversal"]))
+        existing = None
+        for row in settlements:
+            if (row.get("provider_reference"), bool(row.get("is_reversal"))) == pair:
+                existing = row
+                break
+
+        inserted = False
+        if existing is None:
+            settlement_row = dict(params["p_settlement"])
+            settlement_row["subscription_id"] = params["p_subscription_id"]
+            settlement_row["provider_reference"] = params["p_provider_reference"]
+            settlement_row["is_reversal"] = params["p_is_reversal"]
+            settlement_row.setdefault(
+                "id", f"generated-marketplace_settlements-{len(settlements) + 1}"
+            )
+            inserted = True
+        else:
+            if not params["p_proceed_if_duplicate"]:
+                return _MoneyPathResp(
+                    {"settlement": dict(existing), "inserted": False, "transitioned": False}
+                )
+            settlement_row = existing
+
+        transition = params.get("p_transition")
+        if transition is None:
+            if inserted:
+                self._commit_rpc_settlement_insert(settlement_row)
+            return _MoneyPathResp(
+                {"settlement": dict(settlement_row), "inserted": inserted, "transitioned": False}
+            )
+
+        subscriptions = self.tables.setdefault("library_subscriptions", [])
+        sub = None
+        for row in subscriptions:
+            if str(row.get("id")) == str(params["p_subscription_id"]):
+                sub = row
+                break
+        if sub is None or sub.get("status") != params["p_expected_from_status"]:
+            raise _MoneyPathConcurrencyConflict(params["p_subscription_id"])
+
+        update_payload = {
+            "status": transition["status"],
+            "period_start": transition.get("period_start"),
+            "period_expiry": transition.get("period_expiry"),
+            "cancelled_at": transition.get("cancelled_at"),
+        }
+        history_row = dict(params.get("p_history") or {})
+        history_row["subscription_id"] = params["p_subscription_id"]
+        history_row.setdefault(
+            "id",
+            f"generated-library_subscription_transitions-"
+            f"{len(self.tables.setdefault('library_subscription_transitions', [])) + 1}",
+        )
+
+        # Every sub-step above was checked; commit every staged write now, together.
+        if inserted:
+            self._commit_rpc_settlement_insert(settlement_row)
+        sub.update(update_payload)
+        if update_payload["period_start"] is not None:
+            sub["started_at"] = update_payload["period_start"]
+        if update_payload["period_expiry"] is not None:
+            sub["expires_at"] = update_payload["period_expiry"]
+        update_stmt = _MoneyPathQuery("library_subscriptions", self)
+        update_stmt.op = "update"
+        update_stmt.payload = dict(update_payload)
+        update_stmt.filters = [
+            ("id", params["p_subscription_id"]), ("status", params["p_expected_from_status"])
+        ]
+        self.statements.append(update_stmt)
+        self.ops.append(("update", "library_subscriptions"))
+
+        self.tables["library_subscription_transitions"].append(history_row)
+        insert_stmt = _MoneyPathQuery("library_subscription_transitions", self)
+        insert_stmt.op = "insert"
+        insert_stmt.payload = dict(history_row)
+        self.statements.append(insert_stmt)
+        self.ops.append(("insert", "library_subscription_transitions"))
+
+        return _MoneyPathResp({
+            "settlement": dict(settlement_row),
+            "subscription": dict(sub),
+            "inserted": inserted,
+            "transitioned": True,
+        })
+
+    def _commit_rpc_settlement_insert(self, settlement_row: Dict[str, Any]) -> None:
+        self.tables.setdefault("marketplace_settlements", []).append(settlement_row)
+        stmt = _MoneyPathQuery("marketplace_settlements", self)
+        stmt.op = "insert"
+        stmt.payload = dict(settlement_row)
+        self.statements.append(stmt)
+        self.ops.append(("insert", "marketplace_settlements"))
 
     def note_provider_call(self, provider: str) -> None:
         self.ops.append(("provider", provider))
@@ -931,7 +1125,7 @@ def _renew_subscription_row(*, status: str = "cancelled") -> Dict[str, Any]:
         "owner_id": _RENEW_OWNER_ID,
         "status": status,
         "price_minor": _RENEW_PRICE_MINOR,
-        "currency": "USD",
+        "currency": "INR",
         "owner_share_minor": _RENEW_OWNER_SHARE_MINOR,
         "platform_fee_minor": _RENEW_PLATFORM_FEE_MINOR,
         "provider": "stripe",
@@ -950,7 +1144,7 @@ def _renew_listing_row() -> Dict[str, Any]:
         "name": "Momentum Breakout",
         "author_id": _RENEW_OWNER_ID,
         "price_minor": _RENEW_PRICE_MINOR,
-        "currency": "USD",
+        "currency": "INR",
         "is_active": True,
         "subscriber_count": 7,
         "marketplace_submissions": [{"submission_state": "PUBLISHED"}],
@@ -1121,28 +1315,38 @@ def _renewal_burst(n: int, *, subscription_status: str = "cancelled"):
     return db, factory, before, results
 
 
-def _stripe_renewal_metadata(reference: str = _RENEWAL_REFERENCE) -> Dict[str, Any]:
-    """The metadata a Stripe ``checkout.session.completed`` carries for this renewal.
+def _razorpay_renewal_metadata(reference: str = _RENEWAL_REFERENCE) -> Dict[str, Any]:
+    """The metadata a Razorpay ``payment.captured`` carries for this renewal.
 
-    Built through the REAL ``billing._stripe_settlement_metadata`` from a real-shaped session, so
-    the provider facts Requirement 9.14's guard is made of (reference, amount, currency, instant)
-    are derived the way production derives them rather than hand-written.
+    Built through the REAL ``billing._razorpay_settlement_metadata`` from a real-shaped payment
+    ENTITY, so the provider facts Requirement 9.14's guard is made of (reference, amount,
+    currency, instant) are derived the way production derives them rather than hand-written.
+
+    This was ``_stripe_renewal_metadata``, built the same way from a Stripe
+    ``checkout.session.completed`` through ``_stripe_settlement_metadata``. Driving the fixture
+    through the real production function is exactly why this file broke loudly when that
+    function was deleted, instead of quietly asserting against a hand-written dict that no
+    longer matched anything. The pattern is kept; only the provider changed.
+
+    The entity shape is different, and the differences are the money fields:
+    ``payment["id"]`` not ``session["payment_intent"]``, ``payment["amount"]`` in PAISE not
+    ``session["amount_total"]`` in cents, ``payment["created_at"]`` not ``session["created"]``,
+    and INR rather than USD because INR is the only currency this platform can charge.
     """
-    session = {
-        "id": "cs_renewal_1",
-        "payment_intent": reference,
-        "amount_total": _RENEW_PRICE_MINOR,
-        "currency": "usd",
-        "created": int(_RENEWAL_CONFIRMED_AT.timestamp()),
-        "metadata": {
-            "user_id": _RENEW_PURCHASER_ID,
-            "subscription_id": _RENEW_SUB_ID,
-            "library_id": _RENEW_LISTING_ID,
-            "item_key": _MARKETPLACE_ITEM_KEY,
-            "currency": "USD",
-        },
+    payment = {
+        "id": reference,
+        "amount": _RENEW_PRICE_MINOR,
+        "currency": "INR",
+        "created_at": int(_RENEWAL_CONFIRMED_AT.timestamp()),
     }
-    return _billing_module._stripe_settlement_metadata(session["metadata"], session)
+    notes = {
+        "user_id": _RENEW_PURCHASER_ID,
+        "subscription_id": _RENEW_SUB_ID,
+        "library_id": _RENEW_LISTING_ID,
+        "item_key": _MARKETPLACE_ITEM_KEY,
+        "currency": "INR",
+    }
+    return _billing_module._razorpay_settlement_metadata(notes, payment)
 
 
 def _deliver_confirmations(
@@ -1162,7 +1366,7 @@ def _deliver_confirmations(
     from backend_app.core import audit_trail
 
     recorder = _MoneyPathAuditRecorder()
-    metadata = _stripe_renewal_metadata(reference)
+    metadata = _razorpay_renewal_metadata(reference)
 
     async def _drive():
         return await _asyncio.gather(
@@ -1205,7 +1409,7 @@ class TestConcurrentRenewal:
             assert isinstance(result, dict), f"a renewal raised {result!r}"
             assert result["status"] == "renewal_pending_payment"
             assert result["amount_minor"] == _RENEW_PRICE_MINOR
-            assert result["currency"] == "USD"
+            assert result["currency"] == "INR"
             assert "active" not in str(result.get("status"))
 
         # (1) Not one write statement, against any table.
@@ -1264,7 +1468,7 @@ class TestConcurrentRenewal:
         assert len(factory.contexts) == len(results)
         assert {c.subscription_id for c in factory.contexts} == {_RENEW_SUB_ID}
         assert {c.amount_minor for c in factory.contexts} == {_RENEW_PRICE_MINOR}
-        assert {c.currency for c in factory.contexts} == {"USD"}
+        assert {c.currency for c in factory.contexts} == {"INR"}
         assert all(isinstance(c.amount_minor, int) for c in factory.contexts)
         # And the settlement metadata each session carries back is one object, so no two of them
         # can disagree about which Subscription a payment or a refund belongs to.
@@ -1298,7 +1502,7 @@ class TestConcurrentRenewal:
             row["platform_fee_minor"],
         ) == (_RENEW_PRICE_MINOR, _RENEW_OWNER_SHARE_MINOR, _RENEW_PLATFORM_FEE_MINOR)
         assert row["owner_share_minor"] + row["platform_fee_minor"] == row["amount_minor"]
-        assert row["currency"] == "USD"
+        assert row["currency"] == "INR"
 
         stored = db.subscription()
         assert stored["status"] == "active"
@@ -1398,7 +1602,7 @@ class TestDuplicateWebhookDeliveryBattery:
             row["platform_fee_minor"],
         ) == (_RENEW_PRICE_MINOR, _RENEW_OWNER_SHARE_MINOR, _RENEW_PLATFORM_FEE_MINOR)
         assert row["owner_share_minor"] + row["platform_fee_minor"] == row["amount_minor"]
-        assert row["currency"] == "USD"
+        assert row["currency"] == "INR"
         assert row["subscription_id"] == _RENEW_SUB_ID
 
         # (2) EXACTLY ONE period extension: one UPDATE, one history row, one entitlement grant,
@@ -2136,6 +2340,23 @@ class _FillRacer:
     the index exists to arbitrate. ``busy`` is a re-entrancy guard, not a lock: the competitor
     issues its own ``paper_fills`` INSERT, which would fire this seam again and recurse without
     bound.
+
+    PAPER-05 NOTE. ``apply_fill`` now commits the fill row (and the other six writes) through
+    ONE ``.rpc("paper_apply_fill_atomic", ...)`` call instead of a separate
+    ``.table("paper_fills").insert(...)`` statement, so this seam no longer fires on a real
+    PostgREST request boundary - it fires from INSIDE ``FakeSupabase._execute_rpc``'s own
+    simulation of the fill-insert-or-resume sub-step, at the same relative position (after the
+    duplicate-fill fault check, before ``_defaults``/``_enforce_unique``) the old, separate
+    statement occupied. The battery below still proves the DOUBLE arbitrates this interleaving
+    correctly, which is worth keeping: it is the cheapest, fastest check that a change to
+    ``_execute_rpc`` has not quietly broken the simulation's fidelity to the real function's
+    ordering. It does NOT, on its own, prove the REAL ``paper_apply_fill_atomic`` function
+    holds the lock it claims to hold against a REAL competing connection -
+    ``tests/test_paper05_apply_fill_atomic_postgres.py`` (see in particular
+    ``test_n_concurrent_deliveries_of_the_same_fill_event_id_admit_exactly_one``) is the test
+    that proves that, directly against PostgreSQL with no double in between. Treat the two as
+    complementary, not redundant: this battery regresses the SIMULATION, that file regresses
+    the DATABASE.
     """
 
     __slots__ = ("supabase", "session", "order", "pending", "outcomes", "busy", "released")

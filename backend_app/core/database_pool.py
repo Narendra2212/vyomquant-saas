@@ -39,6 +39,7 @@ import asyncio
 from contextlib import asynccontextmanager, contextmanager
 from typing import Optional, Dict
 from backend_app.core.safety_config import get_vyomquant_mode
+from backend_app.core.runtime_env import deployment_environment, local_state_is_acceptable
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -133,25 +134,83 @@ POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"
 # Global pool monitor instance
 _pool_monitor = ConnectionPoolMonitor()
 
+SQLITE_FALLBACK_URL = "sqlite:///./algo22.db"
+LOCAL_POSTGRES_FALLBACK_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
+
+
+def resolve_database_url(
+    *,
+    env_mode: str,
+    database_url: Optional[str],
+    supabase_db_url: Optional[str],
+    local_allowed: Optional[bool] = None,
+    env_name: Optional[str] = None,
+) -> str:
+    """The URL this process will actually connect with, failing closed on both of
+    CFG-01's silent substitutions.
+
+    Pure (``local_allowed``/``env_name`` default to the real
+    :func:`local_state_is_acceptable`/:func:`deployment_environment`, but a test can
+    inject them without touching the process environment), so the decision for a given
+    set of inputs can be asserted directly rather than by reloading this module under a
+    patched environment.
+
+    Two separate silent substitutions, both closed the same way:
+
+    1. ``database_url`` is empty. The paper/live refusal already existed for the
+       TRADING mode specifically; a process running in "safe" mode (backtests,
+       research) outside a declared local/test environment used to fall back to a
+       SQLite file silently -- every read and write landing in an ephemeral,
+       per-container file no other process or replica shares, with no error anywhere.
+    2. ``database_url`` is a Supabase project URL (``https://...``) -- a
+       misconfiguration, since this is not a Postgres DSN -- and ``SUPABASE_DB_URL``
+       is also unset. This used to fall back to a well-known local superuser DSN
+       (``postgres:postgres@localhost``), silently connecting under a completely
+       different identity to whatever (if anything) is listening there.
+
+    Raises:
+        RuntimeError: either substitution was about to happen outside a declared
+            local/test environment.
+    """
+    allowed = local_state_is_acceptable() if local_allowed is None else local_allowed
+    env = deployment_environment() if env_name is None else env_name
+
+    if not database_url:
+        if env_mode in ("paper", "live"):
+            raise RuntimeError(
+                "DATABASE_URL must be provided in paper/live mode. SQLite fallback disabled."
+            )
+        if not allowed:
+            raise RuntimeError(
+                "DATABASE_URL must be set outside a declared local/test environment "
+                f"(ENV={env or '<unset>'!r}). Refusing to silently substitute a "
+                "SQLite file for the configured database."
+            )
+        database_url = SQLITE_FALLBACK_URL
+
+    if database_url.startswith("https://"):
+        # Supabase URL format: https://project.ref.supabase.co -- not a Postgres DSN.
+        if supabase_db_url:
+            return supabase_db_url
+        if not allowed:
+            raise RuntimeError(
+                "DATABASE_URL was set to a Supabase project URL (https://...) and "
+                "SUPABASE_DB_URL is not set, outside a declared local/test "
+                f"environment (ENV={env or '<unset>'!r}). Refusing to silently "
+                "substitute the default local postgres:postgres@localhost DSN."
+            )
+        return LOCAL_POSTGRES_FALLBACK_URL
+
+    return database_url
+
+
 # Database URL - default to SQLite for development
 _env_mode = get_vyomquant_mode("safe").lower()
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    if _env_mode in ["paper", "live"]:
-        raise RuntimeError("DATABASE_URL must be provided in paper/live mode. SQLite fallback disabled.")
-    DATABASE_URL = "sqlite:///./algo22.db"
-
-# Convert Supabase URL to PostgreSQL if needed
-# Convert Supabase URL to PostgreSQL if needed
-if DATABASE_URL.startswith("https://"):
-    # Supabase URL format: https://project.ref.supabase.co
-    # Convert to PostgreSQL: postgresql://user:pass@host:port/db
-    supabase_key = os.getenv("SUPABASE_KEY", "")
-    # Use Supabase PostgreSQL connection string
-    DATABASE_URL = os.getenv(
-        "SUPABASE_DB_URL",
-        "postgresql://postgres:postgres@localhost:5432/postgres"
-    )
+DATABASE_URL = resolve_database_url(
+    env_mode=_env_mode,
+    database_url=os.getenv("DATABASE_URL"),
+    supabase_db_url=os.getenv("SUPABASE_DB_URL"),
+)
 
 # Priority 3: Database Connection Pooling
 # Enforce connection pooler port (6543) instead of direct connection (5432)

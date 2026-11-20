@@ -115,6 +115,50 @@ ROLLOUT_POLL_INTERVAL_SECONDS = int(os.getenv("ROLLOUT_POLL_INTERVAL_SECONDS", "
 # in-flight deployment (the exact failure mode seen on 2026-09-29).
 PRE_DEPLOY_IDLE_WAIT_SECONDS = int(os.getenv("PRE_DEPLOY_IDLE_WAIT_SECONDS", "600"))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THE DECLARED TASK SIZING, AND WHY IT IS 4096 AND NOT 2048
+# ─────────────────────────────────────────────────────────────────────────────
+# `validate_task_definition` refuses a revision whose sizing is not these values. The gate
+# matters because `register_new_task_definition` bases every new revision on the RUNNING one:
+# a sizing change made outside this pipeline would otherwise propagate into every future
+# deploy silently. That is exactly what happened on 2026-11-18 and it blocked all deploys.
+#
+# MEMORY WAS RAISED 2048 -> 4096 ON EVIDENCE, NOT TO MAKE THE GATE PASS.
+#
+# Revision 351 was registered out of band with 4096, and from then until this change every
+# deploy was refused by this function with "Memory is not 2048, got 4096". The two possible
+# reconciliations are opposite in meaning -- raise the expectation, or put the revision back
+# to 2048 -- so which one is right was measured before either was done.
+#
+# Measured from CloudWatch `AWS/ECS MemoryUtilization` for this service, 36 hours to
+# 2026-11-18T17:00 IST, 431 datapoints at 5-minute resolution:
+#
+#     steady state ON 4096        ~50.6 - 51.5 %   =>  ~2.07 - 2.11 GB resident
+#     PEAK while still ON 2048     91.7 %  (04:33)  =>  ~1.88 GB resident
+#
+# The first line is the decisive one: the container's steady-state working set is **above
+# 2048 MB**. At a 2048 limit it does not fit, which is consistent with the task that came up
+# at 08:47, registered at 08:49, and was failed by the target group's health check at 08:50
+# before being replaced. A process under memory pressure answers a health check late or not
+# at all.
+#
+# Revision 351 differs from 350 in memory and in NOTHING ELSE -- same image
+# (`b44628cdcb9d56f97127dd63636125c896fb8b71`), the same 36 `environment` names, the same 13
+# `secrets` names, the same health check. So it was a deliberate sizing decision rather than a
+# side effect of some other change, and the service has held steady state since.
+#
+# 1024 CPU with 4096 memory is a valid Fargate combination (1 vCPU admits 2-8 GB in 1 GB
+# steps), so no CPU change is implied.
+#
+# WHAT THIS DOES NOT SETTLE, AND SHOULD BE WATCHED. A working set of ~2.1 GB for one API
+# container is large, and raising a limit to accommodate growth nobody has explained is how an
+# environment arrives at 8 GB. The same image used ~1.88 GB at peak on the old limit, so this
+# is not new code -- it is the same code measured against a ceiling it was already pressed
+# against. The size is accepted here because the pipeline must reproduce what runs; the
+# question of why it needs 2 GB is recorded in the session report and is not answered here.
+EXPECTED_TASK_CPU = os.getenv("EXPECTED_TASK_CPU", "1024")
+EXPECTED_TASK_MEMORY = os.getenv("EXPECTED_TASK_MEMORY", "4096")
+
 # Rollout outcome states returned by wait_for_rollout().
 ROLLOUT_COMPLETED = "COMPLETED"    # our deployment reached steady state
 ROLLOUT_FAILED = "FAILED"          # ECS deployment circuit breaker tripped
@@ -184,16 +228,51 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
         container = task_def["containerDefinitions"][0]
 
     env_vars = {env["name"]: env["value"] for env in container.get("environment", [])}
+    secret_names = {secret["name"] for secret in container.get("secrets", [])}
+    secret_sources = {s["name"]: s.get("valueFrom", "") for s in container.get("secrets", [])}
 
-    # Validate REDIS_URL is production ElastiCache, not localhost
-    redis_url = env_vars.get("REDIS_URL", "")
-    expected_redis = "rediss://master.vyomquant-redis-production-cmd.4lf97k.apse1.cache.amazonaws.com:6379"
+    # SEC-18: REDIS_URL MOVED FROM `environment` TO `secrets`, AND THIS CHECK MOVED WITH IT.
+    #
+    # It used to read REDIS_URL out of `environment` and compare it to the literal
+    # production endpoint. That was right while the URL was plaintext. It is wrong now
+    # and would have FAILED EVERY DEPLOY: the ElastiCache replication group now requires
+    # an AUTH token, the token is embedded in the URL, and a token sitting in
+    # `environment` is readable by anything holding ecs:DescribeTaskDefinition -- so the
+    # URL is delivered from Secrets Manager instead and `env_vars.get("REDIS_URL")`
+    # returns "" by design.
+    #
+    # The replacement is a STRONGER check, not a weaker one, because it asserts the two
+    # things that actually matter and the old one could not:
+    #   * the URL arrives from the expected Secrets Manager secret (so the deploy cannot
+    #     silently point at some other secret), and
+    #   * REDIS_URL is ABSENT from `environment` -- a plaintext value reappearing means
+    #     the auth token is back in the task definition, which is the regression this
+    #     whole change exists to prevent.
+    # The endpoint host itself can no longer be asserted from here, deliberately: it is
+    # inside the secret's value, which this script must not read. The secret's identity
+    # is the proxy for its contents.
+    for leaky in ("REDIS_URL", "REDIS_REPLICA_URL"):
+        if leaky in env_vars:
+            return False, (
+                f"CRITICAL: {leaky} is present in plaintext `environment` "
+                f"('{env_vars[leaky][:40]}...'). Since SEC-18 the Redis URL carries the "
+                f"AUTH token and must be delivered via `secrets` from Secrets Manager, "
+                f"not `environment`."
+            )
 
-    if redis_url != expected_redis:
-        return False, f"CRITICAL: REDIS_URL is '{redis_url}', expected '{expected_redis}'"
+    expected_redis_secret = "vyomquant/production/redis_url"
+    if "REDIS_URL" not in secret_names:
+        return False, (
+            "CRITICAL: REDIS_URL is in neither `environment` nor `secrets`. It must be a "
+            f"`secrets` entry sourced from {expected_redis_secret}."
+        )
+    if expected_redis_secret not in secret_sources.get("REDIS_URL", ""):
+        return False, (
+            f"CRITICAL: REDIS_URL is sourced from '{secret_sources.get('REDIS_URL')}', "
+            f"expected a secret named {expected_redis_secret}"
+        )
 
     # Validate secret names are present
-    secret_names = {secret["name"] for secret in container.get("secrets", [])}
     required_secrets = {
         "SUPABASE_SERVICE_ROLE_KEY",
         "SUPABASE_ANON_KEY",
@@ -201,7 +280,10 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
         "DATABASE_URL",
         "MASTER_ENCRYPTION_KEYS",
         "CREDENTIAL_VAULT_SALT",
-        "JWT_SECRET"
+        "JWT_SECRET",
+        # SEC-18: the Redis URL now carries the AUTH token, so it is a credential and
+        # belongs in this list rather than in `environment`.
+        "REDIS_URL",
     }
 
     missing_secrets = required_secrets - secret_names
@@ -213,13 +295,98 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
     if not port_mappings or port_mappings[0].get("containerPort") != 8000:
         return False, "CRITICAL: Container port is not 8000"
 
-    # Validate CPU and memory
-    if task_def.get("cpu") != "1024":
-        return False, f"CRITICAL: CPU is not 1024, got {task_def.get('cpu')}"
-    if task_def.get("memory") != "2048":
-        return False, f"CRITICAL: Memory is not 2048, got {task_def.get('memory')}"
+    # Validate CPU and memory against the declared sizing (see EXPECTED_TASK_* above).
+    if task_def.get("cpu") != EXPECTED_TASK_CPU:
+        return False, (
+            f"CRITICAL: CPU is not {EXPECTED_TASK_CPU}, got {task_def.get('cpu')}"
+        )
+    if task_def.get("memory") != EXPECTED_TASK_MEMORY:
+        return False, (
+            f"CRITICAL: Memory is not {EXPECTED_TASK_MEMORY}, got "
+            f"{task_def.get('memory')}. This gate exists because the deploy bases every "
+            f"new revision on the RUNNING one, so an out-of-band sizing change would "
+            f"otherwise propagate silently. If the running size is deliberately different, "
+            f"change EXPECTED_TASK_MEMORY and say why -- do not widen the comparison."
+        )
 
     return True, "All critical validations passed"
+
+
+
+#: OBS-01: the production Sentry DSN (project vyomquant-api-production). A DSN is a public
+#: ingest address, not a credential -- Sentry's own browser SDKs ship it in page source -- so it
+#: is safe here. The backend only initialises Sentry when SENTRY_DSN is set, and no ECS task
+#: definition ever carried it, so production had sent ZERO events: every unhandled 500 (PAPER-08,
+#: REF-01 among them) went unseen. Overridable from the workflow environment.
+PRODUCTION_SENTRY_DSN = os.environ.get(
+    "SENTRY_DSN",
+    "https://2203dfa56247e8d9bfb52f1b737a384e@o4512372046823424.ingest.us.sentry.io/4512372137197568",
+)
+
+
+def ensure_observability_env(container: dict) -> list:
+    """Give a container SENTRY_DSN / SENTRY_ENVIRONMENT unless it already declares them.
+
+    Never overwrites a value already present (in `environment` OR `secrets`), so an operator's
+    explicit choice survives every deploy. Returns the names it added, for the deploy log.
+    """
+    env = container.setdefault("environment", [])
+    present = {e.get("name") for e in env} | {s.get("name") for s in container.get("secrets", [])}
+    added = []
+    for name, value in (("SENTRY_DSN", PRODUCTION_SENTRY_DSN), ("SENTRY_ENVIRONMENT", "production")):
+        if value and name not in present:
+            env.append({"name": name, "value": value})
+            added.append(name)
+    return added
+
+
+#: LIVE-LAUNCH-01: the live-trading launch policy, applied to the API container on every
+#: deploy. Version-controlled here rather than hand-edited in the ECS console, so a change
+#: to who may trade live, or to whether live bots survive a restart, is a reviewed commit.
+#:
+#: * ``VYOMQUANT_LIVE_TENANT_ALLOWLIST='*'`` - live trading is open to every tenant whose
+#:   PLAN includes it. The per-tenant list was a pre-launch guard; with it, a paying
+#:   customer was refused (``LIVE_TENANT_NOT_ALLOWLISTED``) until an operator edited the
+#:   task definition by hand. The plan entitlement (``Feature.LIVE_TRADING``), a verified
+#:   tradeable exchange key, ``VYOMQUANT_MODE=live`` and ``VYOMQUANT_ENABLE_LIVE_TRADING``
+#:   all still have to hold.
+#: * ``RESUME_LIVE_DEPLOYMENTS='true'`` - a live bot is resumed after a restart instead of
+#:   being marked failed. Without it EVERY deploy, scale-in or task replacement silently
+#:   ended every customer's live bot (observed in production on 2026-11-14: three live
+#:   deployments failed with "not resumed automatically after a restart"). A resumed bot
+#:   rebuilds its position from its own fills, re-measures the balance, re-verifies the key
+#:   and takes the WORK-03 ownership claim, so exactly one process runs it.
+#:
+#: Deliberately NOT here: ``VYOMQUANT_LIVE_SANDBOX_ONLY``. Moving from testnet keys to real
+#: money stays an explicit operator action.
+LIVE_TRADING_POLICY_ENV = {
+    "VYOMQUANT_LIVE_TENANT_ALLOWLIST": "*",
+    "RESUME_LIVE_DEPLOYMENTS": "true",
+}
+
+
+def apply_live_trading_policy_env(container: dict) -> list:
+    """Set :data:`LIVE_TRADING_POLICY_ENV` on a container's ``environment``.
+
+    Unlike :func:`ensure_observability_env` this OVERRIDES an existing plaintext value: the
+    policy is the point, and an old hand-set allowlist is exactly what it replaces. A name
+    supplied through ``secrets`` is left alone (ECS refuses a name in both). Returns
+    ``[(name, old, new), ...]`` for each value it changed, for the deploy log.
+    """
+    env = container.setdefault("environment", [])
+    secret_names = {s.get("name") for s in container.get("secrets", [])}
+    changed = []
+    for name, value in LIVE_TRADING_POLICY_ENV.items():
+        if name in secret_names:
+            continue
+        entry = next((e for e in env if e.get("name") == name), None)
+        if entry is None:
+            env.append({"name": name, "value": value})
+            changed.append((name, None, value))
+        elif entry.get("value") != value:
+            changed.append((name, entry.get("value"), value))
+            entry["value"] = value
+    return changed
 
 
 def register_task_definition(image_uri: str, base_task_def_arn: str = "") -> Tuple[bool, str]:
@@ -259,6 +426,14 @@ def register_task_definition(image_uri: str, base_task_def_arn: str = "") -> Tup
         for container in current_td["containerDefinitions"]:
             if container.get("name") in ("vyomquant-api", "api"):
                 container["image"] = image_uri
+                added = ensure_observability_env(container)
+                if added:
+                    print(f"[ecs_deploy] OBS-01: added {added} to the API container")
+                for name, old, new in apply_live_trading_policy_env(container):
+                    # Values are policy constants, not secrets; the old allowlist is a
+                    # list of tenant ids, so it is reported by length rather than printed.
+                    shown = f"{len(old.split(','))} entr(y/ies)" if old and "ALLOWLIST" in name else old
+                    print(f"[ecs_deploy] LIVE-LAUNCH-01: {name}: {shown!r} -> {new!r}")
                 break
 
     # Step 4: Strip fields not accepted by register-task-definition
@@ -634,12 +809,12 @@ def collect_diagnostics(service_arn: Optional[str] = None) -> Dict:
     return diag
 
 
-def get_current_task_definition_arn() -> str:
-    """Fetch currently running task definition ARN from the ECS service before deployment."""
+def get_service_task_definition_arn(service_name: str) -> str:
+    """Fetch the task definition ARN a given ECS service is currently running."""
     code, stdout, stderr = run_aws_cmd([
         "ecs", "describe-services",
         "--cluster", ECS_CLUSTER,
-        "--services", ECS_SERVICE
+        "--services", service_name
     ])
     if code == 0:
         try:
@@ -648,8 +823,157 @@ def get_current_task_definition_arn() -> str:
             if services:
                 return services[0].get("taskDefinition", "")
         except Exception as e:
-            print(f"[ecs_deploy] Exception parsing describe-services: {e}")
+            print(f"[ecs_deploy] Exception parsing describe-services for {service_name}: {e}")
     return ""
+
+
+def get_current_task_definition_arn() -> str:
+    """Fetch currently running task definition ARN from the ECS service before deployment."""
+    return get_service_task_definition_arn(ECS_SERVICE)
+
+
+#: terraform/ecs.tf's aws_ecs_service.workers (for_each over local.worker_definitions)
+#: names every worker service "vyomquant-worker-<key>-service-<environment>". Matched by
+#: prefix rather than hardcoding the worker keys, so a worker added to that map (as
+#: OPS-TRAIN-01's `training` entry was) is picked up here with no second place to update.
+WORKER_SERVICE_PREFIX = os.getenv("WORKER_SERVICE_PREFIX", "vyomquant-worker-")
+
+#: Long-running services that are also just "the api image with a different command"
+#: but do NOT follow the vyomquant-worker-* naming convention, so the prefix above never
+#: reaches them. Declared because that prefix turned out to be an incomplete description
+#: of what this deploy path has to carry code to, and the gap was SILENT rather than
+#: noisy: measured on the live cluster, `vyomquant-mds-service` was running
+#: vyomquant-api:f39012da while the other six services had already moved to c9d94509.
+#: It fell one further deploy behind on every push to main, because the only thing that
+#: ever rolled it was a hand-run `scripts/deploy_worker_services.py --update-existing`.
+#:
+#: Held as a literal here rather than imported from scripts/deploy_worker_services.py's
+#: SIDECAR_SERVICES, which is the declaration site, because of how this file is RUN:
+#: 03-deploy.yml invokes `python scripts/ecs_deploy_and_diagnose.py`, so sys.path[0] is
+#: scripts/ and the repository root is not importable. `import
+#: scripts.deploy_worker_services` would raise ModuleNotFoundError at deploy time while
+#: passing under pytest, which imports from the root -- a failure that only appears in
+#: production. tests/test_ecs_deploy_rollback.py asserts the two agree instead, so
+#: adding a sidecar to one and not the other fails CI rather than stranding a service.
+SIDECAR_SERVICE_NAMES = ("vyomquant-mds-service",)
+
+
+def list_worker_services() -> List[str]:
+    """Every ECS service in this cluster that this deploy path carries code to.
+
+    That is the services matching the worker naming convention, plus the
+    SIDECAR_SERVICE_NAMES ones which run the same image under a name the convention
+    does not cover. Services that match neither -- the api service itself, which has
+    already deployed itself by the time this runs -- are left alone.
+    """
+    code, stdout, stderr = run_aws_cmd([
+        "ecs", "list-services",
+        "--cluster", ECS_CLUSTER,
+        "--max-items", "100",
+    ])
+    if code != 0:
+        print(f"[ecs_deploy] list-services failed: {stderr.strip()}")
+        return []
+    try:
+        arns = json.loads(stdout).get("serviceArns", [])
+    except Exception as e:
+        print(f"[ecs_deploy] Exception parsing list-services output: {e}")
+        return []
+    names = [arn.rsplit("/", 1)[-1] for arn in arns]
+    return [
+        name for name in names
+        if name.startswith(WORKER_SERVICE_PREFIX) or name in SIDECAR_SERVICE_NAMES
+    ]
+
+
+def register_worker_task_definition(image_uri: str, current_task_def_arn: str) -> Tuple[bool, str]:
+    """Same intent as register_task_definition, for a worker rather than the API.
+
+    Sets the image on every container in the task def rather than matching a container
+    named "vyomquant-api"/"api" -- a worker task definition has exactly one container
+    (named "worker-<key>", per terraform/ecs.tf), so "every container" and "the one
+    matching container" are the same set here, without needing to know that name.
+    Deliberately skips validate_critical_config: it asserts API-shaped configuration
+    (port 8000, cpu=1024, mem=2048, the full API secret set) that does not describe a
+    worker task definition (OPS-TRAIN-01's `training` entry alone is cpu=2048/mem=8192).
+    """
+    success, current_td = get_current_task_definition(current_task_def_arn)
+    if not success:
+        return False, "Failed to fetch current worker task definition from ECS"
+
+    if not current_td.get("containerDefinitions"):
+        return False, "No container definitions found in worker task definition"
+
+    for container in current_td["containerDefinitions"]:
+        container["image"] = image_uri
+        added = ensure_observability_env(container)
+        if added:
+            print(f"[ecs_deploy] OBS-01: added {added} to worker container {container.get('name')}")
+
+    for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
+                'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt']:
+        current_td.pop(key, None)
+
+    family = current_td.get("family", "worker")
+    temp_td_file = f"task-def-rendered-{family}.json"
+    with open(temp_td_file, "w", encoding="utf-8") as f:
+        json.dump(current_td, f, indent=2)
+
+    code, stdout, stderr = run_aws_cmd([
+        "ecs", "register-task-definition",
+        "--cli-input-json", f"file://{temp_td_file}"
+    ])
+    if code != 0:
+        return False, f"Worker task def registration failed: {stderr}"
+
+    parsed = json.loads(stdout)
+    arn = parsed.get("taskDefinition", {}).get("taskDefinitionArn", "")
+    return True, arn
+
+
+def redeploy_workers(image_uri: str) -> Dict[str, bool]:
+    """INF-03: after the API's own forward deploy succeeds, roll every worker ECS
+    service -- and every SIDECAR_SERVICE_NAMES service -- onto the same image.
+
+    terraform/ecs.tf's own comment on local.worker_definitions says "Workers use the
+    backend image" -- but nothing besides that image's mutable `:latest` tag ever
+    carried new code to a running worker (CI-02 stopped 02-build.yml from pushing that
+    tag at all, since nothing else was supposed to depend on it; this closes the
+    dependency it turned out workers had). Best-effort and isolated per worker: one
+    worker failing to redeploy is reported, not raised, so it cannot be mistaken for a
+    failure of the API's own already-confirmed-good deployment, and does not stop the
+    other workers from being attempted.
+    """
+    results: Dict[str, bool] = {}
+    for service_name in list_worker_services():
+        current_arn = get_service_task_definition_arn(service_name)
+        if not current_arn:
+            print(f"[ecs_deploy] Could not read current task definition for {service_name}; skipping")
+            results[service_name] = False
+            continue
+
+        reg_ok, arn_or_err = register_worker_task_definition(image_uri, current_arn)
+        if not reg_ok:
+            print(f"[ecs_deploy] Failed to register new task def for {service_name}: {arn_or_err}")
+            results[service_name] = False
+            continue
+
+        code, stdout, stderr = run_aws_cmd([
+            "ecs", "update-service",
+            "--cluster", ECS_CLUSTER,
+            "--service", service_name,
+            "--task-definition", arn_or_err,
+            "--force-new-deployment",
+        ])
+        if code != 0:
+            print(f"[ecs_deploy] Failed to update service {service_name}: {stderr}")
+            results[service_name] = False
+            continue
+
+        print(f"[ecs_deploy] {service_name} updated to {arn_or_err}")
+        results[service_name] = True
+
+    return results
 
 
 def execute_deployment(image_uri: str) -> bool:
@@ -736,11 +1060,25 @@ def execute_deployment(image_uri: str) -> bool:
     outcome = wait_for_rollout(DEPLOY_WAIT_SECONDS, deployment_id)
     if outcome == ROLLOUT_COMPLETED:
         print("✅ ECS DEPLOYMENT COMPLETED & STABLE!")
+
+        # INF-03: only after the API's own deployment is confirmed stable on this image --
+        # never before, and a worker failure here must not turn this into a non-SUCCESS
+        # outcome for the API, which already proved itself healthy above.
+        worker_results = redeploy_workers(image_uri)
+        if worker_results:
+            failed_workers = [name for name, ok in worker_results.items() if not ok]
+            if failed_workers:
+                print(f"⚠️  Worker redeploy had failures: {failed_workers}")
+            else:
+                print(f"✅ Redeployed {len(worker_results)} worker service(s) onto {image_uri}")
+
         _write_github_step_summary([
             "## ✅ ECS Deployment — SUCCESS",
             f"**New task definition:** `{new_task_def_arn}`",
             f"**Image:** `{image_uri}`",
             f"**Deployment id:** `{deployment_id or 'n/a'}`",
+            f"**Workers redeployed:** `{sum(worker_results.values())}/{len(worker_results)}`"
+            if worker_results else "**Workers redeployed:** none found",
         ])
         return True
 

@@ -26,7 +26,6 @@ export { exchangeApi } from './modules/exchange';
 export { marketApi } from './modules/market';
 export { ordersApi } from './modules/orders';
 export { strategiesApi } from './modules/strategies';
-export { portfolioApi } from './modules/portfolio';
 export { riskApi } from './modules/risk';
 export { billingApi } from './modules/billing';
 export { userApi } from './modules/user';
@@ -37,6 +36,8 @@ export { supportApi } from './modules/support';
 export { paperApi } from './modules/paper';
 export { libraryApi } from './modules/library';
 export { notificationsApi } from './modules/notifications';
+export { legalApi } from './modules/legal';
+export { securityApi } from './modules/security';
 
 // Import all modules for consolidated export
 import { assetsApi } from './modules/assets';
@@ -46,7 +47,6 @@ import { exchangeApi } from './modules/exchange';
 import { marketApi } from './modules/market';
 import { ordersApi } from './modules/orders';
 import { strategiesApi } from './modules/strategies';
-import { portfolioApi } from './modules/portfolio';
 import { riskApi } from './modules/risk';
 import { billingApi } from './modules/billing';
 import { userApi } from './modules/user';
@@ -57,6 +57,8 @@ import { supportApi } from './modules/support';
 import { paperApi } from './modules/paper';
 import { libraryApi } from './modules/library';
 import { notificationsApi } from './modules/notifications';
+import { legalApi } from './modules/legal';
+import { securityApi } from './modules/security';
 
 /**
  * Consolidated API object - single entry point for all API calls
@@ -70,7 +72,6 @@ export const api = {
   market: marketApi,
   orders: ordersApi,
   strategies: strategiesApi,
-  portfolio: portfolioApi,
   paper: paperApi,
   library: libraryApi,
   risk: riskApi,
@@ -81,6 +82,12 @@ export const api = {
   health: healthApi,
   support: supportApi,
   notifications: notificationsApi,
+  // LEGAL-01: records which version of the Terms/Privacy/Risk/Refund documents
+  // a user accepted. The signup checkbox used to be React state that was never
+  // sent anywhere, so the platform could not answer that for any account.
+  legal: legalApi,
+  // SEC-23: lost-2FA-device recovery via backup codes.
+  security: securityApi,
 };
 
 /**

@@ -349,11 +349,11 @@ describe('TopBar: page context', () => {
   });
 
   it('marks only the last crumb as the current page, and links neither', () => {
-    renderTopBar({ pathname: '/app/portfolio' });
+    renderTopBar({ pathname: '/app/trades' });
 
     const current = trail().querySelectorAll('[aria-current="page"]');
     expect(current).toHaveLength(1);
-    expect(current[0].textContent).toBe('Portfolio');
+    expect(current[0].textContent).toBe('Trade History');
     // A group has no route and the current page needs no link to itself (Requirement 19.4).
     expect(within(trail()).queryAllByRole('link')).toHaveLength(0);
   });
@@ -458,13 +458,33 @@ describe('TopBar: the bar holds §6.1’s four regions and nothing else', () => 
     expect(document.querySelector('[href="/app/profile"]')).toBeNull();
   });
 
-  it('has exactly one interactive control while connected: the bell', () => {
+  it('has exactly two interactive controls while connected: the bell and the theme toggle', () => {
     renderTopBar({ status: 'connected' });
 
     const links = within(barRow()).getAllByRole('link');
     expect(links).toHaveLength(1);
     expect(links[0].getAttribute('href')).toBe('/app/notifications');
-    expect(within(barRow()).queryAllByRole('button')).toHaveLength(0);
+
+    // THEME-01 added the second one. This assertion was `toHaveLength(0)`, and
+    // it is widened by exactly one named control rather than relaxed: the count
+    // is still exact, and the button is identified, so a THIRD control arriving
+    // by accident still fails here. That is the property this test exists for —
+    // §6.1 bounds what the bar may hold, and the bar is the one surface every
+    // page shares.
+    const buttons = within(barRow()).getAllByRole('button');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].getAttribute('aria-label')).toMatch(/switch to (dark|light) theme/i);
+  });
+
+  it('names the theme the toggle would switch TO, not the current one', () => {
+    renderTopBar({ status: 'connected' });
+
+    // Dark is the default and is the absence of the attribute, so a bar rendered
+    // without a stored preference offers light. A label naming the CURRENT theme
+    // would leave the control ambiguous: "light" could mean "it is light" or
+    // "make it light", and a screen-reader user has only the name to go on.
+    const button = within(barRow()).getByRole('button');
+    expect(button.getAttribute('aria-label')).toBe('Switch to light theme');
   });
 
   it('has no clock — the wall-clock readout was removed on request', () => {

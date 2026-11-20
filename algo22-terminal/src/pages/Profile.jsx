@@ -302,24 +302,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Activity,
-  AlertCircle,
-  Bell,
+  // `Bell` left with `NotificationSwitch`, whose default icon it was.
   Check,
-  ChevronRight,
+  // `ChevronRight` left with SECLOG-REMOVED-01: it was the *Review All Logs* command's icon.
   Copy,
-  Cpu,
-  CreditCard,
   Edit2,
   Eye,
   EyeOff,
-  Globe,
   Lock,
   Mail,
   RefreshCw,
   Send,
   Shield,
-  TrendingUp,
   UserCheck,
 } from 'lucide-react';
 
@@ -333,7 +327,8 @@ import { StatusBadge } from '../components/ds/StatusBadge';
 import { api } from '../api';
 import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from '../design/pageFields';
 import { available, fromNullable, unavailable } from '../design/reported';
-import { token } from '../design/tokens';
+// PROFILE-REORG-01: `token` left with `NotificationSwitch`, the only inline-styled construct
+// on this page. What remains renders through Tailwind utilities over `styles/tokens.css`.
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -419,39 +414,14 @@ const formatMonthYear = (value) => {
     : parsed.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
 };
 
-/** A renewal date, through the same `toLocaleDateString` call the page has always made. */
-const formatDate = (value) => {
-  if (typeof value !== 'string' || value.trim() === '') return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleDateString();
-};
+/* PROFILE-REORG-01: `formatDate` left with the Subscription & Plan panel — its only caller
+   was that panel's renewal date. `formatMonthYear` stays; Account identity's *Member since*
+   uses it. */
 
 /** A Telegram handle, normalised to exactly one leading `@`. The page's own expression. */
 const formatHandle = (value) =>
   typeof value === 'string' && value.trim() !== '' ? `@${value.trim().replace(/^@/, '')}` : null;
 
-/**
- * The seven notification switch positions, as `NotificationSettingsRequest`'s own field
- * defaults rather than as numbers chosen on this page.
- *
- * `backend_app/core/models/pydantic_models.py:521`–`:536` declares every one of these, and a
- * switch must have a position before the read lands. See the header for the one divergence
- * (`channels.telegram`) and for why these are NOT `pageFields` entries: a control's position
- * and a reported figure are different things.
- */
-const CONTRACT_DEFAULTS = Object.freeze({
-  channels: Object.freeze({ email: true, telegram: false, mobile: false }),
-  events: Object.freeze({
-    trade_executed: true,
-    stop_loss_triggered: true,
-    daily_pnl_summary: true,
-    bot_state_change: false,
-    kill_switch_activated: true,
-    new_login_detected: true,
-    api_key_expiring: true,
-    backtest_complete: false,
-  }),
-});
 
 /** The HTTP status a failed read carried, wherever the client put it. */
 const statusOf = (err) => err?.response?.status ?? err?.status ?? null;
@@ -474,101 +444,6 @@ const writeFailureMessage = (err, fallback) => {
   return fallback;
 };
 
-/**
- * The switch a notification preference is.
- *
- * **`ds/` HAS NO SWITCH PRIMITIVE** and one is not added here — see finding 1 in the header.
- * What this keeps, unchanged from before the migration, is the whole of its accessibility
- * contract: the `switch` role, `aria-checked`, the accessible name, a tab stop, and
- * Enter/Space activation that `preventDefault`s Space. Every colour comes from `token`, and
- * the two literals that were here — `#fff` and a hand-mixed `rgba(0,0,0,0.3)` shadow — are
- * `token.content.primary` and `token.shadow.panel`.
- */
-function NotificationSwitch({ label, description, icon: Icon, checked, onChange }) {
-  return (
-    <div
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      tabIndex={0}
-      onClick={() => onChange(!checked)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
-          // Space scrolls the page by default, which would move the row out from under the
-          // setting just toggled.
-          event.preventDefault();
-          onChange(!checked);
-        }
-      }}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '10px 14px',
-        background: token.surface.raised,
-        // `${token.brand.base}33` was a token with two hex digits concatenated on — a
-        // hand-mixed alpha carrying no `#`, so no guard counted it. `brand.wash` is the
-        // declared value.
-        border: `1px solid ${checked ? token.brand.wash : token.line.default}`,
-        borderRadius: token.radius.lg,
-        cursor: 'pointer',
-        transition: `all ${token.transition.fast}`,
-      }}
-    >
-      <div
-        style={{
-          color: checked ? token.brand.base : token.content.muted,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 32,
-          height: 32,
-          borderRadius: token.radius.md,
-          background: checked ? token.brand.wash : token.surface.inset,
-          transition: `all ${token.transition.fast}`,
-        }}
-      >
-        {Icon ? <Icon size={16} /> : <Bell size={16} />}
-      </div>
-
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {/* fontSize: 12 → --text-title (heading — Q8: it names a region holding an icon, an
-            explanation and a control, so Q4 misses it because a control is not a value). The
-            same resolution task 7.2 gave RiskSettings' identical construct. */}
-        <div className="text-title font-semibold text-content-primary">{label}</div>
-        {/* fontSize: 10 → --text-body (sentence — Q1), +30%. It explains what the
-            notification is, which is the one thing a trader reads before switching it. */}
-        <div className="text-body leading-snug text-content-muted">{description}</div>
-      </div>
-
-      <div
-        style={{
-          width: 38,
-          height: 20,
-          background: checked ? token.brand.base : token.line.default,
-          borderRadius: token.radius.full,
-          position: 'relative',
-          transition: `background ${token.transition.base}`,
-          flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            width: 16,
-            height: 16,
-            background: token.content.primary,
-            borderRadius: token.radius.full,
-            position: 'absolute',
-            top: 2,
-            left: checked ? 20 : 2,
-            transition: `left ${token.transition.base}`,
-            boxShadow: token.shadow.panel,
-          }}
-        />
-      </div>
-    </div>
-  );
-}
 
 export default function Profile() {
   const navigate = useNavigate();
@@ -582,7 +457,6 @@ export default function Profile() {
   });
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState(null);
-  const [notifNotice, setNotifNotice] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
   const [showAccountId, setShowAccountId] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
@@ -591,7 +465,6 @@ export default function Profile() {
   // the response rather than written into it — the same effect, without a second source of
   // truth for what the server said.
   const [profileEdits, setProfileEdits] = useState(null);
-  const [notifOverride, setNotifOverride] = useState(null);
 
   // ── The six reads (Requirement 4.1) ───────────────────────────────────────
   //
@@ -599,23 +472,18 @@ export default function Profile() {
   // Same six paths, same `limit=20`, no parameter added or changed.
   const readProfile = useCallback(() => api.user.getProfile(), []);
   const readBilling = useCallback(() => api.user.getBillingPlan(), []);
-  const readStats = useCallback(() => api.user.getStats(), []);
   const readSecurity = useCallback(() => api.user.getSecurityLogs(20), []);
-  const readNotif = useCallback(() => api.user.getNotificationSettings(), []);
   const readReferral = useCallback(() => api.referral.getStats(), []);
 
   const profile = usePanelState(readProfile, { deps: [] });
   const billing = usePanelState(readBilling, { deps: [] });
-  const stats = usePanelState(readStats, { deps: [] });
   const security = usePanelState(readSecurity, { deps: [] });
-  const notif = usePanelState(readNotif, { deps: [] });
   const referral = usePanelState(readReferral, { deps: [] });
 
   // The envelope both shapes the old code accepted: `res.data ?? res`. Kept, because the
   // shape a deployment answers with is not this commit's question.
   const rawProfile = profile.data?.data ?? profile.data;
   const billingBody = billing.data?.data ?? billing.data;
-  const statsBody = stats.data?.data ?? stats.data;
   const referralBody = referral.data?.data ?? referral.data;
 
   /** The server's profile with any field this session has already saved layered over it. */
@@ -624,8 +492,6 @@ export default function Profile() {
     return profileEdits === null ? rawProfile : { ...rawProfile, ...profileEdits };
   }, [rawProfile, profileEdits]);
 
-  /** The stored notification settings, or the position this session has just written. */
-  const notifBody = notifOverride ?? (notif.data?.data ?? notif.data);
 
   /*
    * The profile read seeds the EDITOR. An effect rather than a render-time derivation because
@@ -675,70 +541,6 @@ export default function Profile() {
     }
   };
 
-  /**
-   * One notification preference, written immediately.
-   *
-   * The payload is built by **exactly the expression this page has always used** — both `??`
-   * chains, both boolean coercions, the same eight event keys and the same three channels —
-   * because `routers/user.py:139` validates it against `NotificationSettingsRequest` and its
-   * shape is a contract. The only change is where the pre-toggle state comes from: the stored
-   * settings, or `CONTRACT_DEFAULTS`, which is that same model's field defaults.
-   */
-  const handleNotificationSettingChange = async (targetGroup, key, value) => {
-    const previousOverride = notifOverride;
-    const currentChannels = notifBody?.channels || CONTRACT_DEFAULTS.channels;
-    const currentEvents = notifBody?.events || CONTRACT_DEFAULTS.events;
-
-    const updatedChannels = {
-      email:
-        typeof currentChannels.email === 'boolean'
-          ? currentChannels.email
-          : Boolean(currentChannels.email?.active ?? true),
-      telegram:
-        typeof currentChannels.telegram === 'boolean'
-          ? currentChannels.telegram
-          : Boolean(currentChannels.telegram?.active ?? false),
-      mobile:
-        typeof currentChannels.mobile === 'boolean'
-          ? currentChannels.mobile
-          : Boolean(currentChannels.mobile?.active ?? false),
-      ...(targetGroup === 'channels' ? { [key]: Boolean(value) } : {}),
-    };
-
-    const updatedEvents = {
-      trade_executed: Boolean(currentEvents.trade_executed ?? currentEvents.trade ?? true),
-      stop_loss_triggered: Boolean(currentEvents.stop_loss_triggered ?? true),
-      daily_pnl_summary: Boolean(currentEvents.daily_pnl_summary ?? true),
-      bot_state_change: Boolean(currentEvents.bot_state_change ?? currentEvents.bot ?? false),
-      kill_switch_activated: Boolean(
-        currentEvents.kill_switch_activated ?? currentEvents.margin ?? true,
-      ),
-      new_login_detected: Boolean(currentEvents.new_login_detected ?? currentEvents.login ?? true),
-      api_key_expiring: Boolean(currentEvents.api_key_expiring ?? true),
-      backtest_complete: Boolean(currentEvents.backtest_complete ?? false),
-      ...(targetGroup === 'events' ? { [key]: Boolean(value) } : {}),
-    };
-
-    const payload = { channels: updatedChannels, events: updatedEvents };
-
-    try {
-      setNotifNotice(null);
-      setNotifOverride(payload);
-      await api.user.updateNotificationSettings(payload);
-    } catch (err) {
-      // Revert to the previous authoritative state, exactly as before — and then SAY SO. The
-      // previous version's entire failure handling was one `console.error`, so a switch that
-      // silently sprang back was the only signal a trader got (Requirement 11.3).
-      setNotifOverride(previousOverride);
-      setNotifNotice({
-        severity: 'error',
-        message: writeFailureMessage(
-          err,
-          'That preference could not be saved. It has been put back.',
-        ),
-      });
-    }
-  };
 
   const copyToClipboard = (text, keyName) => {
     if (!text) return;
@@ -760,10 +562,15 @@ export default function Profile() {
     setRetryCount((previous) => previous + 1);
     profile.refetch();
     billing.refetch();
-    stats.refetch();
     security.refetch();
-    notif.refetch();
     referral.refetch();
+    /*
+      PROFILE-REORG-01: `stats` and `notif` left with their panels. The notification
+      preferences own their own retry now, inside `NotificationPreferences`.
+
+      `billing` STAYS even though the Subscription & Plan panel is gone: Account identity's
+      plan tier chip reads `planName` off this response, and that panel is one Task 13 keeps.
+    */
   };
 
   // ── The declared figures (Requirement 4.2) ────────────────────────────────
@@ -811,19 +618,7 @@ export default function Profile() {
   );
 
   const planName = reported(billingBody, FIELD.planName);
-  const subscriptionStatus = reported(billingBody, FIELD.subscriptionStatus);
-  const renewalDate = fromNullable(
-    formatDate(read(billingBody, FIELD.renewalDate.path)),
-    FIELD.renewalDate.reason,
-  );
 
-  /** A LIST, so no `Reported` — `isReadableValue` refuses arrays and a figure is a scalar. */
-  const planFeatures = Array.isArray(billingBody?.features) ? billingBody.features : [];
-
-  const platformBots = reported(statsBody, FIELD.platformActiveBotCount);
-  const platformStrategies = reported(statsBody, FIELD.platformStrategyCount);
-  const platformTrades = reported(statsBody, FIELD.platformTradeCount);
-  const platformPnl = reported(statsBody, FIELD.platformTodayPnl);
 
   const referralCode = reported(referralBody, FIELD.referralCode);
   const referralLink = reported(referralBody, FIELD.referralLink);
@@ -863,45 +658,14 @@ export default function Profile() {
   const profileState = profile.state;
   const profileFailed =
     profileState === PANEL_STATES.ERROR || profileState === PANEL_STATES.UNAUTHORISED;
-  const anyLoading = [profile, billing, stats, security, notif, referral].some(
+  // PROFILE-REORG-01: four reads, not six. `stats` and `notif` left with their panels.
+  const anyLoading = [profile, billing, security, referral].some(
     (panel) => panel.state === PANEL_STATES.LOADING || panel.state === PANEL_STATES.REFRESHING,
   );
 
-  /*
-   * `empty` resolves to `ready` on these two, on purpose, and for two different reasons.
-   *
-   * NOTIFICATIONS: `GET /api/notifications/settings` answers `{}` for an account with no
-   * stored row, so `isEmptyPayload` reports `empty` — and an empty panel would remove the only
-   * place the preferences can be SET (Requirement 16.2). The switches render at
-   * `NotificationSettingsRequest`'s own defaults, which is what the server would apply.
-   *
-   * ACCESS: an account with no audit rows still has a panel — the last-access tile renders its
-   * declared markers, and the trail states its own emptiness inline below, which keeps `empty`
-   * distinguishable from `error` (Requirement 19.4) without taking the *Review All Logs*
-   * control off the screen.
-   */
-  const notifState = notif.state === PANEL_STATES.EMPTY ? PANEL_STATES.READY : notif.state;
   const accessState = security.state === PANEL_STATES.EMPTY ? PANEL_STATES.READY : security.state;
   const accessIsEmpty = security.state === PANEL_STATES.EMPTY;
 
-  /** The stored position of one switch, or the contract default. */
-  const eventOn = (key, ...aliases) => {
-    const events = notifBody?.events;
-    if (events && typeof events === 'object') {
-      for (const name of [key, ...aliases]) {
-        if (typeof events[name] === 'boolean') return events[name];
-      }
-    }
-    return CONTRACT_DEFAULTS.events[key];
-  };
-
-  /** The email channel, which the server has been seen to answer as a boolean or an object. */
-  const emailChannelOn = (() => {
-    const channel = notifBody?.channels?.email;
-    if (typeof channel === 'boolean') return channel;
-    if (channel && typeof channel === 'object') return Boolean(channel.active ?? true);
-    return CONTRACT_DEFAULTS.channels.email;
-  })();
 
   /*
    * Every recovery control the old error screen offered, in the identity panel's header —
@@ -1312,6 +1076,14 @@ export default function Profile() {
             </div>
           </Panel>
 
+          {/* SECLOG-REMOVED-01 (2026-11-15): this panel takes NO `actions`. A *Review All
+              Logs* ghost command stood there and navigated to `/app/security-logs`, a route
+              that no longer exists — it would now fall through the `/app/*` catch-all to the
+              dashboard, which is a worse answer than not offering the control at all.
+
+              The panel itself is UNCHANGED and still reads `api.user.getSecurityLogs(20)`.
+              Withdrawing the full-page view does not withdraw this account's own
+              recent-access reporting, and the backend events behind it are still written. */}
           <Panel
             title="Recent access"
             state={accessState}
@@ -1325,15 +1097,6 @@ export default function Profile() {
             error={{ error: security.error, onRetry: security.refetch }}
             unavailable={{ reason: 'Your access events cannot be read right now.' }}
             unauthorised={{ error: security.error }}
-            actions={
-              <CommandButton
-                intent="ghost"
-                icon={ChevronRight}
-                onClick={() => navigate('/app/security-logs')}
-              >
-                Review All Logs
-              </CommandButton>
-            }
           >
             <div className="flex flex-col gap-3">
               <div className="rounded-lg border border-line-default bg-surface-raised px-3 py-2.5">
@@ -1417,342 +1180,11 @@ export default function Profile() {
             </div>
           </Panel>
 
-          <Panel
-            title="Platform-wide statistics"
-            state={stats.state}
-            loading={{
-              kind: 'skeleton-metric',
-              rows: 1,
-              columns: 4,
-              label: 'Loading the platform statistics',
-            }}
-            empty={{
-              headline: 'No platform statistics were reported',
-              body: 'The statistics endpoint answered without any figures. Your own fleet and '
-                + 'its results are on the dashboard and the strategies page.',
-              action: { label: 'Read again', onClick: stats.refetch },
-            }}
-            error={{ error: stats.error, onRetry: stats.refetch }}
-            unavailable={{ reason: 'The platform statistics cannot be read right now.' }}
-            unauthorised={{ error: stats.error }}
-            actions={
-              <>
-                <CommandButton
-                  intent="secondary"
-                  icon={Globe}
-                  onClick={() => navigate('/app/exchange')}
-                >
-                  Manage Exchanges
-                </CommandButton>
-                <CommandButton
-                  intent="secondary"
-                  icon={Activity}
-                  onClick={() => navigate('/app/strategies')}
-                >
-                  Manage Strategies
-                </CommandButton>
-              </>
-            }
-          >
-            {/*
-              * fontSize: 9 → --text-body (sentence — Q1), +44%. THIS PANEL WAS TITLED
-              * *Automation Account Context* AND REPORTED THE PLATFORM. Stating the basis once
-              * on the panel is `RiskSettings.jsx`'s `LIMITS_BASIS` pattern: it belongs to the
-              * read, not to each figure, and a sentence per tile would be four copies of one
-              * fact.
-              */}
-            <p className="mb-3 text-body text-content-secondary">
-              These four figures come from the platform-wide statistics endpoint, which reports
-              across all accounts rather than yours. Your own deployments are on the strategies
-              page and your own results are on the dashboard.
-            </p>
-            <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
-              {/* fontSize: 10 ×4 (the labels) and 18, 16, 9, 9 (the figures and their
-                  sub-lines) all leave with their call site onto `ds/Metric`, which renders the
-                  label at --text-micro and the figure at its tier step — and renders every
-                  numeric format in `font-mono tabular-nums`, so the monospace treatment on
-                  the two figures survives without a declaration here. Every `|| 0` is gone:
-                  a genuine `0` is a reading and still renders `0`. */}
-              <Metric
-                label={FIELD.platformActiveBotCount.label}
-                value={platformBots}
-                format="integer"
-                tier={2}
-              />
-              <Metric
-                label={FIELD.platformStrategyCount.label}
-                value={platformStrategies}
-                format="integer"
-                tier={2}
-              />
-              <Metric
-                label={FIELD.platformTradeCount.label}
-                value={platformTrades}
-                format="integer"
-                tier={2}
-              />
-              {/*
-                * `unit="USD"` rather than a `$` prefix, and NO profit/loss hue. The hue is
-                * dropped deliberately: the figure is not the trader's P&L, so colouring it
-                * green would frame the platform's day as the account's. `ds/PnLDisplay` is
-                * the primitive for a real P&L and is not reached from this page.
-                */}
-              <Metric
-                label={FIELD.platformTodayPnl.label}
-                value={platformPnl}
-                format="currency"
-                precision={2}
-                unit="USD"
-                tier={2}
-                hint={FIELD.platformTodayPnl.tooltip}
-              />
-            </div>
-            <div className="mt-2 rounded-lg border border-line-default bg-surface-raised px-3 py-2.5">
-              {/* fontSize: 10 → --text-micro (label — Q4). */}
-              <p className="text-micro uppercase tracking-wide text-content-muted">
-                {FIELD.tradingEnvironment.label}
-              </p>
-              {/* fontSize: 11 → --text-body (value — Q7). Was the literal *Live + Paper* with
-                  a green *Isolated* beneath it — two claims, neither of them read. */}
-              <p className="mt-1 text-body">
-                <Marker field={FIELD.tradingEnvironment} />
-              </p>
-            </div>
-          </Panel>
         </div>
 
         {/* ══ COLUMN 2: subscription, notifications, referral ════════════════ */}
         <div className="flex min-w-0 flex-col gap-4">
-          <Panel
-            title="Subscription & Plan"
-            state={billing.state}
-            loading={{ kind: 'skeleton-metric', rows: 1, columns: 2, label: 'Loading your plan' }}
-            empty={{
-              headline: 'No plan is recorded',
-              body: 'Billing answered without a plan for this account. Manage subscription is '
-                + 'where a plan is chosen.',
-              action: { label: 'Read again', onClick: billing.refetch },
-            }}
-            error={{ error: billing.error, onRetry: billing.refetch }}
-            unavailable={{ reason: 'Your plan cannot be read right now.' }}
-            unauthorised={{ error: billing.error }}
-            actions={
-              <CommandButton
-                intent="secondary"
-                icon={CreditCard}
-                onClick={() => navigate('/app/billing')}
-              >
-                Manage Subscription
-              </CommandButton>
-            }
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line-default bg-surface-raised px-4 py-3">
-              <div className="min-w-0">
-                {/* fontSize: 10 → --text-micro (label — Q4). */}
-                <p className="text-micro uppercase tracking-wide text-content-muted">
-                  {FIELD.planName.label}
-                </p>
-                {/* fontSize: 16 → --text-section (value — Q7, this panel's hero; 16 ties
-                    between --text-title and --text-section and §2.2 resolves a tie up). */}
-                {planName.available ? (
-                  <p className="text-section font-bold text-content-primary">
-                    {planLabel(planName.value)}
-                  </p>
-                ) : (
-                  <Marker field={FIELD.planName} reason={planName.reason} />
-                )}
-              </div>
-              <div className="min-w-0 text-right">
-                {/* fontSize: 10 → --text-micro (label — Q4). */}
-                <p className="text-micro uppercase tracking-wide text-content-muted">
-                  {FIELD.subscriptionStatus.label}
-                </p>
-                {/* fontSize: 12 → `ds/StatusBadge`'s own step, and the hue comes from
-                    `statusToken` rather than from a hand-picked green (Requirement 5.3). THE
-                    STATUS IS NOW THE SERVER'S, VERBATIM: the `|| autoRenew || plan !== "free"`
-                    chain that reported Active for any paid plan is gone. */}
-                <p className="mt-1 flex justify-end">
-                  {subscriptionStatus.available ? (
-                    <StatusBadge state={String(subscriptionStatus.value)} dot />
-                  ) : (
-                    <Marker field={FIELD.subscriptionStatus} reason={subscriptionStatus.reason} />
-                  )}
-                </p>
-              </div>
-            </div>
 
-            {/* fontSize: 11 → --text-body (sentence — Q1). *Standard 30-day Cycle* is gone; a
-                renewal date is either recorded against the account or it is not. */}
-            <p className="mt-2.5 flex flex-wrap items-center gap-1.5 text-body text-content-muted">
-              <span>{`${FIELD.renewalDate.label}:`}</span>
-              {renewalDate.available ? (
-                <span className="text-content-primary">{renewalDate.value}</span>
-              ) : (
-                <Marker field={FIELD.renewalDate} reason={renewalDate.reason} />
-              )}
-            </p>
-
-            {planFeatures.length > 0 ? (
-              <div className="mt-2.5 border-t border-line-default pt-2.5">
-                {/* fontSize: 10 → --text-micro (label — Q4). */}
-                <p className="mb-2 text-micro uppercase tracking-wide text-content-muted">
-                  Included capabilities
-                </p>
-                <ul className="flex flex-wrap gap-1.5">
-                  {planFeatures.map((feature) => (
-                    /* fontSize: 10 → --text-micro (chip — Q5). A LIST, so no `Reported`:
-                       `isReadableValue` refuses arrays, and the absence of the chips is
-                       visible as the absence of the chips. */
-                    <li
-                      key={String(feature)}
-                      className="inline-flex items-center gap-1 rounded-sm border border-line-default bg-surface-inset px-2 py-0.5 text-micro text-content-secondary"
-                    >
-                      <Check size={10} aria-hidden="true" />
-                      {String(feature)}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </Panel>
-
-          <Panel
-            title="Notification Preferences"
-            state={notifState}
-            loading={{
-              kind: 'skeleton-cards',
-              rows: 7,
-              label: 'Loading your notification preferences',
-            }}
-            empty={{
-              headline: 'No notification preferences are stored',
-              body: 'Switching any preference below stores the full set against your account.',
-              action: { label: 'Read again', onClick: notif.refetch },
-            }}
-            error={{ error: notif.error, onRetry: notif.refetch }}
-            unavailable={{ reason: 'Your notification preferences cannot be read right now.' }}
-            unauthorised={{ error: notif.error }}
-          >
-            {/* fontSize: 10 → --text-body (sentence — Q1), +30%. */}
-            <p className="mb-3 text-body text-content-muted">
-              Notification Dispatch Preferences: trade execution, risk trigger, and account
-              security alert dispatches
-            </p>
-
-            {notifNotice ? (
-              <Alert
-                severity={notifNotice.severity}
-                title={notifNotice.message}
-                onDismiss={() => setNotifNotice(null)}
-                dismissLabel="Dismiss this message"
-                className="mb-3"
-              />
-            ) : null}
-
-            <div className="flex flex-col gap-3.5">
-              <div>
-                {/* fontSize: 10 → --text-micro (label — Q4). */}
-                <p className="mb-1.5 text-micro font-bold uppercase tracking-wide text-brand">
-                  Trading executions
-                </p>
-                <div className="flex flex-col gap-1.5">
-                  <NotificationSwitch
-                    label="Trade Executions"
-                    description="Real-time order fill alerts and position entries"
-                    icon={TrendingUp}
-                    checked={eventOn('trade_executed', 'trade')}
-                    onChange={(checked) =>
-                      handleNotificationSettingChange('events', 'trade_executed', checked)
-                    }
-                  />
-                  <NotificationSwitch
-                    label="Daily PnL Summaries"
-                    description="Daily performance and closed trade balance recap"
-                    icon={Activity}
-                    checked={eventOn('daily_pnl_summary')}
-                    onChange={(checked) =>
-                      handleNotificationSettingChange('events', 'daily_pnl_summary', checked)
-                    }
-                  />
-                </div>
-              </div>
-
-              <div>
-                {/* fontSize: 10 → --text-micro (label — Q4). The hue is READ from
-                    `token.status.loss.fg` rather than written; it was already a token. */}
-                <p
-                  className="mb-1.5 text-micro font-bold uppercase tracking-wide"
-                  style={{ color: token.status.loss.fg }}
-                >
-                  Risk &amp; circuit breakers
-                </p>
-                <div className="flex flex-col gap-1.5">
-                  <NotificationSwitch
-                    label="Stop Loss & Margin Alerts"
-                    description="Stop loss execution and drawdown limit notifications"
-                    icon={AlertCircle}
-                    checked={eventOn('stop_loss_triggered')}
-                    onChange={(checked) =>
-                      handleNotificationSettingChange('events', 'stop_loss_triggered', checked)
-                    }
-                  />
-                  <NotificationSwitch
-                    label="Emergency Kill Switch & Liquidations"
-                    description="Venue liquidation proximity and emergency halt activations"
-                    icon={Shield}
-                    checked={eventOn('kill_switch_activated', 'margin')}
-                    onChange={(checked) =>
-                      handleNotificationSettingChange('events', 'kill_switch_activated', checked)
-                    }
-                  />
-                </div>
-              </div>
-
-              <div>
-                {/* fontSize: 10 → --text-micro (label — Q4). */}
-                <p className="mb-1.5 text-micro font-bold uppercase tracking-wide text-content-secondary">
-                  Automation &amp; security
-                </p>
-                <div className="flex flex-col gap-1.5">
-                  <NotificationSwitch
-                    label="Email Notifications"
-                    description="Receive verified critical alerts to your primary email address"
-                    icon={Mail}
-                    checked={emailChannelOn}
-                    onChange={(checked) =>
-                      handleNotificationSettingChange('channels', 'email', checked)
-                    }
-                  />
-                  <NotificationSwitch
-                    label="Bot Lifecycle State Changes"
-                    description="Strategy start, pause, runtime errors, and halts"
-                    icon={Cpu}
-                    checked={eventOn('bot_state_change', 'bot')}
-                    onChange={(checked) =>
-                      handleNotificationSettingChange('events', 'bot_state_change', checked)
-                    }
-                  />
-                  <NotificationSwitch
-                    label="Security & Login Events"
-                    description="New login detections and authentication state alterations"
-                    icon={Lock}
-                    checked={eventOn('new_login_detected', 'login')}
-                    onChange={(checked) =>
-                      handleNotificationSettingChange('events', 'new_login_detected', checked)
-                    }
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* fontSize: 10 → --text-body (sentence — Q1), +30%. This is a statement about
-                what the platform will do whatever the switches say, which makes it the one
-                sentence in the panel that must not be the smallest text in it. */}
-            <p className="mt-3 flex items-start gap-1.5 text-body text-content-muted">
-              <Lock size={12} aria-hidden="true" className="mt-0.5 shrink-0" />
-              <span>Mandatory risk alerts (global kill switch triggers) cannot be disabled.</span>
-            </p>
-          </Panel>
 
           <Panel
             title="Affiliate & Referral Program"

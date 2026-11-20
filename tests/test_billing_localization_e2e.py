@@ -34,7 +34,6 @@ from backend_app.core.fx_service import (
     BASELINE_FX_RATES,
     CURRENCY_DECIMALS,
     CURRENCY_SYMBOLS,
-    STRIPE_SUPPORTED_CHECKOUT_CURRENCIES,
     RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES,
 )
 from backend_app.core.pricing_service import PricingService
@@ -67,8 +66,14 @@ def make_mock_request(client_ip: str, headers: dict = None) -> Request:
 class TestIPGeolocationAndProxyHeaders:
     """Audit Section 1: Real Server-Side IP Extraction & Multi-Tier Resolution."""
 
-    def test_x_forwarded_for_leftmost_public_ip(self):
-        """ALB/ECS proxy chain: leftmost non-private IP is extracted as original client."""
+    def test_x_forwarded_for_leftmost_public_ip(self, monkeypatch):
+        """ALB/ECS proxy chain: leftmost non-private IP is extracted as original client.
+
+        GEO-01: this proxy header is only honoured once an operator has confirmed a
+        real trusted chain exists (TRUSTED_PROXY_HOPS) -- see
+        TestEdgeHeadersUntrustedByDefault below for the unconfigured case.
+        """
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"X-Forwarded-For": "103.21.124.1, 10.0.1.5, 172.16.0.2"}
@@ -78,8 +83,9 @@ class TestIPGeolocationAndProxyHeaders:
         country = CountryDetector.detect_country_from_ip(client_ip, req)
         assert country == "IN"
 
-    def test_cf_connecting_ip_precedence(self):
-        """Cloudflare CF-Connecting-IP takes precedence over socket IP."""
+    def test_cf_connecting_ip_precedence(self, monkeypatch):
+        """Cloudflare CF-Connecting-IP takes precedence over socket IP, once trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"CF-Connecting-IP": "51.140.0.1"}
@@ -89,8 +95,9 @@ class TestIPGeolocationAndProxyHeaders:
         country = CountryDetector.detect_country_from_ip(client_ip, req)
         assert country == "GB"
 
-    def test_true_client_ip_akamai(self):
-        """Akamai True-Client-IP is recognized."""
+    def test_true_client_ip_akamai(self, monkeypatch):
+        """Akamai True-Client-IP is recognized, once trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"True-Client-IP": "13.112.0.1"}
@@ -100,8 +107,9 @@ class TestIPGeolocationAndProxyHeaders:
         country = CountryDetector.detect_country_from_ip(client_ip, req)
         assert country == "JP"
 
-    def test_cloudfront_viewer_country_edge_header(self):
-        """AWS CloudFront edge GeoIP header is respected when present."""
+    def test_cloudfront_viewer_country_edge_header(self, monkeypatch):
+        """AWS CloudFront edge GeoIP header is respected when present and trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"CloudFront-Viewer-Country": "DE"}
@@ -111,8 +119,9 @@ class TestIPGeolocationAndProxyHeaders:
         assert country == "DE"
         assert CountryDetector.get_country_currency(country) == "EUR"
 
-    def test_cf_ipcountry_edge_header(self):
-        """Cloudflare edge GeoIP header is respected when present."""
+    def test_cf_ipcountry_edge_header(self, monkeypatch):
+        """Cloudflare edge GeoIP header is respected when present and trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"CF-IPCountry": "FR"}
@@ -145,6 +154,62 @@ class TestIPGeolocationAndProxyHeaders:
             country = CountryDetector.detect_country_from_ip(client_ip, req)
             assert country == "US"
             assert CountryDetector.get_country_currency(country) == "USD"
+
+
+class TestEdgeHeadersUntrustedByDefault:
+    """GEO-01: every proxy/CDN header this module reads is attacker-controllable the
+    moment a caller reaches this process directly instead of through the CDN that is
+    supposed to set it -- the same problem SEC-10's TRUSTED_PROXY_HOPS already solved for
+    rate-limit keys. With TRUSTED_PROXY_HOPS unset (the fail-safe default, and this
+    sandbox's default), none of these headers may change the detected IP or country:
+    only the direct socket peer and, downstream of it, the deterministic US/USD fallback
+    may.
+    """
+
+    def test_x_forwarded_for_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request(
+            "10.0.0.1",
+            headers={"X-Forwarded-For": "103.21.124.1, 10.0.1.5, 172.16.0.2"}
+        )
+        # The socket peer itself is private here (as it always is behind a real ALB), so
+        # this must fall all the way to the US/USD default -- NOT the India address an
+        # attacker put in the header.
+        assert CountryDetector.extract_client_ip(req) == "10.0.0.1"
+
+    def test_cf_connecting_ip_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"CF-Connecting-IP": "51.140.0.1"})
+        assert CountryDetector.extract_client_ip(req) == "10.0.0.1"
+
+    def test_true_client_ip_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"True-Client-IP": "13.112.0.1"})
+        assert CountryDetector.extract_client_ip(req) == "10.0.0.1"
+
+    def test_cloudfront_viewer_country_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        """The attack this finding names: spoof the edge country header directly against
+        the origin to get a cheaper region's price list without even touching the
+        existing, legitimate manual currency-override path."""
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"CloudFront-Viewer-Country": "DE"})
+        assert CountryDetector.detect_country_from_headers(req) is None
+        client_ip = CountryDetector.extract_client_ip(req)
+        country = CountryDetector.detect_country_from_ip(client_ip, req)
+        assert country == "US"
+        assert CountryDetector.get_country_currency(country) == "USD"
+
+    def test_cf_ipcountry_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"CF-IPCountry": "FR"})
+        assert CountryDetector.detect_country_from_headers(req) is None
+
+    def test_edge_headers_trusted_once_an_operator_configures_the_hop_count(self, monkeypatch):
+        """Negative control: this is a default, not a removal -- the same header works
+        the moment TRUSTED_PROXY_HOPS reflects this deployment's real topology."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
+        req = make_mock_request("10.0.0.1", headers={"CloudFront-Viewer-Country": "DE"})
+        assert CountryDetector.detect_country_from_headers(req) == "DE"
 
 
 # ── 2. All 240+ Country Coverage Matrix ───────────────────────────────────────
@@ -308,14 +373,16 @@ class TestCheckoutSecurity:
             pro_plan.pricing, "USD", PRICE_BASE_CURRENCY
         )
         assert localized.price_source == "fx"
-        assert localized.checkout_provider == "stripe"
-        assert localized.checkout_currency == "USD"
-        # The charge is the quote. These being the same field is what stops a page advertising one
-        # figure and a gateway taking another.
-        assert localized.checkout_amount_minor == localized.minor_units
+        # Razorpay is the only gateway and INR the only chargeable currency, so a USD
+        # request is DISPLAYED in USD and CHARGED in INR. `minor_units` below is still the
+        # USD display figure; `checkout_currency` is what the gateway will actually take.
+        assert localized.checkout_provider == "razorpay"
+        assert localized.checkout_currency == PRICE_BASE_CURRENCY
 
-        # It is worth the rupee price, not a round $10.00 — which is exactly what the deleted USD
-        # column would have charged.
+        # The displayed figure is still worth the rupee price rather than a round $10.00 —
+        # which is exactly what the deleted USD price column would have charged. This is the
+        # half of the original assertion that survives the provider change, because it is
+        # about the FX conversion rather than about who takes the money.
         expected = await FXService.convert_major(999.00, PRICE_BASE_CURRENCY, "USD")
         assert localized.minor_units == FXService.calculate_minor_units(expected, "USD")
 
@@ -357,25 +424,39 @@ class TestGatewayRoutingAndTransparency:
         assert provider == "razorpay"
         assert curr == "INR"
 
-    def test_stripe_supported_currencies_route_directly(self):
-        """Stripe-supported currencies (USD, EUR, GBP, JPY, AUD, CAD, CHF, AED, etc.) route directly."""
-        for c in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "SGD", "CHF", "AED", "BRL", "MXN", "ZAR", "KRW"]:
+    def test_no_currency_routes_anywhere_but_razorpay(self):
+        """Every currency routes to Razorpay, and only INR is charged directly.
+
+        REPLACES ``test_stripe_supported_currencies_route_directly``, which asserted that
+        25 currencies routed to Stripe in their own currency. Stripe was removed, so the
+        property inverted: the currencies that used to be charged directly are now
+        DISPLAY-only and the charge falls back to the base currency.
+
+        Asserted as "no currency escapes Razorpay" rather than currency-by-currency,
+        because the thing worth pinning is that a second provider cannot reappear by
+        accident -- that is what would silently route a charge at a gateway this platform
+        holds no credentials for.
+        """
+        for c in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "SGD", "CHF", "AED",
+                  "BRL", "MXN", "ZAR", "KRW", "NGN", "KES", "ZZZ"]:
             provider, curr = FXService.resolve_checkout_provider_and_currency(c)
-            assert provider == "stripe"
-            assert curr == c
+            assert provider == "razorpay", f"{c} routed to {provider!r}"
+            assert curr == "INR", f"{c} would be charged in {curr!r}, not the base currency"
 
     @pytest.mark.asyncio
-    async def test_unsupported_checkout_currency_falls_back_to_usd_transparently(self):
-        """
-        When a user's local currency is unsupported for direct gateway charging (e.g. NGN, KES),
-        display shows localized price, checkout is routed to Stripe USD, and is_direct_checkout is False.
+    async def test_unsupported_checkout_currency_falls_back_to_the_base_currency(self):
+        """A currency the gateway cannot take is displayed locally and charged in INR.
+
+        The shape of this guarantee is unchanged from the Stripe era -- display local,
+        charge something the gateway accepts, and report ``is_direct_checkout is False`` so
+        the UI can say so. Only the fallback TARGET moved, from USD to INR, because the
+        gateway that could take USD is gone.
         """
         localized = await FXService.localize_price(10.00, "NGN")
         assert localized.target_currency == "NGN"
-        assert localized.checkout_provider == "stripe"
-        assert localized.checkout_currency == "USD"
+        assert localized.checkout_provider == "razorpay"
+        assert localized.checkout_currency == "INR"
         assert localized.is_direct_checkout is False
-        assert localized.checkout_amount_minor == 1000  # Charged in USD cents ($10.00)
 
 
 # ── 7. Existing Subscriptions Stability & Tenant Isolation ────────────────────

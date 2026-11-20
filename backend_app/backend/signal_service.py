@@ -172,15 +172,70 @@ class SignalService:
         self._local_signals: Dict[str, Dict[str, Any]] = {}
     
     async def _get_supabase(self, user: dict):
-        """Get Supabase client for user."""
+        """Get Supabase client for user.
+
+        BOT-01: a deployment bot runs in the background with no request and therefore no
+        access token. It called this with ``{"id": user_id}``, got a token-less client, and every
+        ``signals`` INSERT was refused by RLS and swallowed - the bot traded while its Signal_Trace
+        stayed empty (production deployment 8ac2aa8f, 2026-11-11). A server-side caller now says
+        so explicitly with ``_server_side=True`` and gets the service-role client; the rows it
+        writes carry the deployment owner's ``user_id`` set by the caller. Opt-in only, so a
+        request path that merely lacks a token is never silently widened past RLS.
+        """
         try:
+            if isinstance(user, dict) and user.get("_server_side") is True:
+                from backend_app.core.dependencies import get_service_supabase_async
+
+                return await get_service_supabase_async()
             token = user.get("access_token") if isinstance(user, dict) else None
             res = create_request_supabase_async(token)
             return await res if inspect.isawaitable(res) else res
         except Exception as e:
             logger.debug(f"Supabase client resolution fallback: {e}")
             return None
-    
+
+    async def _record_signal_audit(
+        self,
+        sb,
+        *,
+        signal_id: str,
+        event_type: str,
+        user_id: Optional[str],
+        strategy_id: Optional[str],
+        payload: Dict[str, Any],
+    ) -> None:
+        """AUD-01: append this transition to the durable, append-only signal_audit_log.
+
+        `signals` is mutated in place by design (update_risk_decision/update_order/
+        update_execution overwrite the same row as a signal progresses) -- this is the
+        separate, durable history 046_signal_audit_log.sql added for exactly that reason.
+        Called only when the caller's own write to `signals` already succeeded, so an
+        audit row never claims a transition that was not actually persisted. A record
+        failure is logged and never raises: this is additive visibility, not a new
+        control, matching the same convention RT-16's ConsistencyChecker._handle_mismatch
+        and 036/040's other callers already use.
+        """
+        if sb is None:
+            return
+        try:
+            insert_res = sb.table("signal_audit_log").insert({
+                "signal_id": signal_id,
+                "event_type": event_type,
+                "user_id": user_id or None,
+                "strategy_id": strategy_id,
+                "payload": payload,
+            }).execute()
+            result = await insert_res if inspect.isawaitable(insert_res) else insert_res
+            if not result or not getattr(result, "data", None):
+                logger.warning(
+                    f"[SIGNAL_AUDIT] {event_type} audit row for signal {signal_id} did "
+                    f"not report a written row"
+                )
+        except Exception as e:  # noqa: BLE001 - see docstring
+            logger.warning(
+                f"[SIGNAL_AUDIT] failed to record {event_type} for signal {signal_id}: {e}"
+            )
+
     async def create_signal(
         self,
         user: dict,
@@ -194,11 +249,19 @@ class SignalService:
         decision: str,
         indicators: Dict,
         market_info: Dict,
-        ml_info: Optional[Dict] = None
+        ml_info: Optional[Dict] = None,
+        environment: Optional[str] = None,
     ) -> Dict:
         """
         Create a new signal record.
-        
+
+        BOT-02: ``environment`` names who produced the signal; a paper-mode deployment
+        passes ``"PAPER"``. Left ``None`` the column is not written and migration 010's
+        ``DEFAULT 'LIVE'`` applies - right for the live writer this path was built for, and
+        WRONG for every paper bot: production held paper-deployment signals labelled LIVE
+        (deployment 6547c7b2, 2026-11-11), so a Signal_Trace filtered on LIVE returned
+        simulated trades as real ones.
+
         Args:
             user: User dict with id and access_token
             strategy_id: Strategy ID
@@ -236,6 +299,8 @@ class SignalService:
             "ml_info": ml_info,
             "generated_at": datetime.now(timezone.utc).isoformat()
         }
+        if environment is not None:
+            signal_data["environment"] = environment
         
         # Store in local registry immediately
         self._local_signals[signal_id] = signal_data.copy()
@@ -259,10 +324,21 @@ class SignalService:
                         user_id=user_id,
                         generated_at=signal_data["generated_at"],
                     )
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="created",
+                        user_id=user_id,
+                        strategy_id=strategy_id,
+                        payload=signal_data,
+                    )
                     return result.data[0]
         except Exception as e:
-            logger.debug(f"Supabase signal insert fallback for {signal_id}: {e}")
-        
+            # BOT-01: this used to be DEBUG, so a refused INSERT left no trace while the line
+            # below still said "Created signal". A signal that is only in this process's memory
+            # is not in the Signal_Trace, and an operator has to be able to see that.
+            logger.warning(f"signal {signal_id} was NOT persisted (in-memory only): {e}")
+
         logger.info(f"Created signal {signal_id} for strategy {strategy_id}")
         return signal_data
     
@@ -307,6 +383,14 @@ class SignalService:
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     self._local_signals[signal_id] = result.data[0]
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="risk_decision",
+                        user_id=user_id,
+                        strategy_id=result.data[0].get("strategy_id"),
+                        payload=update_data,
+                    )
                     return result.data[0]
         except Exception as e:
             logger.debug(f"Supabase update_risk_decision fallback for {signal_id}: {e}")
@@ -366,9 +450,18 @@ class SignalService:
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     self._local_signals[signal_id] = result.data[0]
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="order",
+                        user_id=user_id,
+                        strategy_id=result.data[0].get("strategy_id"),
+                        payload=update_data,
+                    )
                     return result.data[0]
         except Exception as e:
-            logger.debug(f"Supabase update_order fallback for {signal_id}: {e}")
+            # BOT-03: was DEBUG; a refused trace update must be visible.
+            logger.warning(f"Supabase update_order fallback for {signal_id}: {e}")
         
         logger.info(f"Updated order for signal {signal_id}: {order_status}")
         return self._local_signals.get(signal_id, update_data)
@@ -417,9 +510,18 @@ class SignalService:
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     self._local_signals[signal_id] = result.data[0]
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="execution",
+                        user_id=user_id,
+                        strategy_id=result.data[0].get("strategy_id"),
+                        payload=update_data,
+                    )
                     return result.data[0]
         except Exception as e:
-            logger.debug(f"Supabase update_execution fallback for {signal_id}: {e}")
+            # BOT-03: was DEBUG; a refused trace update must be visible.
+            logger.warning(f"Supabase update_execution fallback for {signal_id}: {e}")
         
         logger.info(f"Updated execution for signal {signal_id}: pnl={pnl}")
         return self._local_signals.get(signal_id, update_data)
@@ -459,7 +561,18 @@ class SignalService:
         if local:
             if not _matches_column_filter(local.get("environment"), environment):
                 return None
-            if not user_id or str(local.get("user_id", "")) == user_id or user_id == "anonymous":
+            # AUD-01: this used to read `not user_id or ... or user_id == "anonymous"` --
+            # an unidentifiable caller (empty user_id) matched EVERY branch of that `or`
+            # chain and got the signal back regardless of whose it was, the opposite of
+            # this file's own documented rule a few hundred lines up ("an ownership
+            # question that cannot be answered withholds rather than discloses"). It also
+            # checked the CALLER's resolved id against the literal string "anonymous"
+            # rather than the SIGNAL's own stored owner -- inconsistent with
+            # list_signals's bulk-read fallback just below, which (correctly) treats
+            # "anonymous" as a property of the row, not of the caller. Fixed to match:
+            # an empty user_id matches nothing, and "anonymous" describes an ownerless
+            # row, not an unauthenticated caller.
+            if user_id and (str(local.get("user_id", "")) == user_id or str(local.get("user_id", "")) == "anonymous"):
                 return local
         return None
     
@@ -569,9 +682,19 @@ class SignalService:
             logger.debug(f"Supabase list_signals fallback: {e}")
         
         # Local fallback filter
+        #
+        # AUD-01: this used to be `if user_id and owner != user_id and owner !=
+        # "anonymous": continue` -- an unidentifiable caller (empty user_id) made the
+        # leading `user_id and` false, so the WHOLE condition was false and `continue`
+        # never ran: every signal in this process's memory, owned by every tenant, was
+        # returned to a caller this service could not identify. Fixed to fail closed:
+        # no identifiable caller means no results, not all of them.
         results = []
         for s in self._local_signals.values():
-            if user_id and str(s.get("user_id", "")) != user_id and str(s.get("user_id", "")) != "anonymous":
+            if not user_id:
+                continue
+            owner = str(s.get("user_id", ""))
+            if owner != user_id and owner != "anonymous":
                 continue
             if not _matches_column_filter(s.get("strategy_id"), strategy_id):
                 continue

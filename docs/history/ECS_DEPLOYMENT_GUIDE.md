@@ -44,14 +44,30 @@ FastAPI serving on 0.0.0.0:8000
 
 ### ECS `secrets` block (AWS Secrets Manager — 6 secrets required)
 
+> **CORRECTED 2026-10-23 (SEC-01).** The paths below were wrong, and in a way that
+> mattered: the `/vyomquant/production/UPPERCASE` form (note the leading slash) was
+> **never** what the deployment read. The running task definition resolves
+> `vyomquant/production/lowercase` names. Six secrets did exist at the uppercase paths
+> and have been **deleted** — two held old published credentials, three were duplicate
+> copies of live values that no rotation procedure would ever have updated.
+>
+> `scripts/aws_validation.py` previously validated the six uppercase paths as a
+> pre-deployment gate, so it checked secrets the application does not use while never
+> checking one it does. It now derives the list from the task definition itself.
+
 | Variable | Secret Path |
 |----------|-------------|
-| `SUPABASE_SERVICE_ROLE_KEY` | `/vyomquant/production/SUPABASE_SERVICE_ROLE_KEY` |
-| `SUPABASE_ANON_KEY` | `/vyomquant/production/SUPABASE_ANON_KEY` |
-| `SUPABASE_JWT_SECRET` | `/vyomquant/production/SUPABASE_JWT_SECRET` |
-| `DATABASE_URL` | `/vyomquant/production/DATABASE_URL` |
-| `MASTER_ENCRYPTION_KEYS` | `/vyomquant/production/MASTER_ENCRYPTION_KEYS` |
-| `JWT_SECRET` | `/vyomquant/production/JWT_SECRET` |
+| `SUPABASE_SERVICE_ROLE_KEY` | `vyomquant/production/supabase_service_role_key` |
+| `SUPABASE_ANON_KEY` | `vyomquant/production/supabase_anon_key` |
+| `SUPABASE_JWT_SECRET` | `vyomquant/production/supabase_jwt_secret` |
+| `DATABASE_URL` | `vyomquant/production/database_url` |
+| `MASTER_ENCRYPTION_KEYS` | `vyomquant/production/master_encryption_keys` |
+| `JWT_SECRET` | `vyomquant/production/jwt_secret` |
+| `CREDENTIAL_VAULT_SALT` | `vyomquant/production/credential_vault_salt` |
+| `RAZORPAY_KEY_ID` | `vyomquant/production/razorpay_key_id` |
+| `RAZORPAY_KEY_SECRET` | `vyomquant/production/razorpay_key_secret` |
+| `RAZORPAY_WEBHOOK_SECRET` | `vyomquant/production/razorpay_webhook_secret` |
+| `PAYMENT_METHODS_DB_URL` | `vyomquant/production/payment_methods_db_url` |
 
 ---
 

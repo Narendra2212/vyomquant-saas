@@ -48,6 +48,7 @@ same ``_Supabase``/``_Query`` fake, the same real ``AssetUniverse``, the same
 environment the write path is.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -231,13 +232,25 @@ class TestTheRouteIsReachableAndNotShadowed:
 
         ``GET /strategies/{strategy_id}`` is that endpoint, and it is read out of the
         router rather than restated here, so the two cannot drift apart.
+
+        It used to live in ``strategy_operations.py`` under the exact decorator this test
+        originally searched for, but API-01 (commit 396d210) deleted that copy as a
+        permanently shadowed duplicate of ``strategies.py``'s own ``@router.get("/{strategy_id}")``
+        (mounted first, so it always won the identical path) -- correctly, since it was
+        dead code. The deletion silently took the ``200/minute`` limiter with it, which this
+        test caught: the live route had no limiter left to compare against, so it was
+        given one back (see ``strategies.py``'s own comment on ``get_strategy_route``),
+        and this test now reads the comparison from where that route actually lives.
         """
-        source = ROUTER_PATH.read_text(encoding="utf-8")
-        comparable = source.index('@router.get("/strategies/{strategy_id}")')
-        comparable_limit = source[comparable : comparable + 200].split(
+        comparable_source = (
+            REPO_ROOT / "backend_app" / "routers" / "strategies.py"
+        ).read_text(encoding="utf-8")
+        comparable = comparable_source.index('@router.get("/{strategy_id}")')
+        comparable_limit = comparable_source[comparable : comparable + 200].split(
             "@limiter.limit(", 1
         )[1].split(")", 1)[0]
 
+        source = ROUTER_PATH.read_text(encoding="utf-8")
         preflight = source.index("async def preflight_deploy_version(")
         preflight_limit = source[preflight - 400 : preflight].rsplit(
             "@limiter.limit(", 1
@@ -258,7 +271,9 @@ class TestTheResponseShape:
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["deployable"] is True
-        expected = {DEPLOY_PREREQUISITE_CONDITION, *db.BINDING_CONDITIONS}
+        # QUOTA-MODE-01: a paper deploy also reports the plan's paper allowance (the
+        # live-only `live_entitlement` condition is absent for paper).
+        expected = {DEPLOY_PREREQUISITE_CONDITION, "plan_allowance", "no_active_deployment", *db.BINDING_CONDITIONS}
         assert _statuses(body) == {name: db.CONDITION_PASSED for name in expected}
 
     def test_the_top_level_body_is_exactly_designs_two_keys(self):
@@ -528,7 +543,46 @@ class TestTheRefusalsThatAreAboutTheRequest:
         assert condition["status"] == db.CONDITION_FAILED
         assert condition["code"] == "EXECUTION_CONFIG_UNKNOWN_FIELD"
 
-    def test_a_known_execution_config_field_passes(self):
+    def test_a_known_but_unenforced_execution_config_field_is_a_reported_condition(self):
+        """DEPLOY-01: a published field that no execution path reads is refused at
+        preflight, the same as an unknown field, rather than reported as passing and
+        silently discarded on deploy.
+
+        The field is taken from ``db.UNENFORCED_EXECUTION_CONFIG_FIELDS`` rather than
+        named here. This test used to hardcode ``slippage_tolerance_bps`` on the grounds
+        that "there is no slippage-tolerance check on this platform's order path" -- which
+        was measured and found false (``_execute_trade_internal`` already submits a LIMIT
+        at the decision price, so the order path was always bounded), and the field is now
+        enforced. A hardcoded example makes this test fail every time a field is correctly
+        enforced, which points the guard in the wrong direction: it should shrink as the
+        backlog drains, not break.
+        """
+        assert db.UNENFORCED_EXECUTION_CONFIG_FIELDS, (
+            "nothing is unenforced any more, so there is no field left to exercise this "
+            "refusal with -- the preflight path needs a dedicated fixture instead of a "
+            "real field, and this test should be rewritten rather than deleted"
+        )
+        field = db.UNENFORCED_EXECUTION_CONFIG_FIELDS[0]
+        response = _get(
+            _sb(),
+            params={
+                **_passing_params(),
+                "execution_config": json.dumps({field: 25}),
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        condition = _condition(body, "execution_config")
+        assert condition["status"] == db.CONDITION_FAILED
+        assert condition["code"] == "EXECUTION_CONFIG_NOT_ENFORCED"
+        assert body["deployable"] is False
+
+    def test_max_order_notional_now_passes_preflight_instead_of_being_refused(self):
+        """DEPLOY-01's second fix: max_order_notional is now really enforced
+        (master_executor.evaluate_deployment_execution_limits), so preflight reports it as
+        PASSING rather than as the EXECUTION_CONFIG_NOT_ENFORCED failure it used to be."""
+        assert "max_order_notional" in db.ENFORCED_EXECUTION_CONFIG_FIELDS
         response = _get(
             _sb(),
             params={
@@ -537,11 +591,9 @@ class TestTheRefusalsThatAreAboutTheRequest:
             },
         )
 
-        body = response.json()
-        assert _condition(body, "execution_config")["detail"]["fields"] == [
-            "max_order_notional"
-        ]
-        assert body["deployable"] is True
+        assert response.status_code == 200, response.text
+        condition = _condition(response.json(), "execution_config")
+        assert condition["status"] == db.CONDITION_PASSED, condition
 
     def test_an_unauthenticated_caller_gets_no_condition_data(self):
         """Requirement 22.4: no strategy data on an authorization failure."""
@@ -583,7 +635,9 @@ class TestTheTwoSurfacesAgree:
         body = _get(_sb(), params=_passing_params()).json()
 
         names = [c["name"] for c in body["conditions"]]
-        assert names == [DEPLOY_PREREQUISITE_CONDITION, *db.BINDING_CONDITIONS]
+        # The plan conditions (LIVE-PLAN-01 / QUOTA-MODE-01) come right after the
+        # prerequisite, ahead of the binding gates; paper reports only the allowance.
+        assert names == [DEPLOY_PREREQUISITE_CONDITION, "plan_allowance", "no_active_deployment", *db.BINDING_CONDITIONS]
 
     async def test_both_registered_paths_answer_identically(self):
         sb = _sb()

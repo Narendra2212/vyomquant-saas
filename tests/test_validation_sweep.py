@@ -343,19 +343,14 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         path="/api/strategies/compile",
         handler="backend_app.routers.strategy_operations:compile_strategy",
     ),
-    # `strategy_operations.clone_strategy`/`deploy_strategy`/`pause_strategy`/
-    # `resume_strategy` each declare the SAME path `strategies.py` registers, and
-    # `strategies.router` is mounted before `strategy_operations.router`
-    # (`backend_app/main.py`'s own `include_router` order) - so first-match-wins makes
-    # every one of these four `strategy_operations.py` handlers permanently unreachable at
-    # this path. Confirmed by running `test_it_is_served_by_the_handler_this_route_names`
-    # against each: all four resolve to `strategies.py`'s handler of the same name, never
-    # to `strategy_operations.py`'s. This is the exact shadowing hazard
-    # `test_cross_tenant_ownership_matrix.py`'s docstring documents for `.../clone`. They
-    # are therefore NOT distinct routes to sweep - the path is already covered by this
-    # file's `strategies.clone_strategy`/`deploy_bot`/`pause_strategy`/`resume_strategy`
-    # entries above, and are listed in `_DELIBERATELY_EXCLUDED_HANDLERS` below rather than
-    # given a body-malformation case that could never actually run.
+    # API-01: `strategy_operations.py` used to declare `list_strategies`/`get_strategy`/
+    # `update_strategy`/`delete_strategy`/`clone_strategy`/`deploy_strategy`/
+    # `pause_strategy`/`resume_strategy` at the SAME paths `strategies.py` registers -
+    # permanently unreachable (`strategies.router` is mounted first in `main.py`'s
+    # `include_router` order, and first-match-wins), confirmed one at a time by
+    # `test_it_is_served_by_the_handler_this_route_names` before they were deleted as dead
+    # code. The paths are covered by this file's `strategies.*` entries above; there is
+    # nothing left at these names in `strategy_operations.py` to list here or to exclude.
     MutatingRoute(
         key="strategy_operations.create_backtest",
         method="POST",
@@ -367,6 +362,18 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         method="POST",
         path=f"/api/strategies/{_ID}/backtests/execute",
         handler="backend_app.routers.strategy_operations:execute_backtest",
+    ),
+    # The asynchronous sibling of the route above. It takes the SAME
+    # `BacktestExecuteRequest` and shares `_execute_version_backtest` with it, so it has the
+    # same body to violate and the same refusals before anything is written; what differs is
+    # only that it answers 202 with the `strategy_backtests` id instead of waiting for the
+    # result. Registered under two paths, as `execute` is — coverage here is by HANDLER, so
+    # one entry exercises both.
+    MutatingRoute(
+        key="strategy_operations.start_backtest",
+        method="POST",
+        path=f"/api/strategies/{_ID}/backtests/start",
+        handler="backend_app.routers.strategy_operations:start_backtest",
     ),
     MutatingRoute(
         key="strategy_operations.validate_historical_data",
@@ -415,6 +422,13 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         handler="backend_app.routers.strategy_operations:stop_deployment",
     ),
     MutatingRoute(
+        key="strategy_operations.close_deployment_position",
+        method="POST",
+        path=f"/api/deployments/{_ID}/close",
+        handler="backend_app.routers.strategy_operations:close_deployment_position",
+        body=None,
+    ),
+    MutatingRoute(
         key="strategy_operations.compare_backtests",
         method="POST",
         path="/api/backtests/compare",
@@ -444,31 +458,15 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         # validation failure, because the field is typed `Optional[str]`.
         body={"mode": 12345},
     ),
-    MutatingRoute(
-        key="strategy_operations.recover_deployment",
-        method="POST",
-        path="/api/crash-recovery/recover-deployment",
-        handler="backend_app.routers.strategy_operations:recover_deployment",
-        # `body: Dict[str, Any]` - a bare dict. FOUND while running this sweep: sending it
-        # a body naming none of the fields the handler itself checks for (`deployment_id`)
-        # reaches the handler's own `raise HTTPException(400, ...)` for the missing field
-        # - which its OWN `except Exception as e:` then catches and re-wraps as a 500
-        # (`DEPLOYMENT_RECOVERY_FAILED`), because unlike its sibling handlers in this same
-        # file it has no `except HTTPException: raise` guard before the blanket clause.
-        # Reported as a finding, not fixed here (see this file's own report).
-        body={"__validation_sweep_marker__": {"nested": [1, 2, 3]}},
-        no_schema=True,
-    ),
-    MutatingRoute(
-        key="strategy_operations.recover_signals",
-        method="POST",
-        path="/api/crash-recovery/recover-signals",
-        handler="backend_app.routers.strategy_operations:recover_signals",
-        # Same shape, same finding, same missing `except HTTPException: raise` guard -
-        # `strategy_id` in place of `deployment_id`.
-        body={"__validation_sweep_marker__": {"nested": [1, 2, 3]}},
-        no_schema=True,
-    ),
+    # OPS-03: strategy_operations.recover_deployment / recover_signals (POST
+    # /api/crash-recovery/recover-deployment, /recover-signals) used to be registered
+    # here. Both endpoints -- and their sibling verify-state/log routes -- were
+    # unmounted (VERIFIED_FIXED this session): every method
+    # backend_app.core.crash_recovery.CrashRecoveryManager calls into is a stub that
+    # always reports fabricated success, never cancelling an order, reconciling a
+    # position, or restarting anything. The validation-sweep finding this entry used to
+    # record (a missing `except HTTPException: raise` guard turning the handler's own
+    # 400 into a 500) is moot now that the handler no longer exists.
     MutatingRoute(
         key="strategy_operations.preview_node",
         method="POST",
@@ -496,10 +494,11 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         handler="backend_app.routers.strategy_operations:cancel_training_job",
         body=None,
     ),
-    # `strategy_operations.update_strategy` and `strategy_operations.delete_strategy`
-    # (PUT/DELETE `/api/strategies/{id}`) are shadowed the same way and for the same
-    # reason - `strategies.py`'s handlers of the same names answer first. Covered by
-    # `strategies.update_strategy`/`delete_strategy` above; excluded below.
+    # API-01: `strategy_operations.update_strategy` and `strategy_operations.delete_strategy`
+    # (PUT/DELETE `/api/strategies/{id}`) used to be shadowed here the same way and for the
+    # same reason - `strategies.py`'s handlers of the same names answered first - and have
+    # been deleted as dead code. Covered by `strategies.update_strategy`/`delete_strategy`
+    # above.
     MutatingRoute(
         key="strategy_operations.update_backtest_results",
         method="PUT",
@@ -749,38 +748,12 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         body=None,
     ),
     # ══════════════════ signal_trace.py (prefix /api/signal-trace) ══════════════════
-    MutatingRoute(
-        key="signal_trace.create_signal",
-        method="POST",
-        path="/api/signal-trace/signals",
-        handler="backend_app.routers.signal_trace:create_signal",
-        # `strategy_id` required.
-        body={"strategy_id": 123},
-    ),
-    MutatingRoute(
-        key="signal_trace.update_risk_decision",
-        method="PUT",
-        path=f"/api/signal-trace/signals/{_ID}/risk",
-        handler="backend_app.routers.signal_trace:update_risk_decision",
-        # `risk_passed` required bool.
-        body={"risk_passed": "not-a-bool"},
-    ),
-    MutatingRoute(
-        key="signal_trace.update_order",
-        method="PUT",
-        path=f"/api/signal-trace/signals/{_ID}/order",
-        handler="backend_app.routers.signal_trace:update_order",
-        # `order_id` required str.
-        body={"order_id": 123},
-    ),
-    MutatingRoute(
-        key="signal_trace.update_execution",
-        method="PUT",
-        path=f"/api/signal-trace/signals/{_ID}/execution",
-        handler="backend_app.routers.signal_trace:update_execution",
-        # `trade_id` required str.
-        body={"trade_id": 123},
-    ),
+    # AUD-01: `create_signal`/`update_risk_decision`/`update_order`/`update_execution`
+    # were deleted as routes - any authenticated trader could call them to write
+    # fabricated order/fill/fee/risk data into their own execution audit trail. The
+    # underlying `SignalService` methods are unaffected and keep serving
+    # `backend/master_executor.py`'s direct, in-process calls; there is no longer an
+    # HTTP mutating route here to sweep.
     # ══════════════════ signals.py (prefix /api/signals) ══════════════════
     MutatingRoute(
         key="signals.replay_signal_trace",
@@ -958,6 +931,14 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         # `channels`/`events` required nested models.
         body={"channels": "not-an-object"},
     ),
+    MutatingRoute(
+        key="user.delete_account_endpoint",
+        method="DELETE",
+        path="/api/user/account",
+        handler="backend_app.routers.user:delete_account_endpoint",
+        # `DeleteAccountRequest.confirm` is the one required field (PRIV-01).
+        body=_GENERIC_MALFORMED_BODY,
+    ),
     # ══════════════════ referral.py (prefix /api) ══════════════════
     MutatingRoute(
         key="referral.validate_referral_code",
@@ -965,11 +946,27 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         path="/api/referral/validate",
         handler="backend_app.routers.referral:validate_referral_code",
     ),
+    # REF-ATTR-01: the referral-link claim, called after a `?ref=` signup.
+    MutatingRoute(
+        key="referral.claim_referral",
+        method="POST",
+        path="/api/referral/claim",
+        handler="backend_app.routers.referral:claim_referral",
+    ),
     MutatingRoute(
         key="referral.create_payout_request",
         method="POST",
         path="/api/referral/payouts",
         handler="backend_app.routers.referral:create_payout_request",
+    ),
+    # REF-01: admin-gated (get_admin_user), so this sweep's ordinary non-admin caller
+    # is refused with 403 before the body is ever inspected -- same shape as the
+    # admin.* entries below.
+    MutatingRoute(
+        key="referral.settle_payout",
+        method="PUT",
+        path=f"/api/referral/payouts/{_ID}/settle",
+        handler="backend_app.routers.referral:settle_payout",
     ),
     # ══════════════════ admin.py (prefix /api/admin) ══════════════════
     MutatingRoute(
@@ -1038,9 +1035,9 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         method="POST",
         path="/api/library/submissions",
         handler="backend_app.routers.library:create_submission_route",
-        # `SubmissionCreateRequest.strategy_id: UUID` required;
-        # `backtest_ids: List[UUID] = Field(..., min_items=3, max_items=10)` - one id
-        # violates the minimum.
+        # `SubmissionCreateRequest.strategy_id: UUID` required; `backtest_ids` is bounded
+        # `min_items=evidence_validator.MIN_CONDITIONS, max_items=MAX_CONDITIONS` (5..10
+        # since MKT-07, 3..10 before it) - one id violates the minimum under either.
         body={"backtest_ids": ["only-one"]},
     ),
     MutatingRoute(
@@ -1123,6 +1120,15 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         # `moderation_status` required.
         body={"moderation_status": 123},
     ),
+    # MKT-06: admin-gated (get_admin_user), same shape as referral.settle_payout
+    # above -- this sweep's ordinary non-admin caller is refused with 403 before
+    # the body is ever inspected.
+    MutatingRoute(
+        key="library.settle_creator_payout_endpoint",
+        method="PUT",
+        path=f"/api/library/creator-payouts/{_ID}/settle",
+        handler="backend_app.routers.library:settle_creator_payout_endpoint",
+    ),
     MutatingRoute(
         key="library.create_marketplace_checkout",
         method="POST",
@@ -1201,27 +1207,19 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         handler="backend_app.routers.dag_tasks:trigger_recovery",
         body=None,
     ),
-    # ══════════════════ distributed_execution.py (prefix /api/distributed-execution) ═════
-    MutatingRoute(
-        key="distributed_execution.submit_execution_job",
-        method="POST",
-        path="/api/distributed-execution/submit",
-        handler="backend_app.routers.distributed_execution:submit_execution_job",
-    ),
-    MutatingRoute(
-        key="distributed_execution.replay_job",
-        method="POST",
-        path=f"/api/distributed-execution/job/{_ID}/replay",
-        handler="backend_app.routers.distributed_execution:replay_job",
-        body=None,
-    ),
+    # RT-11: distributed_execution.router is no longer mounted in main.py (every
+    # submission was already refused with 400 -- execution_orchestrator is never started
+    # anywhere -- but the fully-mounted surface advertised a distributed-execution
+    # capability this platform does not have). The two MutatingRoute entries that used to
+    # live here are gone with it; see tests/test_rt11_distributed_execution_router_unmounted.py.
     # ══════════════════ auth.py (prefix /api/auth, unauthenticated) ══════════════════
     MutatingRoute(
         key="auth.signout",
         method="POST",
-        # `token` is a required plain query/body-form str param on a sync `def`, not a
-        # Pydantic model - the malformed case reachable here is an absent value entirely,
-        # which FastAPI still rejects as a validation error (missing required parameter).
+        # AUTH-01: used to take a required, unused `token` plain query/body-form str
+        # param. Removed - the caller's own access_token (already available via
+        # get_current_user) is what actually gets revoked now. No body/query shape to
+        # malform any more.
         path="/api/auth/signout",
         handler="backend_app.routers.auth:signout",
         body=None,
@@ -1480,12 +1478,53 @@ def test_malformed_input_never_answers_500(route: MutatingRoute, client):
 #: describe. Deleting the key would turn that host's environment gap into a false Requirement
 #: 1.39 finding. Nothing about the assertion is relaxed either way - this comment only stops
 #: the set from documenting a cause that no longer applies on a Razorpay deployment.
+#: `library.unpublish_strategy` was REMOVED from this set, the same way
+#: `billing.create_portal_session` was: the handler was fixed, so the assertion below now runs
+#: and passes for real instead of being skipped. Its 500 came from `_build_service_client()`
+#: returning `None` and the route dereferencing it (LIB-01) - exactly the cause this set's
+#: comment describes. `routers/library.py` now calls `_require_service_client()`, which answers
+#: the catalogue's `MARKETPLACE_READ_FAILED` (503) and names the real condition, so there is no
+#: 500 left to excuse. `library.clone_strategy` was never in this set and was the red test that
+#: surfaced the defect; it passes for the same reason. The sweep's skip count went 11 -> 10 and
+#: its pass count 382 -> 383 in that one change.
+#: `billing.cancel_subscription` / `billing.resume_subscription` added on the same evidence as
+#: this set's other out-of-band-client entries. Both declare `supabase: Any =
+#: Depends(get_request_supabase)` -- this sweep's `client` fixture overrides that dependency --
+#: but neither handler body ever reads the parameter: both call `_background_sb()` instead, which
+#: builds its own client straight from `os.environ["SUPABASE_URL"]` /
+#: `os.environ["SUPABASE_SERVICE_ROLE_KEY"]` and raises `RuntimeError("Billing webhook Supabase
+#: service credentials are not configured.")` when either is absent, exactly as this sandbox's
+#: environment is. No DI override this sweep installs can reach that constructor, and the route
+#: being hit here carries no body to malform at all (`_ROUTES_WITHOUT_A_SCHEMA_TO_VIOLATE`'s
+#: no-body group), so the 500 cannot be a function of what this sweep sent either way.
 _ENVIRONMENT_GAP_ROUTE_KEYS = frozenset(
     {
         "copilot.delete_copilot_session",
-        "library.unpublish_strategy",
         "strategy_operations.cancel_training_job",
         "billing.create_portal_session",
+        "billing.cancel_subscription",
+        "billing.resume_subscription",
+        # `strategy_operations.pause_deployment`/`resume_deployment`/`stop_deployment` --
+        # the comment above already named these three as "verified" on the same evidence
+        # as `cancel_training_job`, but the verification was never actually added here.
+        # Confirmed directly: all three call `_transition_deployment_endpoint`, which
+        # resolves `get_strategy_service()` -- a bare module-level singleton
+        # (`backend_app/backend/strategy_service.py`'s `StrategyService()`), never a
+        # FastAPI dependency this sweep's `client` fixture could override.
+        "strategy_operations.pause_deployment",
+        "strategy_operations.resume_deployment",
+        "strategy_operations.stop_deployment",
+        # `strategy_operations.delete_backtest` -- same shape, one layer over:
+        # `get_backtest_service()` is the identical bare-singleton pattern
+        # (`backend_app/backend/backtest_service.py`'s `BacktestService()`).
+        "strategy_operations.delete_backtest",
+        # `strategies.create` and `signals.replay_signal_trace` -- each defines its OWN
+        # module-level `_sb(user)` that calls `create_request_supabase_async(token)`
+        # directly, the exact `copilot.delete_copilot_session` pattern this set's own
+        # comment already describes, just under a different router's helper of the same
+        # name and shape.
+        "strategies.create",
+        "signals.replay_signal_trace",
     }
 )
 
@@ -1502,12 +1541,16 @@ def test_a_route_with_no_schema_to_violate_still_never_answers_500(route: Mutati
     (there is no shape to malform, so any JSON object is "valid" input to FastAPI) and not
     one at all for the no-body group (there is no body). But Requirement 1.39's "never
     500" half is still owed for whatever THIS sweep sends such a route, and a 500 here is
-    a genuine application defect this sweep already surfaced while being written - two of
-    them, named in this file's own report and in the per-entry comments above
-    (`strategy_operations.recover_deployment`/`recover_signals` re-wrapping their own
-    raised 400 into a 500; `update_backtest_results` crashing on an untyped field). Neither
-    is fixed here - reported, per this task's own instruction not to fix production
-    routes without checking back first.
+    a genuine application defect this sweep already surfaced while being written -
+    `update_backtest_results` crashing on an untyped field, named in this file's own
+    report and in the per-entry comment above. Not fixed here - reported, per this
+    task's own instruction not to fix production routes without checking back first.
+
+    (A second pair of findings used to live here: `strategy_operations.recover_
+    deployment`/`recover_signals` re-wrapped their own raised 400 into a 500. OPS-03
+    unmounted both routes entirely this session - the underlying handler fabricated
+    success unconditionally regardless of this 500, which was the smaller problem - so
+    their MutatingRoute entries are gone rather than the finding staying open here.)
     """
     response = client.request(route.method, route.path, params=dict(route.query), json=route.body)
     if response.status_code == 500 and route.key in _ENVIRONMENT_GAP_ROUTE_KEYS:
@@ -1604,7 +1647,9 @@ _SWEPT_MODULE_PREFIXES: Tuple[str, ...] = (
     "backend_app.routers.admin",
     "backend_app.routers.library",
     "backend_app.routers.dag_tasks",
-    "backend_app.routers.distributed_execution",
+    # RT-11: distributed_execution.router is no longer mounted (see the matrix comment
+    # above) - removed from this prefix list too, since app.routes has nothing under it
+    # to walk.
     "backend_app.routers.auth",
 )
 
@@ -1615,24 +1660,16 @@ _DELIBERATELY_EXCLUDED_HANDLERS = frozenset(
         # `get_current_user` + Pydantic body validation - a different property.
         "backend_app.routers.billing:stripe_webhook",
         "backend_app.routers.billing:razorpay_webhook",
-        # Registered by `strategy_operations.py` at the SAME path `strategies.py`
-        # registers, and permanently unreachable there because `strategies.router` is
-        # mounted first (`backend_app/main.py`). Confirmed by
-        # `test_it_is_served_by_the_handler_this_route_names`: every one of these
-        # resolves to `strategies.py`'s handler, never to this one. The path itself IS
-        # swept, under the `strategies.*` route key that actually answers it.
-        "backend_app.routers.strategy_operations:clone_strategy",
-        "backend_app.routers.strategy_operations:deploy_strategy",
-        "backend_app.routers.strategy_operations:pause_strategy",
-        "backend_app.routers.strategy_operations:resume_strategy",
-        "backend_app.routers.strategy_operations:update_strategy",
-        "backend_app.routers.strategy_operations:delete_strategy",
-        # A SECOND registration of `POST /deployments/{id}/stop` in `strategy_operations.py`
-        # itself - `stop_deployment` (above it in the file) matches first, and this
-        # handler's own docstring says so explicitly: "this one was already unreachable
-        # ... `include_in_schema=False` keeps the duplicate out of the OpenAPI document."
-        # The path IS swept, under `strategy_operations.stop_deployment`.
-        "backend_app.routers.strategy_operations:stop_deployment_alias",
+        # API-01: `strategy_operations.py` used to declare `list_strategies`, `get_strategy`,
+        # `update_strategy`, `delete_strategy`, `clone_strategy`, `deploy_strategy`,
+        # `pause_strategy`, `resume_strategy` and `stop_deployment_alias` at paths
+        # `strategies.py` (or, for the last one, this same module) already registers -
+        # permanently unreachable because of mount/declaration order, confirmed one at a
+        # time by `test_it_is_served_by_the_handler_this_route_names` before they were
+        # deleted. They no longer exist, so this set no longer names them: an entry here
+        # for a route that is not actually registered would hide that fact rather than
+        # document it, and the point of this frozenset is that every exclusion is one this
+        # file can still verify against the live app.
     }
 )
 

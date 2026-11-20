@@ -85,7 +85,7 @@ const { mockApi } = vi.hoisted(() => {
       'myStrategies',
       'checkout', 'subscriptionStatus',
       'cancelSubscription', 'renewSubscription',
-      'clone', 'rate', 'settings',
+      'clone', 'deploy', 'rate', 'settings',
       'creatorAnalytics', 'subscriberAnalytics',
     ]),
     submissions: fns(['create', 'get', 'priceRange', 'setPrice']),
@@ -259,8 +259,8 @@ const stubCatalogue = (card = catalogueCard()) => {
 const signIn = () => sessionStorage.setItem('token', 'a-token');
 const signOut = () => sessionStorage.removeItem('token');
 
-const renderPage = () => render(
-  <MemoryRouter>
+const renderPage = (initialEntries = ['/']) => render(
+  <MemoryRouter initialEntries={initialEntries}>
     <StrategyMarketplace />
   </MemoryRouter>,
 );
@@ -470,9 +470,15 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
       '../components/ds/TradingEnvironmentBadge',
       '../components/gates',
       '../design/entitlements',
+      // LAUNCH AUDIT: a pure reader over an already-rejected ApiError (status / data / detail →
+      // a sentence). It imports nothing and issues no request, so it adds no transport.
+      '../design/apiErrors',
       '../design/errorCopy',
       '../design/subscriptionState',
       '../hooks/usePanelState',
+      // AUTO-REFRESH-01: only the REFRESH cadence constants; it issues no request (the poll
+      // re-runs the reader usePanelState was given, which is still `../api`'s).
+      '../hooks/useAutoRefresh',
       '../utils/razorpayCheckout',
       './paperTradingFormat',
     ]);
@@ -541,7 +547,13 @@ describe('outcome reporting (Requirement 20.10)', () => {
 
   it('reports a checkout this browser cannot present through showToast, saying nothing was charged', async () => {
     signIn();
-    mockApi.library.checkout.mockResolvedValue({ provider: 'stripe', session_id: 'cs_1' });
+    // The fixture provider was 'stripe' with a Stripe-shaped 'cs_1' session id. Stripe has
+    // been removed from the product in full, so the server cannot return it and a reader
+    // would be misled into thinking it might. The PROPERTY is unchanged and is about the
+    // defensive path: StrategyMarketplace.jsx presents only a razorpay session it can open
+    // or a server-supplied checkout_url, and interpolates ANY other provider name into this
+    // refusal. So the fixture just needs to be a provider this browser cannot present.
+    mockApi.library.checkout.mockResolvedValue({ provider: 'paypal', session_id: 'sess_1' });
     const { user } = await openDetail(listingDetail(PAID));
 
     await user.click(screen.getByRole('button', { name: /^subscribe$/i }));
@@ -549,7 +561,7 @@ describe('outcome reporting (Requirement 20.10)', () => {
     await waitFor(() => expect(window.showToast).toHaveBeenCalledTimes(1));
     const [type, message] = window.showToast.mock.calls[0];
     expect(type).toBe('error');
-    expect(message).toContain('stripe');
+    expect(message).toContain('paypal');
     expect(message).toMatch(/nothing has been charged/i);
     expectNoDialogAndOnlyLibrary();
   });
@@ -658,43 +670,25 @@ const sectionsIn = (container) => [
   ...container.querySelectorAll('section[data-environment]'),
 ];
 
-describe('BACKTEST / PAPER / LIVE sections (Requirements 6.6, 28.5)', () => {
-  it('renders only the environments the Listing carries figures for', async () => {
+describe('BACKTEST section, PAPER/LIVE removed (Requirements 6.6, 28.5, MKT-07)', () => {
+  it('renders only BACKTEST — the one environment backed by persisted data', async () => {
     signIn();
     const { container } = await openDetail(listingDetail());
 
-    // BACKTEST is measured; PAPER and LIVE are not carried by the projection at all.
     expect(container.querySelector('[data-environment="BACKTEST"]')).not.toBeNull();
     expect(container.querySelector('[data-environment="PAPER"]')).toBeNull();
     expect(container.querySelector('[data-environment="LIVE"]')).toBeNull();
     expect(sectionsIn(container).length).toBe(1);
-    // An omitted section is omitted, not zero-filled.
-    expect(container.textContent).not.toContain('PAPER Performance');
-    expect(container.textContent).not.toContain('LIVE Performance');
+    expect(container.textContent).not.toContain('PAPER performance');
+    expect(container.textContent).not.toContain('LIVE performance');
   });
 
-  it('omits a section whose figures are all unmeasured rather than rendering zeros', async () => {
-    signIn();
-    const { container } = await openDetail(
-      listingDetail({
-        // Present objects, no measured values. `(x || 0).toFixed(2)` — the shape this page used
-        // to use — would render six "0.00" cells here.
-        paper_performance_summary: {
-          total_return_pct: null, win_rate_pct: null, profit_factor: null, total_trades: null,
-        },
-        paper_risk_metrics: { sharpe_ratio: null, max_drawdown_pct: undefined },
-        live_performance_summary: { total_return_pct: '', win_rate_pct: 'n/a' },
-        live_risk_metrics: { sharpe_ratio: NaN },
-      }),
-    );
-
-    expect(container.querySelector('[data-environment="PAPER"]')).toBeNull();
-    expect(container.querySelector('[data-environment="LIVE"]')).toBeNull();
-    expect(sectionsIn(container).length).toBe(1);
-    expect(container.textContent).not.toContain('0.00');
-  });
-
-  it('renders all three as visually separated, disjoint sibling sections when all are measured', async () => {
+  it('never renders PAPER or LIVE even if the Listing payload carries those fields', async () => {
+    // MKT-07: the backend writes nothing to `paper_performance_summary` /
+    // `live_performance_summary` / `paper_risk_metrics` / `live_risk_metrics` on any Listing
+    // today, but this pins the FRONT END's half of the fix independently of that fact — a
+    // payload that somehow carried these fields (a stale cache, a future partial rollout)
+    // must not resurrect a section this page no longer declares a source for.
     signIn();
     const { container } = await openDetail(
       listingDetail({
@@ -706,70 +700,32 @@ describe('BACKTEST / PAPER / LIVE sections (Requirements 6.6, 28.5)', () => {
     );
 
     const sections = sectionsIn(container);
-    // The same selector that found nothing above now finds three — which is what makes the
-    // omission assertion above a fact about the data rather than about the selector.
-    expect(sections.map((s) => s.getAttribute('data-environment'))).toEqual([
-      'BACKTEST', 'PAPER', 'LIVE',
-    ]);
-    // Separated: three distinct elements, siblings of one another, none containing another.
-    expect(new Set(sections.map((s) => s.parentElement)).size).toBe(1);
-    for (const a of sections) {
-      for (const b of sections) {
-        if (a !== b) expect(a.contains(b)).toBe(false);
-      }
-    }
-    // Each figure inside a section carries that section's environment label (Req 6.6).
-    //
-    // Asserted per figure, not as a count of bare-text matches. The environment now rides
-    // INSIDE each figure's label — `Total return · BACKTEST` (`StrategyMarketplace.jsx:827`,
-    // "so the figure and the environment it was measured in cannot be separated") — so an
-    // exact-text query for the bare word reaches none of the figures at all. It finds only
-    // the `ds/TradingEnvironmentBadge` chip in the section header, and not even that for
-    // PAPER, whose chip reads `PAPER TRADING` (`design/semantic.js:213`).
-    //
-    // `[data-metric-tier]` is `ds/Metric`'s own published hook, one per rendered figure. The
-    // `> 1` count it replaces is kept, and the label check is now per figure rather than in
-    // aggregate: ONE figure that dropped its environment fails here, where before any two
-    // labelled elements in the section were enough to pass.
-    for (const section of sections) {
-      const env = section.getAttribute('data-environment');
-      const figures = [...section.querySelectorAll('[data-metric-tier]')];
-      expect(figures.length).toBeGreaterThan(1);
-      for (const figure of figures) {
-        expect(figure.textContent, `a figure in ${env} does not name its environment`)
-          .toContain(env);
-      }
-    }
-    // Nothing crosses over: the LIVE loss is in LIVE and nowhere else. `section[…]` for the
-    // same reason `sectionsIn` uses it — the bare attribute also matches the chip inside.
-    const live = container.querySelector('section[data-environment="LIVE"]');
-    expect(live.textContent).toContain('-1.25%');
-    expect(container.querySelector('section[data-environment="BACKTEST"]').textContent)
-      .not.toContain('-1.25%');
+    expect(sections.map((s) => s.getAttribute('data-environment'))).toEqual(['BACKTEST']);
+    expect(container.querySelector('[data-environment="PAPER"]')).toBeNull();
+    expect(container.querySelector('[data-environment="LIVE"]')).toBeNull();
+    expect(container.textContent).not.toContain('-1.25%');
   });
 
-  it('carries the historical-results statement in BACKTEST and in no other section', async () => {
+  it('omits the BACKTEST section whose figures are all unmeasured rather than rendering zeros', async () => {
     signIn();
     const { container } = await openDetail(
-      listingDetail({
-        paper_performance_summary: { total_return_pct: 3.5 },
-        paper_risk_metrics: { sharpe_ratio: 0.9 },
-        live_performance_summary: { total_return_pct: 1 },
-        live_risk_metrics: { sharpe_ratio: 0.4 },
-      }),
+      listingDetail({ performance_summary: null, risk_metrics: null }),
     );
 
-    // Exactly one, so both a missing statement and one leaking into PAPER/LIVE fail here.
+    expect(sectionsIn(container).length).toBe(0);
+    expect(container.textContent).not.toContain('0.00');
+  });
+
+  it('carries the historical-results statement in the BACKTEST section', async () => {
+    signIn();
+    const { container } = await openDetail(listingDetail());
+
     const statements = container.querySelectorAll('[data-testid="historical-results-statement"]');
     expect(statements.length).toBe(1);
 
     const backtest = container.querySelector('section[data-environment="BACKTEST"]');
     expect(within(backtest).getByTestId('historical-results-statement').textContent)
       .toMatch(/past performance does not indicate future results/i);
-    expect(within(container.querySelector('section[data-environment="PAPER"]'))
-      .queryByTestId('historical-results-statement')).toBeNull();
-    expect(within(container.querySelector('section[data-environment="LIVE"]'))
-      .queryByTestId('historical-results-statement')).toBeNull();
   });
 
   it('says so plainly when the Listing carries no figures at all, and states no statement', async () => {
@@ -853,7 +809,274 @@ describe('unmeasured figures and unread prices (Requirements 28.1, 28.5)', () =>
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
-// 6. Controls — each assertion above, shown failing when the behaviour it describes is broken
+// 6. MKT-05 — the deploy flow for a subscriber who already holds the Subscription
+// ═════════════════════════════════════════════════════════════════════════════════════════
+//
+// Before this: a subscriber had no control anywhere on this page that could reach
+// `POST /api/library/{id}/deploy` — `isSubscribed` only ever produced a disabled "Subscribed"
+// button. This section proves the control exists, calls the real endpoint with what the
+// trader typed (and nothing invented for a field they left blank), and that `?listing_id=
+// &intent=deploy` on the URL opens the right Listing on mount without a card click.
+
+const ACTIVE_SUBSCRIPTION = { subscription: { status: 'active', expires_at: null } };
+
+describe('deploy (MKT-05): the control a subscriber uses to run what they paid for', () => {
+  it('is absent for a listing the caller has not subscribed to', async () => {
+    signIn();
+    await openDetail(listingDetail(), { subscription: { status: 'not_subscribed' } });
+
+    expect(screen.queryByTestId('deploy-panel')).toBeNull();
+  });
+
+  it('appears once the subscription reads back as active', async () => {
+    signIn();
+    await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+
+    expect(await screen.findByTestId('deploy-panel')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /^deploy$/i })).not.toBeNull();
+  });
+
+  it('sends only the fields the trader actually typed', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({
+      deployment_id: 'dep-1',
+      library_id: LISTING_ID,
+      message: 'Marketplace deployment created against the owner\'s version.',
+    });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.type(screen.getByLabelText(/symbol/i), 'BTC/USDT');
+    await user.type(screen.getByLabelText(/timeframe/i), '1h');
+    await user.type(screen.getByLabelText(/capital/i), '5000');
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {
+      symbol: 'BTC/USDT',
+      timeframe: '1h',
+      capital: 5000,
+    }));
+    expect(window.showToast).toHaveBeenCalledWith(
+      'success',
+      'Marketplace deployment created against the owner\'s version.',
+    );
+    expectNoDialogAndOnlyLibrary();
+  });
+
+  it('sends an empty body when every field is left blank, rather than inventing one', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({ deployment_id: 'dep-2', library_id: LISTING_ID });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {}));
+  });
+
+  it('reports a refusal through the toast mechanism, never a dialog', async () => {
+    signIn();
+    mockApi.library.deploy.mockRejectedValue(new Error('MARKETPLACE_SUBSCRIPTION_EXPIRED'));
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    await waitFor(() => expect(window.showToast).toHaveBeenCalledWith('error', expect.any(String)));
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────────────
+  // MKT-05 live deployment, bounded by the subscribed period.
+  //
+  // The backend accepts `mode: 'live'` with the caller's OWN `exchange_account_id`, stamps
+  // the deployment with the subscription that authorises it and the instant that
+  // authorisation ends, and refuses to create one without both. This page is the only way
+  // a trader reaches that, so these cases are about the two things a UI can get wrong with
+  // real money: sending live when the trader did not ask for it, and sending an account id
+  // that is not one.
+  //
+  // `expectNoDialogAndOnlyLibrary` is NOT used below. The live path legitimately reads
+  // `api.exchange.list()` to populate the account selector, so the correct assertion is
+  // "library and exchange, nothing else" rather than "library only".
+  // ─────────────────────────────────────────────────────────────────────────────────────
+
+  const ACCOUNT = {
+    // A `GET /api/exchanges/` entry. BOTH ids are present on purpose, so a test
+    // catches the wrong one being sent: `account_id` is the real `exchange_keys.id`
+    // (migration 058, EXCH-03) and the only value a deployment can store, while `id` is
+    // the synthesised `{user_id}_{exchange_id}` composite kept for the existing exchange
+    // UI, which resolves to nothing.
+    account_id: 'acct-real-uuid',
+    id: 'user-1_binance',
+    exchange_id: 'binance',
+    name: 'BINANCE',
+  };
+
+  const expectOnlyLibraryAndExchange = () => {
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const paths = calledPaths(mockApi);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.filter((p) => !p.startsWith('library.') && !p.startsWith('exchange.')))
+      .toEqual([]);
+  };
+
+  const chooseLive = async (user) => {
+    mockApi.exchange.list.mockResolvedValue([ACCOUNT]);
+    await user.click(screen.getByTestId('deploy-mode-live'));
+    return screen.findByTestId('deploy-live-fields');
+  };
+
+  it('opens on paper, so live is never the default', async () => {
+    signIn();
+    await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    expect(screen.getByTestId('deploy-mode-paper').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('deploy-mode-live').getAttribute('aria-checked')).toBe('false');
+    // No live fields and no exchange read until live is actually chosen.
+    expect(screen.queryByTestId('deploy-live-fields')).toBeNull();
+    expect(mockApi.exchange.list).not.toHaveBeenCalled();
+  });
+
+  it('reads the caller\'s exchange accounts only once live is chosen', async () => {
+    signIn();
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await chooseLive(user);
+
+    await waitFor(() => expect(mockApi.exchange.list).toHaveBeenCalledTimes(1));
+  });
+
+  it('sends mode and the REAL account id, not the synthesised composite', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({ deployment_id: 'dep-live', library_id: LISTING_ID });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await chooseLive(user);
+
+    // One account, so it is preselected -- picking one of SEVERAL on the trader's behalf
+    // would be choosing which account trades their money, which this page does not do.
+    await waitFor(() =>
+      expect(screen.getByTestId('deploy-account-select').value).toBe('acct-real-uuid'));
+    await user.click(screen.getByRole('button', { name: /deploy live/i }));
+
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {
+      mode: 'live',
+      exchange_account_id: 'acct-real-uuid',
+    }));
+    expectOnlyLibraryAndExchange();
+  });
+
+  it('refuses to submit live with no account chosen, and says why on the control', async () => {
+    signIn();
+    mockApi.exchange.list.mockResolvedValue([ACCOUNT, { ...ACCOUNT, account_id: 'acct-2', name: 'KRAKEN' }]);
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await user.click(screen.getByTestId('deploy-mode-live'));
+    await screen.findByTestId('deploy-live-fields');
+
+    // TWO accounts, so nothing is preselected.
+    await waitFor(() => expect(screen.getByTestId('deploy-account-select').value).toBe(''));
+    const button = screen.getByRole('button', { name: /deploy live/i });
+    expect(button.hasAttribute('disabled')).toBe(true);
+
+    await user.click(button);
+    expect(mockApi.library.deploy).not.toHaveBeenCalled();
+  });
+
+  it('still sends a paper deployment with no mode when paper is kept', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({ deployment_id: 'dep-paper', library_id: LISTING_ID });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    // No `mode` key at all. The server defaults to paper, and the existing
+    // "empty body when every field is blank" property must survive this change.
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {}));
+    expectNoDialogAndOnlyLibrary();
+  });
+
+  it('does not offer an account whose real id is missing', async () => {
+    signIn();
+    // A row with no `account_id` cannot be deployed against -- sending the composite would
+    // 404 and look like a missing account rather than a bad id -- so it must not appear.
+    mockApi.exchange.list.mockResolvedValue([{ id: 'user-1_binance', exchange_id: 'binance' }]);
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await user.click(screen.getByTestId('deploy-mode-live'));
+
+    expect(await screen.findByTestId('deploy-no-accounts')).not.toBeNull();
+    expect(screen.queryByTestId('deploy-account-select')).toBeNull();
+  });
+
+  it('reports a failed account read as a failure, not as "you have no accounts"', async () => {
+    signIn();
+    mockApi.exchange.list.mockRejectedValue(new Error('EXCHANGE_CONNECTIONS_READ_FAILED'));
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await user.click(screen.getByTestId('deploy-mode-live'));
+
+    // An empty list and a read that did not complete are different statements, and this
+    // one must not claim the account holder has no exchange connected.
+    expect(await screen.findByTestId('deploy-accounts-error')).not.toBeNull();
+    expect(screen.queryByTestId('deploy-no-accounts')).toBeNull();
+    expect(screen.queryByTestId('deploy-account-select')).toBeNull();
+  });
+
+  it('tells a live deployer the period bound before they commit', async () => {
+    signIn();
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    const panel = await chooseLive(user);
+
+    // The bound is the thing a subscriber most needs to know, because it is what makes
+    // this deployment stop. Asserted on the rendered text, not on a comment.
+    expect(panel.textContent).toMatch(/real orders/i);
+    expect(panel.textContent).toMatch(/subscription/i);
+  });
+
+  it('opens the named Listing directly when the URL carries ?listing_id and intent=deploy', async () => {
+    signIn();
+    const detail = listingDetail();
+    stubCatalogue(catalogueCard({ name: detail.name, price_minor: detail.price_minor }));
+    mockApi.library.detail.mockResolvedValue(detail);
+    mockApi.library.subscriptionStatus.mockResolvedValue(ACTIVE_SUBSCRIPTION.subscription);
+
+    render(
+      <MemoryRouter initialEntries={[`/?listing_id=${LISTING_ID}&intent=deploy`]}>
+        <StrategyMarketplace />
+      </MemoryRouter>,
+    );
+
+    // No card click anywhere in this test -- the URL alone put the page in the detail view.
+    await screen.findByRole('heading', { level: 2, name: detail.name });
+    expect(await screen.findByTestId('deploy-panel')).not.toBeNull();
+    expect(mockApi.library.detail).toHaveBeenCalledWith(LISTING_ID);
+  });
+
+  it('does not open any Listing when the URL carries listing_id with no deploy intent', async () => {
+    signIn();
+    stubCatalogue();
+
+    render(
+      <MemoryRouter initialEntries={[`/?listing_id=${LISTING_ID}`]}>
+        <StrategyMarketplace />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /strategy marketplace/i });
+    expect(mockApi.library.detail).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('deploy-panel')).toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// 7. Controls — each assertion above, shown failing when the behaviour it describes is broken
 // ═════════════════════════════════════════════════════════════════════════════════════════
 
 describe('controls: the assertions above can fail', () => {

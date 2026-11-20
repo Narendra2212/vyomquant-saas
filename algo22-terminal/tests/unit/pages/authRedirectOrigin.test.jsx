@@ -215,9 +215,28 @@ const EMAIL_LINK_METHODS = Object.freeze([
   'resend',                 // no call site today
 ]);
 
-/** Enumerated by hand from `src/`, and re-derived from `src/` by the last test below. */
+/** Enumerated by hand from `src/`, and re-derived from `src/` by the last test below.
+ *
+ * `resetPasswordForEmail` was listed in `EMAIL_LINK_METHODS` above with the note "no call
+ * site today", alongside the prediction that a forgot-password screen was one of the two
+ * most likely next additions. It has now been added (`pages/AuthPage.jsx`'s
+ * `handlePasswordReset`, reached from the *Forgot password?* control on the sign-in form),
+ * so it has a call site and appears here.
+ *
+ * That addition closed a real gap rather than extending a feature: `/reset-password` and
+ * `pages/UpdatePasswordPage.jsx` already existed and `App.jsx` already intercepted a
+ * `type=recovery` hash, but NOTHING in the app had ever asked Supabase to send the email,
+ * so the only way to reach the completion form was an operator triggering a recovery mail
+ * by hand from the Supabase dashboard. The explicit `redirectTo` is the other half: the
+ * comments in `supabase.js` and `App.jsx` both recorded that the app could not assert
+ * which path a recovery link landed on, precisely because no call site set it.
+ *
+ * Sorted in CODEPOINT order on `file\0method`, matching the derivation below -- which puts
+ * `resetPasswordForEmail` before `signInWithOAuth`.
+ */
 const EMAIL_LINK_CALL_SITES = Object.freeze([
   { file: 'App.jsx', method: 'updateUser', count: 1 },
+  { file: 'pages/AuthPage.jsx', method: 'resetPasswordForEmail', count: 1 },
   { file: 'pages/AuthPage.jsx', method: 'signInWithOAuth', count: 1 },
   { file: 'pages/AuthPage.jsx', method: 'signInWithOtp', count: 2 },
   { file: 'pages/AuthPage.jsx', method: 'signUp', count: 1 },
@@ -333,15 +352,32 @@ describe('3. the redirect target exists in the router', () => {
     expect(APP_JSX).toContain(`path="${AUTH_REDIRECT_PATH}"`);
   });
 
-  it('is reachable on arrival, because the guard reads the token out of the hash', () => {
+  it('is reachable on arrival, now via the PKCE code exchange rather than a hash read (FE-01)', () => {
     // Source-level, and said plainly: this asserts the mechanism is present in `App.jsx`,
-    // not that a browser performed it. `/app/dashboard` sits behind `AuthGuard`, so a user
-    // arriving with `#access_token=…` and nothing in `sessionStorage` would be bounced to
-    // `/signin` unless the guard reads the hash SYNCHRONOUSLY during render —
-    // `getEffectiveToken()` is what does that, and `AuthGuard` is what calls it.
+    // not that a browser performed it. `/app/dashboard` sits behind `AuthGuard`.
+    //
+    // This used to assert `AuthGuard` read `#access_token=` out of the hash SYNCHRONOUSLY
+    // during render via `getEffectiveToken()` -- that was the FE-01 login-CSRF defect
+    // itself (any signed token in the hash was adopted as the session) and has been
+    // deleted, not merely narrowed; see docs/launch_readiness/REMEDIATION_LEDGER.json, id
+    // "FE-01". A legitimate redirect now carries `?code=...` (`flowType: 'pkce'` in
+    // src/supabase.js), exchanged asynchronously against a locally-held verifier, so
+    // `AuthGuard` must instead be able to WAIT for that exchange rather than read it
+    // synchronously -- `hasPendingAuthCodeExchange()` is what recognises the wait is
+    // needed, and `useGuardedAuthToken()` (used by `AuthGuard`) is what performs it.
     expect(APP_JSX).toMatch(/function getEffectiveToken\(\)/);
-    expect(APP_JSX).toMatch(/hash\.includes\("access_token="\)/);
-    expect(APP_JSX).toMatch(/function AuthGuard\(\)\s*\{\s*const token = getEffectiveToken\(\)/);
+    // The deleted branch is referenced in a comment (explaining why it is gone), so this
+    // checks the FUNCTION BODY specifically rather than the whole file: `getEffectiveToken`
+    // itself must contain no `hash` read at all any more.
+    const effectiveTokenBody = APP_JSX.slice(
+      APP_JSX.indexOf('export function getEffectiveToken()'),
+      APP_JSX.indexOf('function useGuardedAuthToken()'),
+    );
+    expect(effectiveTokenBody).not.toMatch(/window\.location\.hash/);
+    expect(effectiveTokenBody).not.toMatch(/access_token=/);
+    expect(APP_JSX).toMatch(/function hasPendingAuthCodeExchange\(\)/);
+    expect(APP_JSX).toMatch(/function useGuardedAuthToken\(\)/);
+    expect(APP_JSX).toMatch(/export function AuthGuard\(\)\s*\{\s*const \{ pending, token: effectiveToken \} = useGuardedAuthToken\(\)/);
   });
 
   it('has its hash handler mounted above the routes, so it runs on this path too', () => {
@@ -379,7 +415,30 @@ const fillCredentials = ({ signup = false } = {}) => {
     fireEvent.change(document.getElementById('auth-confirm-password'), {
       target: { value: 'Str0ng!Passw0rd' },
     });
-    fireEvent.click(document.querySelector('input[type="checkbox"]'));
+
+    // LEGAL-01 added a second consent box (age) beside the Terms one, and a country
+    // declaration. This used to tick `querySelector('input[type="checkbox"]')` -- the FIRST
+    // box only -- so sign-up was refused before it ever reached Supabase and this file's two
+    // sign-up cases failed with "expected undefined to be defined", which says nothing about
+    // why.
+    //
+    // Every box is ticked rather than the two known ones by name: this helper's subject is
+    // the REDIRECT, not the consent copy, so it should keep working when a declaration is
+    // added. The count is asserted so "ticked them all" cannot quietly become "ticked none".
+    const consents = document.querySelectorAll('input[type="checkbox"]');
+    if (consents.length === 0) {
+      throw new Error(
+        'the sign-up form has no consent checkbox; this helper tick its boxes to get past '
+          + "LEGAL-01's gates, so a form with none means the selector is stale",
+      );
+    }
+    consents.forEach((box) => {
+      if (!box.checked) fireEvent.click(box);
+    });
+
+    // Not in RESTRICTED_COUNTRY_CODES, so it passes the jurisdiction gate too.
+    const country = document.querySelector('select');
+    if (country) fireEvent.change(country, { target: { value: 'IN' } });
   }
 };
 

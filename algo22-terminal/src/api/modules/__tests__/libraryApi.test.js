@@ -97,6 +97,11 @@ const EXPECTED = {
     verb: 'post',
     call: ['/api/library/submissions', SUBMISSION_BODY],
   },
+  'submissions.list': {
+    args: [ID],
+    verb: 'get',
+    call: [`/api/library/submissions?strategy_id=${ENC}`],
+  },
   'submissions.get': {
     args: [ID],
     verb: 'get',
@@ -175,6 +180,11 @@ const EXPECTED = {
   },
 
   clone: { args: [ID], verb: 'post', call: [`/api/library/${ENC}/clone`] },
+
+  // MKT-05: the subscriber-safe deploy path. Default body is {}, the handler's own default
+  // for a request carrying none of symbol/timeframe/capital/session_options.
+  deploy: { args: [ID], verb: 'post', call: [`/api/library/${ENC}/deploy`, {}] },
+
   rate: { args: [ID, RATING_BODY], verb: 'post', call: [`/api/library/${ENC}/rate`, RATING_BODY] },
 
   // A PATCH, not a PUT: the route is `@literal_router.patch("/{library_id}/settings")`.
@@ -185,6 +195,19 @@ const EXPECTED = {
   },
 
   creatorAnalytics: { args: [], verb: 'get', call: ['/api/library/creator/analytics'] },
+
+  // MKT-07: the payout half of the creator ledger. `GET /creator/payouts` mirrors
+  // `creator_analytics` exactly — owner-scoped, no parameters.
+  creatorPayouts: { args: [], verb: 'get', call: ['/api/library/creator/payouts'] },
+
+  // MKT-06/MKT-07: admin-only settlement, a PUT (not a PATCH — the route is
+  // `@router.put("/creator-payouts/{payout_id}/settle")`).
+  settleCreatorPayout: {
+    args: [ID, { status: 'completed', reference: 'ref-1' }],
+    verb: 'put',
+    call: [`/api/library/creator-payouts/${ENC}/settle`, { status: 'completed', reference: 'ref-1' }],
+  },
+
   subscriberAnalytics: { args: [], verb: 'get', call: ['/api/library/subscriber/analytics'] },
 };
 

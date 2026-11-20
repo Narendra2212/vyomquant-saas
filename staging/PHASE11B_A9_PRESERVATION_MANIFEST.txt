@@ -1,0 +1,91 @@
+PHASE 11B-A9 PRESERVATION MANIFEST
+generated 2026-10-10 17:52:05 local
+HEAD 074b772ab16cece62cbfca0f2b78497be2ae56d5
+
+Every path below is UNTRACKED unless marked TRACKED. Nothing here was staged,
+committed or modified by A9. SHA-256 is over the raw bytes on disk.
+
+==============================================================================================================
+T1  LANE CORE - the read-only PostgreSQL lane cannot run without these
+==============================================================================================================
+  staging/bootstrap_pg.py                                                       25191  b22d15cd25baae57e0754b03814ec27c199b4505dc6fcd62e2134f1e04be60a3
+  staging/dsn.py                                                                 4192  c123dcac39a8cb2e6f911e4ec16570e8ca4b45e7bb3032dbd15171e246f951c5
+  scripts/verify_schema_drift.py                                                12170  a7ce585d4e03030c146ee4946d5a1bb03707e755062bb1537a8ad65e0420f295
+  staging/provisioning_snapshot.json                                           396325  8e3057e0e86dd1132278edda8a048b8a4a8a2485ec06b80055d9d010a77cd18f
+  staging/run_pg_lane.py                                                         4200  0c3b013af1751829f645b33ed5d7c1e6edc18430074bbee6828a53f2a95d586a
+  staging/run_pg_suite.py                                                        5799  1997c680746dbce47f4961500e073478c7fa16c951b34b915be5bad55c263eca
+  tests/paper_pg_client.py                                                      17155  cc654f71b0b97a15b5b6c8915a1f543e1f2244d5637b80d8babf9db4601db9be
+
+==============================================================================================================
+T2  PROVISIONING / RE-BASELINE - carries CREATE/DROP DATABASE capability
+==============================================================================================================
+  scripts/provision_database.py                                                 35363  8379eacf73a2a5d638b9c221951cc9f0fd4f70bf5321bb2b2640f24811f6da0b
+  scripts/verify_provisioning.py                                                16404  e90742f4b36bb1c3b82f932d5c536ca0c30d707c7e7b600bc4b3b1b300cf58b6
+
+==============================================================================================================
+T3  PHASE 11B-A8 ARTIFACTS - the two test fixes and the report
+==============================================================================================================
+  tests/test_api03_rate_limit_storage_is_fail_closed.py                         21886  33a30d00744ea7c8ed2cdf12130a00503599045a94050bd1030119d508ea0cff
+  tests/test_p11b_a8_collection_integrity.py                                    16915  ade04e82d4f041859d5797a05f5d1be375b7ea6cea9f182d09dd9bde4b54a06e
+  staging/PHASE11B_A8_ACCELERATION_REPORT.md                                    33440  57f6d373cc0537f1d6ae1294d4874edd5c618c31b5baad3c0507e43b7014dbe5
+
+==============================================================================================================
+T4  READ-ONLY PROBES / DIAGNOSTICS
+==============================================================================================================
+  staging/probe_pg_ready.py                                                     11535  16d4fdfd41394d92a1472c4979837e2910e0d6239fd9ef280015974f681d2613
+  staging/probe_pg_activity.py                                                   1627  d4db2e2687c4d10b2b33776b294c2056faa5fae1901dbd480735d71d388b4c4a
+  staging/probe_pg_blockers.py                                                   2886  01fbff3fb17eebe9cd9ff4cc6bde56b6ab3da0ae69aedf1900d312b38640e0de
+  staging/start_pg.ps1                                                           1494  8c1b0c45e07e4a165a4f8917ca1a121ac498354eea32b67847ccf2dfcf5ec5d8
+  staging/probe_p11b_w1b_import_time_paths.py                                    7339  0435304c09c820a6704a0497bcbbb40aab3dd1229fe24d99ca504be8dd2ef62c
+  staging/probe_p11b_w1b_pyc_recovery.py                                         7791  3f871e8e61d1981d5c67d7e9aed77f3adc1f3d6ad4ed8488f0391a790ed6d268
+  staging/probe_p11b_w1b_lost_coverage.py                                        5913  21988c0aa930302991b7b37486073a1eca44477ff55c682a0583d1f677d08c82
+
+==============================================================================================================
+T5  POSTGRESQL-GATED TEST FILES (untracked) - the lane IS these files
+==============================================================================================================
+  tests\test_billing_data_isolation_postgres.py                                 20443  16173b02ca8c4323b89a27de9154db46a1050003703cf65ac0e9a3f8f91962b1
+  tests\test_bug049_identity_types_postgres.py                                  18374  7741dfe9f8a2c7f0a7bdaa520acd3d4e2543fdc553b95c47433c134ac3484f64
+  tests\test_bug056_library_subscriptions_updated_at_postgres.py                 9136  436d1c649dffd15dca8add230f6aa7083aa387a2e0e5579a4291fec3665d299d
+  tests\test_bug057_listing_moderation_authz_postgres.py                        19911  a6543847edfae44873d6d61208db9cf1bec880bfea3b0c08f573be56fbbf9af7
+  tests\test_cross_tenant_read_sweep_postgres.py                                 7801  e476a56607cfccfeb951cc2915281512caf8a71b503504ebc3cdcdc9070b2626
+  tests\test_fee01_tenant_is_validated_not_sentinel_postgres.py                  8707  c74a6c76b6b98d21e751f72d8af64f9dcdccec76d1dbe38434f0b228859c2512
+  tests\test_fee_third_asset_pct_is_nullable_postgres.py                        10317  0e2ff06c578650d29c96782eaf4f74085094c74f4e842a757a9d3f04f8f18db1
+  tests\test_lib01_clone_strategy_postgres.py                                   35303  155fdfa188297ff5e98a3b699bd539c755b6e555933531affb6f6c24f88ac2fc
+  tests\test_money01_referral_commission_idempotence_postgres.py                23047  8f47168d559fc1d3a172c1cd8ec3ff7c8b574e8b2468137f1754aae3631ae99e
+  tests\test_money04_referral_ledger_is_single_currency_postgres.py             33820  452e95dc7d6e8f1b64ea88a483691002fbcd11cb1c4dea7e1739d093b977950d
+  tests\test_money06_referral_obligations_postgres.py                           46080  8674145e76b9d01c1d40141621469d5b6924c2273b0141386f6b3b77da7cf471
+  tests\test_p10d_fee_summary_does_not_mix_denominations_postgres.py            14362  ef1c0d76f62284c696a230631442aa8788d9076b4d77f3b349e5c486a927d5c4
+  tests\test_p10d_referral_settlement_lifecycle_postgres.py                     15687  39155248af85a15a3d95d62d03206747f7ff1991714ba6625c23774f8c4be9a0
+  tests\test_paper01_botrunner_fills_reach_the_ledger_postgres.py               43538  135f6e15c99ab0e6303345ceed429e18be424d3dbc7c54d7ad708a6fe799496e
+  tests\test_paper02_unfunded_order_state_postgres.py                           32612  01c6d2fc9f0713898b7e7f5a4844b748a9b3b7432d62b20c03901368ea2689db
+  tests\test_pgcrypto_preflight_postgres.py                                      9378  29849a270048fd5251ddcbb64e1eeef7913a283aee031f690219c901a41c87d7
+  tests\test_position_lifecycle_postgres.py                                     12228  73c44c30c634d287043b20e37af424d76f041dbabdd6e996770cbb37f62d0938
+  tests\test_production_security_probe_rolls_back_postgres.py                   29346  2041b969654408f231921e3df239dbe699dfef367cea035344e0bc6cccb8921f
+  tests\test_referral_money_lifecycle_postgres.py                               17259  17d674592ceb615b5b76ae519c61ff61b79b3ecf5027ecefe655010ec4bc0f92
+  tests\test_referral_payout_schema_contract_postgres.py                         8129  43378692e0df9f19c39fd8b55cedff8e9c967eac74b663454f572fb7dc3d5220
+  tests\test_schema_drift_checker_is_read_only_postgres.py                      12458  2dc5b1e095775551fa9b98f5fe52b139a9e461304fa2e4136c1dd3f5cab4eca9
+  tests\test_signup_integration_postgres.py                                     18706  47afd204c273c86255da9590cdbc975480b386dc84ef5dc63567397593fd01b0
+  tests\test_tenant01_cross_tenant_matrix_postgres.py                           25307  c6f831298806217b62d5fff349cb226e69df05d46fe6f7f265324353172e67e6
+  tests\test_tenant02_fee_records_rls_postgres.py                               43869  4db56a35db16bc903046ccf0e27a254caf58738617cdeeb2641e44e104eed4f4
+  tests\test_tenant_isolation_rls_postgres.py                                   30123  674bbe83159b998091c8841f6956196c7ccf745cd6c44c760b9e396375760b2e
+  tests\test_tenant_referential_integrity_postgres.py                           15240  a80d97f8b4e7247c6600f25a7ad18ffa78924283c25a8bc44dc1fbda0e14ea76
+  tests\test_trade01_concurrent_exposure_postgres.py                            45527  edfdda6bb7f5b6b978611bdb54ffc495e5b930d9201516f2605d680f66da514e
+  tests\test_trade07_stale_execution_recovery_postgres.py                       38780  24a25df7288bce83dc35c36ab8a5f066859033e988726c01c8c9b6aa8ff7d319
+  tests\test_work03_bot_ownership_claims_postgres.py                            43707  7f2fb54dd6d55c8fa696122bb0dd923e86ea1db5b99f49a823d744511553a606
+
+==============================================================================================================
+T6  UNTRACKED MIGRATIONS - needed for provisioning to reproduce the live schema
+==============================================================================================================
+  backend_app\migrations\022_fix_library_subscriptions_updated_at.sql             8614  604b5aaac46a4b7e0caad30600ce917a0da5e1cc2355ab94284815f0746e1534
+  backend_app\migrations\023_remediate_privilege_escalation.sql                 15776  918f268ec7ab7936205cc365f848782be92c5bbfb0d0db43454bc9e3e8db4e63
+  backend_app\migrations\024_remediate_referral_double_commission.sql            19592  2ff5958a1026523b6ca22dfa4f5d4874fe7059511541c7ce71885c4835e33b1d
+  backend_app\migrations\025_work03_bot_ownership_claims.sql                     8963  3dec123362075bd4282536603bf5093893fc4909c171a5180481e685effc6e74
+  backend_app\migrations\026_fee_records_row_level_security.sql                 26012  588e6b6d010f4602f148c19112bb05cb04ac4ea16f782899f920bcfbfea67f96
+  backend_app\migrations\027_referral_ledger_currency.sql                       17271  26b6e82d4bd8ed620cffda992de76ff31b98690d0a93d3de113b7652cabc7c83
+  backend_app\migrations\028_safety_control_audit.sql                           24300  953089a10af73bd85a59df79192e8041b607bcafce8a00e2172ea26d62afc5e4
+  backend_app\migrations\029_referral_obligations.sql                           38286  60f94f12befabd8f005c7c655469c3676e2659a3ddf846fa3adfcad5134206e8
+  backend_app\migrations\030_execution_venue_order_id.sql                       11147  d7d4d06a115b9019f5bb2f288ad691448b1c8b2592f0a6bc9da433027355c911
+  backend_app\migrations\031_fee_records_fee_pct_nullable.sql                    8960  9632a2548c6773bb81385722004f0f057dc81870ebec2c5add96f2285adc443e
+  backend_app\migrations\032_referral_payouts_terminal_evidence.sql             10531  8d7a3249cec57787b4a5642c61dcc972564f481a28e6439029b7d6bba3074fca
+
+TOTAL: 59 files, 1506272 bytes

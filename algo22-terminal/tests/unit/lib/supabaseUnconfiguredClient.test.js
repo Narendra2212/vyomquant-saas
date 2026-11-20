@@ -49,8 +49,14 @@ const AUTH_METHODS = [
   'verifyOtp',                   // pages/AuthPage.jsx
   'signInWithOAuth',             // pages/AuthPage.jsx
   'signUp',                      // pages/AuthPage.jsx
+  // Added with the *Forgot password?* control. Until then password recovery could not be
+  // STARTED from the product at all: /reset-password and UpdatePasswordPage.jsx existed and
+  // App.jsx intercepted a type=recovery hash, but nothing ever asked Supabase to send the
+  // email, so the only way in was an operator triggering one by hand from the dashboard.
+  'resetPasswordForEmail',       // pages/AuthPage.jsx
   'signOut',                     // apiClient.js, components/shell/AccountMenu.jsx
   'getUser',                     // App.jsx, AccountMenu.jsx, pages/TwoFA.jsx, pages/Wizard.jsx
+  'getSession',                  // App.jsx (FE-01: useGuardedAuthToken, PasswordRecoveryHandler)
   'updateUser',                  // App.jsx, pages/UpdatePasswordPage.jsx
   'onAuthStateChange',           // apiClient.js (MODULE SCOPE), App.jsx
 ];
@@ -132,6 +138,17 @@ describe('unconfigured Supabase stand-in client', () => {
       }).not.toThrow();
       expect(data.user).toBeNull();
       expect(error).toBeInstanceOf(Error);
+    });
+
+    it('getSession returns data.session as null with no error, so a guard awaiting it settles rather than hanging', () => {
+      // FE-01: App.jsx's `useGuardedAuthToken` / `PasswordRecoveryHandler` destructure
+      // `{ data: { session } }` while possibly awaiting a PKCE exchange; with Supabase
+      // unconfigured there is no exchange and no session to report, but the call must
+      // still resolve.
+      const client = createUnconfiguredClient();
+      const { data, error } = client.auth.getSession();
+      expect(data.session).toBeNull();
+      expect(error).toBeNull();
     });
 
     it.each(['signInWithPassword', 'signInWithOtp', 'verifyOtp', 'signUp'])(

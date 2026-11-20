@@ -269,9 +269,21 @@ class ExchangeConnectionSchemaRegistry:
             certification_level=5,
             is_certified=True,
             supported_market_types=["spot"],
-            sandbox_supported=True,
+            # EXCH-06: was `True`, and the sandbox field below was offered. MEASURED
+            # (staging/exch01_sandbox_endpoint_evidence.json, re-recorded under ccxt
+            # 4.5.90): coinbase publishes NO sandbox endpoint, and arming sandbox mode on
+            # it raises -- `SANDBOX_MECHANISMS["coinbase"]` is `UNSUPPORTED`. EXCH-04
+            # already recorded this exact contradiction in the capability registry; the
+            # same claim lived here. Offering a toggle the connect path refuses is worse
+            # than not offering one, because the refusal arrives after the trader has
+            # pasted a credential.
+            sandbox_supported=False,
             description="Regulated US spot exchange.",
-            known_limitations=["Spot trading only"],
+            known_limitations=[
+                "Spot trading only",
+                "No sandbox/testnet: coinbase publishes no sandbox endpoint on the "
+                "installed ccxt, so credentials can only be connected live",
+            ],
             fields=[
                 ExchangeCredentialField(
                     field_id="api_key",
@@ -289,13 +301,7 @@ class ExchangeConnectionSchemaRegistry:
                     secret=True,
                     placeholder="Enter Coinbase API Secret (or CDP private key)"
                 ),
-                ExchangeCredentialField(
-                    field_id="sandbox",
-                    label="Sandbox Mode",
-                    type=FieldType.BOOLEAN,
-                    required=False,
-                    default=False
-                )
+                # NO `sandbox` FIELD. See `sandbox_supported` above.
             ]
         )
 
@@ -348,9 +354,17 @@ class ExchangeConnectionSchemaRegistry:
             certification_level=4,
             is_certified=False,
             supported_market_types=["spot", "futures"],
-            sandbox_supported=True,
+            # EXCH-06: was `True`. MEASURED: kucoin publishes no sandbox endpoint and
+            # arming sandbox mode on it raises -- `SANDBOX_MECHANISMS["kucoin"]` is
+            # `UNSUPPORTED`. Same contradiction as coinbase above, and the same one
+            # EXCH-04 recorded in the capability registry.
+            sandbox_supported=False,
             description="Global crypto exchange with wide altcoin selection.",
-            known_limitations=["Level 4: Undergoing final live latency certification"],
+            known_limitations=[
+                "Level 4: Undergoing final live latency certification",
+                "No sandbox/testnet: kucoin publishes no sandbox endpoint on the "
+                "installed ccxt, so credentials can only be connected live",
+            ],
             fields=[
                 ExchangeCredentialField(
                     field_id="api_key",
@@ -376,13 +390,7 @@ class ExchangeConnectionSchemaRegistry:
                     secret=True,
                     placeholder="Enter KuCoin API Passphrase"
                 ),
-                ExchangeCredentialField(
-                    field_id="sandbox",
-                    label="Sandbox Mode",
-                    type=FieldType.BOOLEAN,
-                    required=False,
-                    default=False
-                )
+                # NO `sandbox` FIELD. See `sandbox_supported` above.
             ]
         )
 

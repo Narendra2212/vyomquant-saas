@@ -140,7 +140,10 @@ def audit_all_dockerfiles() -> Dict:
     t0 = time.time()
     log_ts("[docker_val] ENTER: Static Dockerfile Structure & Directive Audit")
     
-    target_dockerfiles = ["Dockerfile", "Dockerfile.backend", "Dockerfile.tee", "Dockerfile.websocket"]
+    # Dockerfile.tee (RT-23) and Dockerfile.websocket (WS-01) are both deleted as
+    # confirmed-dead -- their services were never actually deployed. Removed from this
+    # list rather than left for the os.path.exists() guard below to silently skip.
+    target_dockerfiles = ["Dockerfile", "Dockerfile.backend"]
     all_issues = []
     audited = []
 

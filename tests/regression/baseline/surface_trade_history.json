@@ -1,4 +1,5 @@
 {
+  "_baseline_note_live_history_source": "AUTHORISED RE-RECORD (LIVE-HIST-01, 2026-11-15) -- GET /api/orders/history's handler gains one early return: it now answers from `execution_records`, the table the trading engine writes every live order to, before the QuestDB and exchange fallbacks. Nothing removed, renamed or retyped; only the recorded order of returns moved. Found in production: the route read only QuestDB (unreachable there, and its query never bound its parameters) and answered [] with no exchange_id, so the LIVE Trade History ledger was empty for every user.",
   "api_call_count": 2,
   "api_calls": [
     {
@@ -45,6 +46,7 @@
           "returns": [
             "computed",
             "computed",
+            "computed",
             "list",
             "computed",
             "list"
@@ -85,6 +87,9 @@
           "returns": [
             {
               "count": "int",
+              "execution_environment": "computed",
+              "is_simulated": "bool",
+              "session_id": "null",
               "trades": "computed"
             }
           ],

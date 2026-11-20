@@ -330,3 +330,8 @@ async def test_concurrent_orders_risk_gate_serialization(auth_client):
     assert len(successes) == 1
     assert len(failures) == 1
     assert len(paper_svc.get_positions(user_id)) == 1
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

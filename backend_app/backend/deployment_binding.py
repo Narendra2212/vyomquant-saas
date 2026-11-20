@@ -154,6 +154,7 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from backend_app.backend.market_data_contract import (
@@ -228,6 +229,88 @@ EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
     "slippage_tolerance_bps",
     "order_timeout_seconds",
     "retry_policy",
+)
+
+#: DEPLOY-01. ``max_order_notional`` and ``max_open_positions`` are now consulted at
+#: order-construction time, in ``BotRunner._inner_loop``
+#: (``evaluate_deployment_execution_limits``), via ``execution_config`` threaded through
+#: ``deployment_runtime.build_runtime_blueprint`` into the runtime blueprint. They are
+#: therefore REMOVED from :data:`UNENFORCED_EXECUTION_CONFIG_FIELDS` below.
+#:
+#: ``order_timeout_seconds`` joins them: ``exchange_executor.place_order`` now accepts a
+#: ``timeout_seconds`` and wraps the ccxt ``create_order`` await in ``asyncio.wait_for``,
+#: and ``ExecutionEngine.execute_with_idempotency`` carries the deployment's value down to
+#: it as per-order state, the same way TRADE-04/TRADE-05 carry the risk verdict. It was the
+#: ONLY timeout on that call -- the ccxt client is constructed with no ``timeout`` key, so
+#: before this a hung venue response blocked the awaiting ``BotRunner`` tick for however
+#: long the socket allowed.
+#:
+#: WHY A TIMEOUT IS ENFORCEABLE ON A PATH THAT FORBIDS RETRIES. A timeout raises inside
+#: ``place_order``'s own ``try``, after ``_submit_attempted``, so RT-17 adjudicates it:
+#: ``_outcome_is_ambiguous`` is True for a non-ccxt exception (its docstring names
+#: ``asyncio.TimeoutError``), so the order is reported ``status="unknown"`` and is NOT
+#: resubmitted and NOT recorded as rejected. The control bounds how long the loop WAITS; it
+#: makes no claim about what happened at the venue.
+#:
+#: ``slippage_tolerance_bps`` and ``retry_policy`` are STILL refused, and the reason is now
+#: stronger than "no mechanism exists" -- each was measured against this path:
+#:
+#: * ``retry_policy`` would CONTRADICT AN IMPLEMENTED SAFETY CONTROL. RT-17
+#:   (``exchange_executor.py``, the ``except`` block of ``place_order``) exists precisely to
+#:   stop a re-send: "A LOST RESPONSE IS NOT A REJECTION... lets the strategy roll back,
+#:   re-enter on the next tick (new price => new execution id) and double the position",
+#:   and it logs "do NOT resubmit; adjudicate by clientOrderId". That parenthesis is the
+#:   whole problem: ``generate_execution_id`` folds PRICE into the hash
+#:   (``core/models/execution_record.py``, ``canonical_parts.append(f"{float(price):.8f}")``),
+#:   so a retry at a re-quoted price is a DIFFERENT execution id and the idempotency layer
+#:   does not recognise it as the same order. A retry policy here would defeat both the
+#:   control and the idempotency that would otherwise contain it. Enforcing this field
+#:   needs a price-stable retry key first, which is a change to the idempotency contract.
+#:
+#: * ``slippage_tolerance_bps`` has nothing to compare, synchronously, on the live path.
+#:   ``place_order``'s own docstring: "Returns 'pending' - wait for event system for
+#:   FILLED". ``avg_price`` is ``None`` whenever ccxt omits ``average``, and the live result
+#:   dict then substitutes the REQUESTED price ("When nothing filled there is no execution
+#:   price, so the requested price stands in -- ``fill_state`` is what says whether it means
+#:   anything"). A tolerance check written against that field would compute ZERO slippage in
+#:   exactly the case it should flag, which is worse than not checking: it would look
+#:   enforced. A correct version is a post-fill detector gated on ``fill_state``, reading
+#:   ``avg_price`` directly -- and being post-fill it can alert, not prevent, so it is a
+#:   different control from the pre-trade tolerance the field's name promises. Deciding
+#:   which of the two to build is a product call, not a wiring task.
+#: ``slippage_tolerance_bps`` NOW JOINS THEM, and the reason the refusal above was
+#: written has to be corrected rather than just deleted. That text says this platform's
+#: order path is "a market-only, synchronous submit with no slippage-tolerance check".
+#: MEASURED, THAT IS WRONG. ``ExecutionEngine._execute_trade_internal`` chooses
+#: ``CoreOrderType.market if price <= 0 else CoreOrderType.limit``, and
+#: ``master_executor._inner_loop`` does ``if price <= 0: continue`` before it ever builds
+#: an order -- so every live bot order is already a LIMIT at the decision price. The venue
+#: may fill there or better, never worse. The path was never market-only, and it already
+#: had a slippage bound: zero.
+#:
+#: That changes what this field is. It is not a new control needing a price to compare
+#: against (the objection that blocked it, and a real objection for a POST-FILL detector,
+#: which ``avg_price``'s absence genuinely does defeat). It is a stated widening of a bound
+#: that exists, applied by ``core.execution_engine.bounded_limit_price`` in the order's own
+#: favour direction -- up for a BUY, down for a SELL. A deployment that sets nothing sends
+#: the identical limit price it always did, so enforcement is additive.
+#:
+#: The idempotency contract is untouched: the execution id is still derived from the
+#: DECISION price, not the widened submit price, so one decision keeps one identity
+#: whatever this field says. That is the property ``retry_policy`` cannot satisfy, which is
+#: why it alone remains refused below.
+ENFORCED_EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
+    "max_order_notional",
+    "max_open_positions",
+    "order_timeout_seconds",
+    "slippage_tolerance_bps",
+)
+
+#: The fields ``normalise_execution_config`` still refuses outright when supplied with a
+#: real (non-``None``) value, because no execution path reads them yet. Public (like
+#: :data:`EXECUTION_CONFIG_FIELDS`) so a test iterates this set rather than restating it.
+UNENFORCED_EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = tuple(
+    field for field in EXECUTION_CONFIG_FIELDS if field not in ENFORCED_EXECUTION_CONFIG_FIELDS
 )
 
 #: How long a "columns are absent" verdict is trusted before it is re-probed, so applying
@@ -488,7 +571,145 @@ def normalise_execution_config(raw: Any) -> Dict[str, Any]:
             {"unknown_fields": unknown, "known_fields": list(EXECUTION_CONFIG_FIELDS)},
         )
 
+    # DEPLOY-01, ORIGINAL STATE: every field :data:`EXECUTION_CONFIG_FIELDS` names was
+    # validated and stored into the strategy_deployments row, but grepping the whole
+    # execution path (BotRunner, ExecutionGuard, order_control) turned up no reader for
+    # any of them -- a deployment with max_order_notional=1000 ran with exactly the same
+    # order-size ceiling as one with no execution_config at all. That was the UNKNOWN_FIELD
+    # refusal above's own stated reason for refusing a key ("the limit it expresses would
+    # not be in force"), applied inconsistently: a KNOWN field with the same property was
+    # silently accepted instead.
+    #
+    # DEPLOY-01, CURRENT STATE: ``max_order_notional`` and ``max_open_positions`` are now
+    # genuinely consulted at order-construction time
+    # (``master_executor.evaluate_deployment_execution_limits``, called from
+    # ``BotRunner._inner_loop`` with the execution_config threaded through
+    # ``deployment_runtime.build_runtime_blueprint``) and are therefore REMOVED from the
+    # refusal below. ``order_timeout_seconds`` and ``slippage_tolerance_bps`` have since
+    # joined them and are likewise removed -- this comment named all three as unenforced
+    # for one commit longer than it was true, which is why the refusal is DERIVED from
+    # :data:`UNENFORCED_EXECUTION_CONFIG_FIELDS` rather than restated here. Only
+    # ``retry_policy`` still names no reader -- see that tuple's own note for why it
+    # cannot have one without changing the idempotency contract -- and it stays refused
+    # here, not silently stored, the same choice
+    # strategy_service.assert_deploy_params_applicable already makes for
+    # capital/trade_size_pct/stop_loss_pct/max_drawdown_pct (DEPLOY_PARAMS_NOT_APPLIED).
+    supplied_but_not_enforced = sorted(
+        str(k)
+        for k in raw
+        if str(k) in UNENFORCED_EXECUTION_CONFIG_FIELDS and raw[k] is not None
+    )
+    if supplied_but_not_enforced:
+        raise DeployRejected(
+            "EXECUTION_CONFIG_NOT_ENFORCED",
+            f"execution_config field(s) {supplied_but_not_enforced} are validated and "
+            "stored but no execution path reads them yet, so this deployment would run "
+            "with exactly the limits a bare execution_config would have had. Remove "
+            "them rather than rely on a limit that is not in force. Per-trade risk that "
+            "IS enforced lives on the strategy's own risk configuration "
+            "(strategies.risk: position_size_pct, stop_loss_pct, take_profit_pct).",
+            {
+                "not_enforced_fields": supplied_but_not_enforced,
+                "known_fields": list(EXECUTION_CONFIG_FIELDS),
+                "enforced_fields": list(ENFORCED_EXECUTION_CONFIG_FIELDS),
+            },
+        )
+
+    # ``max_order_notional`` and ``max_open_positions`` are now real limits a BotRunner
+    # consults on every tick, so a value this platform cannot actually enforce (a negative
+    # notional, a non-numeric position cap) must be refused HERE rather than stored and
+    # discovered as a no-op at the first tick -- the same "err toward refusing" this
+    # module's docstring states for every other gate it owns.
+    if "max_order_notional" in raw and raw["max_order_notional"] is not None:
+        _assert_positive_number(raw["max_order_notional"], "max_order_notional")
+    if "max_open_positions" in raw and raw["max_open_positions"] is not None:
+        _assert_positive_int(raw["max_open_positions"], "max_open_positions")
+
+    # ``slippage_tolerance_bps`` is now a real limit too, so the same "refuse here rather
+    # than discover a no-op at the first tick" rule applies.
+    #
+    # The ceiling is 10000 bps and that figure is derived, not picked: the band is applied
+    # as ``price * (1 +/- bps/10000)``, so at exactly 10000 a SELL's limit price becomes
+    # ZERO -- "sell at any price", which is the absence of a bound and the precise
+    # opposite of what this field is for. Anything at or beyond that is therefore refused
+    # rather than stored as a tolerance that silently disables itself on one side.
+    if "slippage_tolerance_bps" in raw and raw["slippage_tolerance_bps"] is not None:
+        _assert_positive_number(
+            raw["slippage_tolerance_bps"], "slippage_tolerance_bps"
+        )
+        if Decimal(str(raw["slippage_tolerance_bps"])) >= Decimal("10000"):
+            raise DeployRejected(
+                "EXECUTION_CONFIG_INVALID_FIELD",
+                "execution_config.slippage_tolerance_bps must be below 10000 bps "
+                "(100%). The band is applied as price * (1 +/- bps/10000), so at 10000 a "
+                "sell order's limit price is zero -- that is no bound at all, which is "
+                "the opposite of a slippage tolerance.",
+                {
+                    "slippage_tolerance_bps": raw["slippage_tolerance_bps"],
+                    "max_exclusive": 10000,
+                },
+            )
+
     return {str(key): raw[key] for key in EXECUTION_CONFIG_FIELDS if key in raw}
+
+
+def _assert_positive_number(value: Any, field: str) -> None:
+    """``value`` is a finite number > 0, or :class:`DeployRejected`.
+
+    ``bool`` is explicitly excluded even though ``isinstance(True, int)`` holds in Python --
+    a caller who sent ``true`` almost certainly did not mean "a 1-unit notional cap".
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a positive number; got "
+            f"{type(value).__name__} {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    try:
+        numeric = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} is not a readable number: {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    if not numeric.is_finite() or numeric <= 0:
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a positive, finite number; got {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+
+
+def _assert_positive_int(value: Any, field: str) -> None:
+    """``value`` is a non-negative whole number, or :class:`DeployRejected`.
+
+    ``0`` is accepted deliberately: ``evaluate_deployment_execution_limits`` treats a
+    deployment's open-position count as 0 or 1 (one symbol per deployment - 13.4/13.5's
+    own market-ambiguity gate forbids more), so ``max_open_positions=0`` is the one value
+    at which this cap actually refuses anything (a deployment that may never open its
+    single position). A negative count is meaningless and refused.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a whole number >= 0; got "
+            f"{type(value).__name__} {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    if isinstance(value, float) and not value.is_integer():
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a whole number; got {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    if int(value) < 0:
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be >= 0; got {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
 
 
 def _requested_gap_strategy(raw: Any) -> Optional[GapHandlingStrategy]:
@@ -688,6 +909,16 @@ def outstanding_prerequisite(state: Any) -> str:
     )
 
 
+#: VER-REDEPLOY-01: a version that has been deployed before may be deployed again. A
+#: version is an immutable snapshot (004c's trigger forbids changing its graph, plan or hash
+#: once DEPLOYED), and it passed this very gate as READY the first time, so every
+#: prerequisite READY stands for still holds. Requiring READY only meant that, once a
+#: deployment had run, the ONLY way to deploy the strategy again was to save it - minting a
+#: new, identical version every time (reported by the user; ten such versions in prod, each
+#: stuck at RUNNING). ARCHIVED stays refused.
+REDEPLOYABLE_LIFECYCLE_STATES = frozenset({"DEPLOYED", "RUNNING", "PAUSED", "STOPPED"})
+
+
 def assert_version_ready(
     version_row: Mapping[str, Any], strategy_id: str, version: Any
 ) -> None:
@@ -705,7 +936,7 @@ def assert_version_ready(
     """
     state = version_row.get("lifecycle_state")
     label = str(state).upper() if state else None
-    if label == LIFECYCLE_READY:
+    if label == LIFECYCLE_READY or label in REDEPLOYABLE_LIFECYCLE_STATES:
         return
     raise DeployRejected(
         "VERSION_NOT_READY",
@@ -1280,7 +1511,8 @@ async def assert_models_verified(
     registry: Any = None,
     store: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Requirements 17.6 and 17.7, at deploy time. Returns any non-blocking warnings.
+    """Requirements 17.6, 17.7, and the ML-01 performance gate, at deploy time. Returns
+    any non-blocking warnings.
 
     17.6's second enforcer, verbatim: "THE Deployment_Service SHALL hold the deployment
     out of the running state". A deployment refused here never reaches ``DEPLOYING``, so
@@ -1351,6 +1583,24 @@ async def assert_models_verified(
                 "verdict": schema.code,
                 "expected_feature_columns": schema.expected,
                 "actual_feature_columns": schema.actual,
+            },
+            http_status=409,
+        )
+
+    # ML-01: a model that is intact and schema-matched can still be useless. Refused by
+    # name and value - "accuracy=0.31 below 0.35", never a generic "model not ready" -
+    # mirroring 17.6/17.7's own refusal shape. See model_readiness's "GATE 3" docstring
+    # for why these thresholds, and why a model bound before the gate existed is not
+    # refused for failing a bar it predates.
+    performance = report.first_performance_failure()
+    if performance is not None:
+        raise DeployRejected(
+            "MODEL_PERFORMANCE_BELOW_THRESHOLD",
+            performance.message,
+            {
+                **performance.details,
+                "version_id": version_id,
+                "verdict": performance.code,
             },
             http_status=409,
         )
@@ -2107,6 +2357,8 @@ __all__ = [
     "DeploymentBinding",
     "EXCHANGE_ACCOUNT_TABLES",
     "EXECUTION_CONFIG_FIELDS",
+    "ENFORCED_EXECUTION_CONFIG_FIELDS",
+    "UNENFORCED_EXECUTION_CONFIG_FIELDS",
     "RISK_CONFIG_TABLE",
     "UNCHECKED",
     "account_exchange_id",

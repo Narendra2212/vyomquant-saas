@@ -25,21 +25,102 @@ import asyncio
 import inspect
 import logging
 import os
-from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, validator
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
-from backend_app.core.dependencies import get_current_user, get_request_supabase
+from backend_app.core.dependencies import get_admin_user, get_current_user, get_request_supabase, get_service_supabase
+from backend_app.core.rate_limit import limiter
+from backend_app.core.runtime_env import local_fallbacks_are_acceptable
 from supabase import Client as SupabaseClient
 
+def _rpc_error_code(exc: Exception) -> str:
+    """The SQLSTATE a failed ``.rpc()`` call raised, or ``""`` when none is readable.
+
+    REF-01's two RPCs (``create_referral_payout_request``, ``settle_referral_payout``,
+    migration ``049_ref01_payout_atomic.sql``) each raise ``RAISE EXCEPTION ...
+    USING ERRCODE = 'RFxxx'``. ``postgrest.exceptions.APIError`` carries that SQLSTATE on
+    its own ``.code`` attribute (PostgREST relays the Postgres error code verbatim); a
+    double that does not wrap postgrest's exception type is read by falling back to
+    ``str(exc)``, the same two-step reading ``paper_repository._is_unique_violation``
+    already uses for the same reason -- which attribute a driver surfaces differs by
+    driver, and PostgREST itself surfaces neither as a guaranteed attribute on every
+    double used in tests.
+    """
+    code = str(getattr(exc, "code", "") or "").strip()
+    if code:
+        return code
+    text = str(exc)
+    for candidate in ("RF001", "RF002", "RF003", "RF004"):
+        if candidate in text:
+            return candidate
+    return ""
+
+
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
+# REF-02: this used to be its own `Limiter(key_func=get_remote_address)` -- a SEPARATE
+# instance from every other router's, with two compounding defects. (1) Behind
+# CloudFront/ALB the socket peer `get_remote_address` reads is the shared edge address,
+# not the caller's own -- every caller landed in the SAME bucket, so the limit was
+# either shared by everyone (one heavy caller exhausts it for all) or trivially useless.
+# (2) A bare `Limiter(...)` with no `storage_uri` defaults to slowapi's own in-memory
+# store, which is per-POD: in a multi-replica deployment the effective limit becomes the
+# configured one times the replica count. The shared `core.rate_limit.limiter` (SEC-10's
+# `trusted_client_address`, resolved storage backend) is what every other router in this
+# codebase already uses for exactly this reason.
 logger = logging.getLogger("ReferralRouter")
+
+_service_client = None
+
+
+def _get_service_client():
+    """A cached Supabase service-role client, as `routers/library.py:146` defines it.
+
+    Used by ONE endpoint in this module -- ``POST /referral/validate`` -- and the reason
+    is a privilege decision, not convenience.
+
+    Validating a code means reading a row that belongs to somebody else: the referrer's.
+    Doing that through the caller's own JWT requires an RLS policy broad enough to let
+    any logged-in customer read other customers' `referral_codes` rows, and
+    ``006_reconcile_production_database.sql`` supplied exactly that --
+    ``USING (user_id = auth.uid() OR is_active = true)``. Since every row is active, the
+    predicate reduces to TRUE and a single unfiltered select returns every referral code
+    in the business together with the `user_id` that owns it.
+
+    Measured with ``staging/anon_read_sweep.py authenticated``, which seeds a code owned
+    by customer A and reads it as customer B:
+
+        referral_codes      authenticated saw 1 of 1 row(s)
+
+    So the privilege moves to the server: the policy is narrowed to own-rows-only (see
+    ``migrations/referral_system_redesign.sql``), the lookup runs as `service_role`, and
+    the response still discloses only what it disclosed before -- a verdict plus the
+    referrer id FOR A CODE THE CALLER ALREADY SUPPLIED. Knowing one code's owner is the
+    referral feature working; enumerating all of them is not.
+
+    Like ``routers/library.py``, the degraded ``None`` return is gated on
+    ``runtime_env.local_fallbacks_are_acceptable()`` rather than on ``DEV_MODE`` alone, so
+    a declared non-local ``ENV`` cannot be downgraded to local semantics by a leftover
+    flag (RUNTIME-01). Regression:
+    tests/test_environment_precedence_is_centralised.py
+    """
+    global _service_client
+    if _service_client is None:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            if local_fallbacks_are_acceptable():
+                return None
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set."
+            )
+        from supabase import create_client
+
+        _service_client = create_client(url, key)
+    return _service_client
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PYDANTIC MODELS
@@ -123,9 +204,16 @@ class ValidateReferralCodeRequest(BaseModel):
 
 
 class ValidateReferralCodeResponse(BaseModel):
-    """Response for referral code validation"""
+    """Response for referral code validation.
+
+    REF-02: ``referrer_id`` (the referrer's raw Supabase user UUID) used to be returned
+    here. Nothing in the frontend reads it -- grepped algo22-terminal/src/: the only
+    reference was this field's own name in a JSDoc type comment -- so returning it
+    disclosed another user's identifier for no caller-facing purpose. ``valid`` and
+    ``message`` are the whole contract an unauthenticated-in-practice caller (see
+    ``validate_referral_code``'s own docstring) needs to decide whether to submit a code.
+    """
     valid: bool
-    referrer_id: Optional[str] = None
     message: str
 
 
@@ -419,7 +507,10 @@ async def get_referral_stats(
                 id=p["id"],
                 amount_usd=float(p["amount_usd"]),
                 status=p["status"],
-                payment_method=p.get("payment_method"),
+                # Phase 10: the provisioned column is `payout_method`; prefer it and fall
+                # back to `payment_method` for any legacy row written under the other
+                # migration's shape. The response field stays `payment_method`.
+                payment_method=p.get("payout_method") or p.get("payment_method"),
                 created_at=p["created_at"],
                 approved_at=p.get("approved_at"),
                 paid_at=p.get("paid_at"),
@@ -498,6 +589,10 @@ async def get_commission_history(
             query = query.eq("status", status)
         
         resp = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+        if inspect.isawaitable(resp):
+            # REF-01: the request client is async; un-awaited, `resp.data` raised and both
+            # history endpoints answered 500 for every user.
+            resp = await resp
         
         commissions = [
             CommissionRecord(
@@ -553,13 +648,19 @@ async def get_payout_history(
             query = query.eq("status", status)
         
         resp = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+        if inspect.isawaitable(resp):
+            # REF-01: the request client is async; un-awaited, `resp.data` raised and both
+            # history endpoints answered 500 for every user.
+            resp = await resp
         
         payouts = [
             PayoutRecord(
                 id=p["id"],
                 amount_usd=float(p["amount_usd"]),
                 status=p["status"],
-                payment_method=p.get("payment_method"),
+                # Phase 10: prefer the provisioned `payout_method` column; fall back to
+                # `payment_method` for legacy rows. Response field stays `payment_method`.
+                payment_method=p.get("payout_method") or p.get("payment_method"),
                 created_at=p["created_at"],
                 approved_at=p.get("approved_at"),
                 paid_at=p.get("paid_at"),
@@ -587,18 +688,39 @@ async def get_payout_history(
 async def validate_referral_code(
     request: Request,
     request_body: ValidateReferralCodeRequest,
-    supabase: SupabaseClient = Depends(get_request_supabase),
 ):
     """
     Validate a referral code before signup.
     Returns referrer information if valid.
+
+    REF-02: ``supabase`` stays in the signature because ``get_request_supabase`` rejects
+    a request with NO Authorization header at all -- but it builds its client from
+    whatever bearer-token string was supplied, without ever verifying that string is a
+    genuinely valid, signed Supabase JWT (``create_request_supabase_async`` does no
+    signature or expiry check), and this handler never actually issues a query through
+    that client to have Supabase itself reject a bad one. In effect, any non-empty
+    Authorization header value passes, with no real identity verification -- this
+    endpoint is unauthenticated in substance, matching the finding's own title, even
+    though a bare header-presence check remains. Real verification would mean switching
+    to a dependency that decodes and checks the JWT itself (e.g. ``get_current_user``),
+    which was not attempted here: this fix is scoped to the rate-limiter key and the
+    UUID disclosure the remediation note names, not a rewrite of this endpoint's
+    authentication.
     """
-    if not supabase:
+    # REF-UI-01: PUBLIC by design. The signup form checks a typed code before any session
+    # exists, so this cannot require a login. The REF-02 note above records that the old
+    # header requirement verified nothing anyway (any non-empty bearer string passed). What
+    # bounds it is unchanged: 30/minute per client, one exact code per call, and an answer
+    # of valid/invalid only -- never the referrer's id or name.
+    svc = _get_service_client()
+    if not svc:
         raise HTTPException(status_code=503, detail="Database connection unavailable")
-    
+
     try:
-        # Look up referral code
-        code_resp = supabase.table("referral_codes").select("user_id", "is_active").eq("code", request_body.referral_code.upper()).execute()
+        # Look up referral code. Runs as `service_role` so that the RLS policy on
+        # `referral_codes` can stay own-rows-only; the filter here is the whole
+        # authorisation story -- one exact code, supplied by the caller.
+        code_resp = svc.table("referral_codes").select("user_id", "is_active").eq("code", request_body.referral_code.upper()).execute()
         
         if not code_resp.data or len(code_resp.data) == 0:
             return ValidateReferralCodeResponse(
@@ -616,15 +738,59 @@ async def validate_referral_code(
         
         return ValidateReferralCodeResponse(
             valid=True,
-            referrer_id=referrer["user_id"],
             message="Valid referral code"
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error validating referral code {request.referral_code}: {e}")
+        # `request` is the FastAPI Request; the body is `request_body`. This line used to
+        # read `request.referral_code`, so the handler itself raised AttributeError and
+        # replaced the real error with a misleading one. The code is not logged at all
+        # now -- a referral code is a credential of sorts, and it belongs in the response
+        # to its owner rather than in a shared log.
+        logger.error("Error validating referral code: %s", e)
         raise HTTPException(status_code=500, detail="Failed to validate referral code")
+
+
+class ClaimReferralRequest(BaseModel):
+    referral_code: str = Field(..., min_length=1, max_length=32)
+
+
+@router.post("/referral/claim")
+@limiter.limit("10/minute")
+async def claim_referral(
+    request: Request,
+    request_body: ClaimReferralRequest,
+    user: dict = Depends(get_current_user),
+):
+    """REF-ATTR-01: attribute the signed-in account to the referrer whose code it signed up with.
+
+    The app reads ``?ref=CODE`` on the signup page and calls this once the new account has a
+    session (after email confirmation). The account is the AUTHENTICATED caller -- never an id
+    from the body -- and ``attribute_referral`` applies the rules: active code, no
+    self-referral, one referrer per account, within a week of the account's creation.
+    A refusal is a 200 with its ``status``; only an unreadable store is an error.
+    """
+    from backend_app.backend.referral_attribution import attribute_referral
+
+    svc = _get_service_client()
+    if not svc:
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+    user_id = str(user.get("id") or "")
+    try:
+        created_at = None
+        prof = svc.table("profiles").select("created_at").eq("id", user_id).execute()
+        if getattr(prof, "data", None):
+            created_at = prof.data[0].get("created_at")
+        outcome = await asyncio.to_thread(
+            attribute_referral, svc, user_id, request_body.referral_code,
+            account_created_at=created_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("REF-ATTR-01: claim failed for %s: %s", user_id, exc)
+        raise HTTPException(status_code=503, detail="Referral could not be recorded right now")
+    return {"status": outcome["status"], "attributed": outcome["status"] == "attributed"}
 
 
 @router.post("/referral/payouts")
@@ -637,99 +803,98 @@ async def create_payout_request(
 ):
     """
     Create a payout request.
-    Validates sufficient balance under distributed lock and deducts approved balance.
+
+    REF-01 (redesign): the debit of ``referral_wallets.approved_balance_usd`` and the
+    ``referral_payouts`` INSERT used to be two separate PostgREST statements, with a
+    best-effort compensating re-credit on failure (which could itself fail). They are
+    now one call to ``public.create_referral_payout_request`` --
+    ``049_ref01_payout_atomic.sql`` -- a single ``SECURITY DEFINER`` Postgres function
+    that performs both inside one transaction. If the INSERT fails for any reason, the
+    debit the SAME function body already issued rolls back with it: there is no window
+    in which the money is out of the wallet and nowhere else, so the compensating
+    re-credit this handler used to run is not needed and is not here any more.
     """
     if not supabase:
         raise HTTPException(status_code=503, detail="Database connection unavailable")
-    
+
     from backend_app.core.cache import redis_manager
     user_id = user["id"]
     payout_lock_key = f"lock:referral_payout:{user_id}"
     lock_acquired = False
-    
+
     try:
-        # Acquire short distributed lock (30s) to prevent concurrent double-spend
+        # Acquire short distributed lock (30s). This is a latency optimisation, not a
+        # correctness backstop any more: the real correctness guarantee is the
+        # `SELECT ... FOR UPDATE` row lock inside create_referral_payout_request, held
+        # for that function's whole duration, which a SEPARATE PostgREST statement
+        # could never hold. Failing CLOSED on a lock-acquisition error (REF-01) still
+        # matters for the reason stated below: it costs a confusing-but-safe "please
+        # wait" on a Redis outage rather than ever risking a fail-open race, even though
+        # the race it would otherwise guard against is now also closed at the database.
         try:
             lock_acquired = await redis_manager.set(payout_lock_key, "1", nx=True, ex=30)
         except Exception as lock_err:
             logger.warning(f"Redis lock attempt failed for payout {user_id}: {lock_err}")
-            lock_acquired = True  # Proceed if Redis is unavailable, fallback to DB check
-        
+            lock_acquired = False
+
         if not lock_acquired:
             raise HTTPException(
                 status_code=409,
                 detail="A payout request is currently being processed. Please wait."
             )
-        
-        # Get user's wallet
-        wallet_resp = supabase.table("referral_wallets").select("*").eq("user_id", user_id).execute()
-        if inspect.isawaitable(wallet_resp):
-            wallet_resp = await wallet_resp
-        
-        if not wallet_resp.data or len(wallet_resp.data) == 0:
-            raise HTTPException(status_code=404, detail="Referral wallet not found")
-        
-        wallet = wallet_resp.data[0]
-        approved_balance = float(wallet.get("approved_balance_usd", 0))
-        
-        # Validate minimum payout amount (e.g., $10)
+
+        # Validate minimum payout amount (e.g., $10). A product policy, not a database
+        # invariant, so it stays here rather than in the RPC.
         if payout_request.amount_usd < 10:
             raise HTTPException(
                 status_code=400,
                 detail="Minimum payout amount is $10"
             )
-        
-        # Validate sufficient balance
-        if payout_request.amount_usd > approved_balance:
+
+        try:
+            rpc_resp = supabase.rpc("create_referral_payout_request", {
+                "p_user_id": user_id,
+                "p_amount_usd": payout_request.amount_usd,
+                "p_payout_method": payout_request.payment_method,
+                "p_payout_details": payout_request.payment_details or {},
+            }).execute()
+            if inspect.isawaitable(rpc_resp):
+                rpc_resp = await rpc_resp
+        except Exception as rpc_err:  # noqa: BLE001 — classified by SQLSTATE below
+            code = _rpc_error_code(rpc_err)
+            if code == "RF001":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Insufficient approved balance for this payout.",
+                ) from rpc_err
+            if code == "RF002":
+                raise HTTPException(
+                    status_code=404, detail="Referral wallet not found"
+                ) from rpc_err
+            if code == "RF003":
+                raise HTTPException(
+                    status_code=400, detail="Invalid payout request"
+                ) from rpc_err
+            logger.error(f"Error creating payout request for user {user_id}: {rpc_err}")
             raise HTTPException(
-                status_code=400, 
-                detail=f"Insufficient approved balance. Available: ${approved_balance:.2f}, Requested: ${payout_request.amount_usd:.2f}"
+                status_code=500, detail="Failed to create payout request"
+            ) from rpc_err
+
+        payout = getattr(rpc_resp, "data", None)
+        if not payout:
+            logger.error(
+                "create_referral_payout_request for user %s returned no row", user_id
             )
-        
-        # Deduct approved balance immediately from wallet with optimistic concurrency guard
-        new_approved_balance = max(0.0, approved_balance - payout_request.amount_usd)
-        update_wallet_resp = supabase.table("referral_wallets").update({
-            "approved_balance_usd": new_approved_balance,
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("user_id", user_id).gte("approved_balance_usd", payout_request.amount_usd).execute()
-        if inspect.isawaitable(update_wallet_resp):
-            update_wallet_resp = await update_wallet_resp
-        
-        if not update_wallet_resp or not getattr(update_wallet_resp, "data", None):
-            raise HTTPException(
-                status_code=409,
-                detail="Concurrent wallet modification detected. Payout request aborted."
-            )
-        
-        # Create payout record
-        payout_resp = supabase.table("referral_payouts").insert({
-            "user_id": user_id,
-            "amount_usd": payout_request.amount_usd,
-            "status": "pending",
-            "payment_method": payout_request.payment_method,
-            "payment_details": payout_request.payment_details
-        }).execute()
-        if inspect.isawaitable(payout_resp):
-            payout_resp = await payout_resp
-        
-        if not payout_resp.data or len(payout_resp.data) == 0:
-            # Rollback wallet deduction on insert failure
-            rollback_resp = supabase.table("referral_wallets").update({
-                "approved_balance_usd": approved_balance
-            }).eq("user_id", user_id).execute()
-            if inspect.isawaitable(rollback_resp):
-                await rollback_resp
             raise HTTPException(status_code=500, detail="Failed to create payout request")
-        
+
         logger.info(f"Payout request created for user {user_id}, amount: ${payout_request.amount_usd}")
-        
+
         return {
             "status": "success",
-            "payout_id": payout_resp.data[0]["id"],
+            "payout_id": payout["id"],
             "amount_usd": payout_request.amount_usd,
-            "status": "pending"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -741,3 +906,106 @@ async def create_payout_request(
                 await redis_manager.delete(payout_lock_key)
             except Exception:
                 pass
+
+
+class SettlePayoutRequest(BaseModel):
+    """REF-01: the pending -> completed/rejected settlement step."""
+    status: str = Field(..., pattern="^(completed|rejected)$")
+    reference: Optional[str] = Field(
+        None, max_length=200,
+        description="For 'completed': the external transfer reference (bank/UPI/PayPal "
+                    "transaction id) proving the operator actually sent the money."
+    )
+    reason: Optional[str] = Field(
+        None, max_length=500,
+        description="For 'rejected': why (e.g. invalid payout details, failed KYC)."
+    )
+
+
+@router.put("/referral/payouts/{payout_id}/settle")
+@limiter.limit("30/minute")
+async def settle_payout(
+    request: Request,
+    payout_id: str,
+    body: SettlePayoutRequest,
+    admin: dict = Depends(get_admin_user),
+    sb: SupabaseClient = Depends(get_service_supabase),
+):
+    """Operator-only: settle a pending/processing payout as completed or rejected.
+
+    REF-01: this is the "pending -> completed" step the finding's own title names as
+    unimplemented -- before this, a `referral_payouts` row could be created and then
+    never transition out of 'pending' through any code path in this file.
+
+    WHAT THIS DOES NOT DO. There is no outbound payment-rail integration anywhere in
+    this codebase for referral payouts -- Stripe/Razorpay are wired for INCOMING
+    subscription payments only. 'completed' therefore records that a human operator
+    performed the transfer manually (bank transfer, UPI, PayPal) and is attesting to
+    it with `reference`; this endpoint never itself moves money. 'rejected' re-credits
+    the wallet balance this payout's own request had already debited -- the balance
+    was taken out of the user's "pending payout" bucket at request time
+    (`create_payout_request`'s own debit), and a rejection must give it back, or the
+    money simply vanishes.
+
+    Runs under the service-role client (not the admin's own JWT): `referral_payouts`
+    and `referral_wallets` both carry an owner-only RLS policy
+    (`user_id = auth.uid()`), so an admin's own token cannot read or write a payout
+    or wallet belonging to the user it is settling -- exactly the SEC-08 pattern this
+    codebase already uses for platform actions on another tenant's rows, applied only
+    AFTER `get_admin_user`'s own check has passed.
+
+    REF-01 (redesign): the status flip and the rejection re-credit used to be two
+    separate PostgREST statements, so a rejection whose re-credit UPDATE failed left
+    the payout 'rejected' with the money unaccounted for -- logged CRITICAL, but not
+    prevented. Both are now one call to ``public.settle_referral_payout``
+    (``049_ref01_payout_atomic.sql``): if the re-credit cannot complete (no wallet row),
+    the whole function raises and the status flip rolls back with it, so the payout
+    stays 'pending' -- re-settleable once the wallet is reconciled -- rather than
+    becoming a lie about where the money went.
+    """
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+
+    try:
+        rpc_resp = sb.rpc("settle_referral_payout", {
+            "p_payout_id": payout_id,
+            "p_status": body.status,
+            "p_reference": body.reference,
+            "p_reason": body.reason,
+        }).execute()
+        if inspect.isawaitable(rpc_resp):
+            rpc_resp = await rpc_resp
+    except Exception as rpc_err:  # noqa: BLE001 — classified by SQLSTATE below
+        code = _rpc_error_code(rpc_err)
+        if code == "RF002":
+            # Either "no such payout" or "the rejection could not be re-credited
+            # because no wallet row exists for its user" -- both are a 404-shaped
+            # failure to the caller, and both leave the payout untouched (still
+            # 'pending' in the second case, since the whole function rolled back).
+            raise HTTPException(
+                status_code=404,
+                detail="Payout request not found, or could not be re-credited",
+            ) from rpc_err
+        if code == "RF003":
+            raise HTTPException(status_code=400, detail=str(rpc_err)) from rpc_err
+        if code == "RF004":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Payout {payout_id} is already settled and cannot be settled "
+                       "again.",
+            ) from rpc_err
+        logger.error(f"Error settling payout {payout_id}: {rpc_err}")
+        raise HTTPException(status_code=500, detail="Failed to settle payout") from rpc_err
+
+    payout = getattr(rpc_resp, "data", None)
+    if not payout:
+        raise HTTPException(status_code=500, detail="Failed to settle payout")
+
+    logger.info(
+        "Payout %s settled as %s by admin %s", payout_id, body.status, admin.get("id"),
+    )
+    return {
+        "status": "success",
+        "payout_id": payout_id,
+        "settled_as": body.status,
+    }

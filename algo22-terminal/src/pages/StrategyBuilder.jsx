@@ -130,10 +130,11 @@ import {
   AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Lock, Maximize,
   PanelLeft, PanelRight, RefreshCw, Redo, Rocket, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
-import { Inp, Tag2, PanelTitle } from '../components/common/primitives';
+import { Inp, Tag2 } from '../components/common/primitives';
 import { Button } from '../components/ui/Button';
 import { CommandButton } from '../components/ds/CommandButton';
 import { Field } from '../components/ds/Field';
+import { SectionHeader } from '../components/ds/SectionHeader';
 /*
   §11.6's bottom drawer for task 24.7's review-mode inspector. `placement="bottom"` is one of
   the two placements `ds/Drawer` exists for, and this page is the consumer its header names.
@@ -209,6 +210,7 @@ import { AssetSelector } from '../components/builder/AssetSelector';
 import { TimeframeSelector } from '../components/builder/TimeframeSelector';
 import { NodePreview } from '../components/builder/NodePreview';
 import { NodeTrace } from '../components/builder/NodeTrace';
+import { ModelPerformance } from '../components/builder/ModelPerformance';
 import {
   initialPreviewState,
   previewAvailability,
@@ -241,6 +243,9 @@ import {
   validationSummary,
 } from '../lib/graphValidation';
 import { strategiesApi } from '../api/modules/strategies';
+import { readRefusal } from '../design/entitlements';
+import { apiErrorDetail, apiErrorMessage } from '../design/apiErrors';
+import { UpgradePrompt } from '../components/gates/UpgradePrompt';
 import { dataQualityApi } from '../api/modules/dataQuality';
 import { useBuilderRealtime } from '../hooks/useBuilderRealtime';
 import {
@@ -1192,6 +1197,27 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
       <div className="text-micro" style={{ color: token.content.muted }}>{data.block_id}</div>
 
       {/*
+        ML-01. A trained model is not a deterministic indicator: its output was learned
+        from historical data, and the checksum/schema/performance gates in
+        `model_readiness.py` only prove it is intact and above a minimum quality bar —
+        never that it will keep working. The badge is persistent (every ML_DL node,
+        always visible on the canvas, not only in the inspector) and in words, mirroring
+        `RiskSettings.jsx`'s "Not enforced yet" disclosures rather than a colour alone.
+      */}
+      {category === 'ML_DL' && (
+        <div
+          data-testid="node-trained-model-badge"
+          data-node-id={id}
+          aria-label={`Block ${id} is a trained model: past performance does not guarantee future results`}
+          title="This block's output is learned from historical data, not a fixed formula. Past performance does not guarantee future results."
+          className="text-micro font-semibold"
+          style={{ marginTop: '3px', color: token.content.secondary, whiteSpace: 'normal' }}
+        >
+          Trained model — past performance does not guarantee future results
+        </div>
+      )}
+
+      {/*
         The node marker (Requirement 8.10). Severity *and* count are text, and the badge
         carries its own accessible name, so nothing here is signalled by colour alone. The
         first `fix_hint` is shown inline; the full list lives in the issues panel.
@@ -2087,6 +2113,9 @@ function StrategyBuilderCanvas({
   const [saveState, setSaveState] = useState('');
   const [saveStatus, setSaveStatus] = useState(SAVE_STATES.UNSAVED);
   const [saveIssues, setSaveIssues] = useState([]);
+  // A save refused by the PLAN (403 `{code, message, required_plan, …}` from
+  // `check_strategy_quota`), rendered as an upgrade prompt rather than a status-line string.
+  const [planRefusal, setPlanRefusal] = useState(null);
   // A blocked training half observed by this page's own save. Separate from `saveIssues`
   // because the two say different things: a save issue means nothing was persisted, while a
   // training block means the version WAS saved and only training was refused (Requirements
@@ -2862,6 +2891,7 @@ function StrategyBuilderCanvas({
     const trimmedName = strategyName.trim() || 'Untitled Strategy';
     setIsSavingStrategy(true);
     setSaveIssues([]);
+    setPlanRefusal(null);
     setObservedTrainingBlock(null);
     setSaveStatus(SAVE_STATES.SAVING);
     setSaveState('Compiling...');
@@ -2954,8 +2984,38 @@ function StrategyBuilderCanvas({
         setSaveStatus(SAVE_STATES.REFUSED);
         setSaveState(`Save refused: ${err.code}`);
       } else {
-        setSaveStatus(SAVE_STATES.FAILED);
-        setSaveState(`Save Failed: ${err.message || 'Unknown error'}`);
+        /*
+          LAUNCH AUDIT (Builder save). A server refusal used to land here as
+          `Save Failed: ${err.message}` in the status strip and nowhere else — no toast, no
+          panel — so a trader at their plan's strategy limit clicked Save and saw nothing
+          happen. `ApiError` carries the body on `err.data` (`design/apiErrors.js`), so each
+          refusal the server actually sends is now read and shown where the author looks:
+            * a PLAN refusal (403 from `check_strategy_quota`) → the upgrade prompt;
+            * a GRAPH refusal (422 STRATEGY_GRAPH_INVALID / _UNREADABLE) → the same
+              "not saved" issue panel a client-side refusal uses, node by node;
+            * anything else → the server's own sentence, as a toast and in the strip.
+        */
+        const refusal = readRefusal(err);
+        const detail = apiErrorDetail(err);
+        if (refusal) {
+          setPlanRefusal(refusal);
+          setSaveStatus(SAVE_STATES.REFUSED);
+          setSaveState(`Save refused: ${refusal.message}`);
+          notify('error', refusal.message);
+        } else if (detail && typeof detail === 'object' && Array.isArray(detail.errors) && detail.errors.length > 0) {
+          setSaveIssues(detail.errors);
+          setSaveStatus(SAVE_STATES.REFUSED);
+          setSaveState(`Save refused: ${detail.errors.length} problem${detail.errors.length === 1 ? '' : 's'}`);
+        } else if (detail && typeof detail === 'object' && typeof detail.error === 'string' && detail.error.startsWith('STRATEGY_GRAPH_')) {
+          setSaveIssues([saveIssue(detail.error, detail.message || 'The graph could not be read.', { fixHint: detail.hint || '' })]);
+          setSaveStatus(SAVE_STATES.REFUSED);
+          setSaveState(`Save refused: ${detail.error}`);
+        } else {
+          const message = apiErrorMessage(err, err?.message || 'Unknown error');
+          setSaveStatus(SAVE_STATES.FAILED);
+          setSaveState(`Save Failed: ${message}`);
+          notify('error', `Strategy not saved: ${message}`);
+        }
       }
     } finally {
       setIsSavingStrategy(false);
@@ -3126,6 +3186,26 @@ function StrategyBuilderCanvas({
     () => nodes.find((node) => node.id === selectedNodeId) || null,
     [nodes, selectedNodeId],
   );
+
+  /**
+   * ML-01. The model version bound to the selected node, if any — read straight off
+   * `trainingJob`, which already carries `model_versioning.public_model_version()`
+   * under `model_version` (`training_status.public_training_job`, task 6.6). No second
+   * fetch: `trainingJob` is the one report of "what came out of training this canvas
+   * holds", the same report the training progress UI reads, so a second request here
+   * could disagree with it about which job's model is current.
+   *
+   * `null` when there is no training job prop, when it names a different node (one
+   * canvas can hold several ML_DL nodes; only the job for the selected one applies), or
+   * when that job completed with no bound model (`model_bound: false` — a failed or
+   * cancelled run). `ModelPerformance` renders that absence honestly rather than
+   * inventing a figure for it.
+   */
+  const selectedNodeModelVersion = useMemo(() => {
+    if (!selectedNode || !trainingJob) return null;
+    if (String(trainingJob.node_id || '') !== String(selectedNode.id)) return null;
+    return trainingJob.model_version || null;
+  }, [selectedNode, trainingJob]);
 
   /*
     Requirement 5.3: the inspector track exists for a selected node and for nothing else. With
@@ -3821,6 +3901,17 @@ function StrategyBuilderCanvas({
       )}
 
       {/*
+        ML-01. A trained model's real quality, in the backend's own numbers, for a
+        trader deciding whether to deploy it — not just whether training finished.
+        Shown for every ML_DL node, whether or not a model happens to be bound yet,
+        because "no model bound" is itself a fact this inspector should state rather
+        than silently omit the whole section for.
+      */}
+      {selectedNode.data.category === 'ML_DL' && (
+        <ModelPerformance modelVersion={selectedNodeModelVersion} />
+      )}
+
+      {/*
         Requirements 24.7 / 24.8: the last values this block produces, computed by
         the executors that run it, over a window the server bounds. A
         FEATURE_ENGINEERING node's produced column names come with it.
@@ -3869,7 +3960,43 @@ function StrategyBuilderCanvas({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: token.surface.panel }}>
+    /*
+      LAYOUT-01 (2026-11-15). `flex: 1` + `minHeight: 0`, NOT `height: '100vh'`.
+
+      This element does not own the viewport. Both routes that mount the builder --
+      `/app/builder` (App.jsx) and the `view === 'builder'` branch of `pages/Strategies.jsx`
+      -- render it inside the authenticated shell's `<main>`, which App.jsx declares as the
+      `1fr` row of a `min-content 1fr` grid with `minHeight: 0; overflowY: 'auto'`. The
+      height actually available to a page is therefore the viewport MINUS the TopBar row and
+      its disconnected-state strip.
+
+      `height: '100vh'` asked for the whole viewport inside that remainder, so this column
+      was taller than its container by exactly the height of the chrome above it. The
+      toolbar sat at the top of the over-tall column, the canvas below is a `flex: 1` child
+      measured against the over-tall box, and the surplus rendered as a large empty band
+      between the toolbar and the canvas plus a document-level scroll.
+
+      It is also why the gap appeared to depend on browser zoom: zoom changes the CSS-pixel
+      height of the fixed chrome but not the definition of `vh`, so the mismatch grew and
+      shrank with the zoom level instead of staying put. That is the signature of this bug,
+      not a second one.
+
+      App.jsx already states the rule on the shell grid itself: "`100%` rather than `100dvh`
+      -- the gate's outer element is already the viewport height and this is the remainder
+      after its restriction strip, so `100dvh` here would overflow the document by the
+      strip's height." The builder was violating a convention its own shell documents.
+
+      `flex: 1` rather than `height: '100%'` because this element IS a flex item of `<main>`
+      (`<Suspense>` renders no DOM node, so nothing sits between them): growing to fill the
+      free main-axis space does not depend on a percentage resolving against a definite
+      container height. `minHeight: 0` is the companion guard -- a flex item's default
+      `min-height: auto` refuses to shrink below its content, which is what lets an
+      over-tall child push the document into a scroll instead of letting the canvas size
+      itself to what is actually visible.
+
+      Regression: tests/unit/pages/strategyBuilder.layout.test.js
+    */
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: token.surface.panel }}>
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: token.surface.raised, borderBottom: `1px solid ${token.line.default}`, gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -3895,6 +4022,46 @@ function StrategyBuilderCanvas({
             `POST /api/strategies` genuinely answers without one, and "no version label yet"
             is a true sentence where "version 1" would be a guess the author would then deploy.
           */}
+          {/*
+            LAUNCH AUDIT: the save state, in words, next to the name. After a successful save the
+            only confirmation was a toast that disappears and a small status line at the bottom
+            of the page, so an author could not tell at a glance whether the canvas was stored.
+            One observation of the same values the Backtest and Deploy refusals read: no id yet →
+            "Not saved yet"; an id and an unchanged graph → "Saved"; an id and a changed graph →
+            "Unsaved changes"; a save in flight → "Saving…".
+          */}
+          <span
+            data-testid="builder-save-chip"
+            data-save-state={
+              isSavingStrategy
+                ? 'saving'
+                : !strategyIdState
+                  ? 'unsaved-new'
+                  : unsaved
+                    ? 'unsaved-changes'
+                    : 'saved'
+            }
+            className="text-micro"
+            style={{
+              padding: '2px 8px',
+              borderRadius: '4px',
+              border: `1px solid ${token.line.default}`,
+              background: token.surface.panel,
+              color:
+                !isSavingStrategy && strategyIdState && !unsaved
+                  ? token.content.primary
+                  : token.content.muted,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {isSavingStrategy
+              ? 'Saving…'
+              : !strategyIdState
+                ? 'Not saved yet'
+                : unsaved
+                  ? 'Unsaved changes'
+                  : 'Saved'}
+          </span>
           <span
             data-testid="builder-version-chip"
             data-version={savedVersion === null ? undefined : savedVersion}
@@ -4173,6 +4340,13 @@ function StrategyBuilderCanvas({
         A save that was refused. The error surface and `role="alert"` are right here and stay:
         the author asked for something, it did not happen, and nothing on the canvas says so.
       */}
+      {/* A save the PLAN refused: the server's own reason and the plan that would allow it. */}
+      {planRefusal && (
+        <div data-testid="save-refusal">
+          <UpgradePrompt refusal={planRefusal} variant="banner" />
+        </div>
+      )}
+
       {saveIssues.length > 0 && (
         <ValidationSurface
           surface="error"
@@ -4612,7 +4786,7 @@ function StrategyBuilderCanvas({
           {selectedNode && inspectorTrackShown && (
             <>
               <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
-                <PanelTitle title="Inspector" sub={selectedNode.data.label} />
+                <SectionHeader title="Inspector" subtitle={selectedNode.data.label} level={3} />
               </div>
 
               <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>

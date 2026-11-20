@@ -28,6 +28,7 @@ import {
   EMPTY_VARIANT,
   ENVIRONMENTS,
   FILTER_IDS,
+  LIVE_REPORTED_FIELDS,
   OUTCOME_FILTER_VALUES,
   PAPER_REPORTED_FIELDS,
   SIDE_FILTER_VALUES,
@@ -98,15 +99,34 @@ describe('the declaration this module reads from pageFields', () => {
     expect([...UNREPORTED_ON_LIVE].sort()).toEqual(['fees', 'pnl', 'slippage', 'strategy']);
   });
 
-  it('reports market and side on both reads, and P&L on paper only', () => {
+  it('reports market, side and P&L on both reads', () => {
     expect(isFieldReported('market', ENVIRONMENTS.LIVE)).toBe(true);
     expect(isFieldReported('side', ENVIRONMENTS.LIVE)).toBe(true);
-    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(false);
+    // LIVE-PNL-01: realised P&L per sell, average cost, computed by the live read.
+    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(true);
     expect(isFieldReported('pnl', ENVIRONMENTS.PAPER)).toBe(true);
-    expect(isFieldReported('strategy', ENVIRONMENTS.LIVE)).toBe(false);
-    // Slippage is unreported on BOTH reads, which is why it is not in the paper set.
-    expect(PAPER_REPORTED_FIELDS).not.toContain('slippage');
-    expect(isFieldReported('slippage', ENVIRONMENTS.PAPER)).toBe(false);
+    // LIVE-HIST-01: the live read (`execution_records`) names the strategy on every row.
+    expect(isFieldReported('strategy', ENVIRONMENTS.LIVE)).toBe(true);
+    // PAPER-SLIP-01: the paper read returns the slippage its ledger booked on each fill.
+    expect(PAPER_REPORTED_FIELDS).toContain('slippage');
+    expect(isFieldReported('slippage', ENVIRONMENTS.PAPER)).toBe(true);
+  });
+
+  // TRADE-13: `log_execution` now persists `fee` and `slippage` per live execution (fee from
+  // the venue's own CCXT fill response, slippage from the decision price vs. the fill price),
+  // so the LIVE read reports both — for every execution WRITTEN AFTER this change. An older
+  // row simply has no value for either key, which `readFee`/`readSlippage` already resolve to
+  // `null` and the cells already render as the not-available marker, per row — this ledger-level
+  // flag only says the column itself is no longer declared wholesale unavailable on LIVE.
+  it('TRADE-13: reports fees and slippage on LIVE now that log_execution persists them', () => {
+    expect(isFieldReported('fees', ENVIRONMENTS.LIVE)).toBe(true);
+    expect(isFieldReported('slippage', ENVIRONMENTS.LIVE)).toBe(true);
+    expect(LIVE_REPORTED_FIELDS).toContain('fees');
+    expect(LIVE_REPORTED_FIELDS).toContain('slippage');
+    // LIVE-PNL-01: realised P&L is now computed per sell against the position's average
+    // cost, so it is reported too -- a sell with no recorded buys still reports null.
+    expect(LIVE_REPORTED_FIELDS).toContain('pnl');
+    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(true);
   });
 
   it('carries a reason for every field it will not offer a control for', () => {
@@ -324,9 +344,16 @@ describe('a control over a field the read does not report is not offered', () =>
   it('drops an unanswerable dimension from the applied state instead of emptying the table', () => {
     const stale = { side: ALL_VALUE, outcome: 'PROFIT', market: ANY_VALUE, strategy: 'momentum v2' };
     const applied = normaliseFilters(stale, 'live');
-    expect(applied.outcome).toBe(ALL_VALUE);
-    expect(applied.strategy).toBe(ANY_VALUE);
+    // LIVE-PNL-01: outcome is a declared live dimension now, so the declaration keeps it ...
+    expect(applied.outcome).toBe('PROFIT');
+    // LIVE-HIST-01: the strategy is a reported live dimension now, so the declaration keeps it;
+    // with no row offering that value the control is withheld and the view does not apply it.
+    expect(applied.strategy).toBe('momentum v2');
     const result = view(LIVE_ROWS, { filters: stale, environment: 'live' });
+    // TH-FILTER-01: ... and these rows carry neither a P&L nor a strategy, so both controls
+    // are withheld and neither stale selection is applied.
+    expect(result.filters.outcome).toBe(ALL_VALUE);
+    expect(result.filters.strategy).toBe(ANY_VALUE);
     expect(result.resultCount).toBe(3);
     expect(result.activeFilterCount).toBe(0);
     // And it is honoured again on the read that reports it.
@@ -336,12 +363,11 @@ describe('a control over a field the read does not report is not offered', () =>
   it('explains every control it withholds, and names which kind of absence it is', () => {
     const live = view(LIVE_ROWS, { environment: 'live' }).withheld;
     expect(live.map((entry) => entry.id)).toEqual([FILTER_IDS.OUTCOME, FILTER_IDS.STRATEGY]);
-    // Live: the venue records neither, so the reason is pageFields' own.
-    for (const entry of live) {
-      expect(entry.cause).toBe(WITHHELD_CAUSES.UNREPORTED);
-      expect(entry.reason).toMatch(/\S/);
-      expect(entry.reason).toBe(fieldAbsenceReason(entry.field));
-    }
+    // Live: P&L and the strategy are both reported since LIVE-PNL-01 / LIVE-HIST-01, so these
+    // fixture rows (which carry neither) leave both with no values rather than unreported.
+    expect(live[0].cause).toBe(WITHHELD_CAUSES.NO_VALUES);
+    expect(live[1].cause).toBe(WITHHELD_CAUSES.NO_VALUES);
+    for (const entry of live) expect(entry.reason).toMatch(/\S/);
     // Paper reports a `strategy_id` key, so the declaration allows it; `_trade_body` writes
     // `null` into it on every row, so there is nothing to choose from.
     const paper = view(PAPER_ROWS, { environment: 'paper' }).withheld;
@@ -433,8 +459,8 @@ describe("Requirement 11.5's two empty states", () => {
     expect(activeFilterCount({ side: 'BUY' }, '', 'paper')).toBe(1);
     expect(activeFilterCount({ side: 'BUY' }, 'btc', 'paper')).toBe(2);
     expect(activeFilterCount({ side: 'BUY', outcome: 'LOSS' }, 'btc', 'paper')).toBe(3);
-    // Outcome is not applied on live, so it is not something to clear.
-    expect(activeFilterCount({ side: 'BUY', outcome: 'LOSS' }, 'btc', 'live')).toBe(2);
+    // LIVE-PNL-01: outcome is a live dimension now, so it counts there too.
+    expect(activeFilterCount({ side: 'BUY', outcome: 'LOSS' }, 'btc', 'live')).toBe(3);
   });
 });
 

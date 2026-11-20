@@ -3,20 +3,23 @@ backend/ml_node_types.py — the one answer to "is this a model node?"
 
 WHAT THIS CLOSES
 ----------------
-Four gates ask whether a strategy contains a model node, and therefore whether it needs a
-trained model before it may run, and three of them used to ask with a narrower vocabulary
-than the fourth:
+Three gates ask whether a strategy contains a model node, and therefore whether it needs a
+trained model before it may run, and two of them used to ask with a narrower vocabulary
+than the third:
 
     backend_app/routers/strategies.py      {"ml", "dl", "ml_dl", "ml_model"}
     backend_app/backend/strategy_service.py        ["ml", "dl"]
     backend_app/routers/library.py                 ["ml", "dl"]
-    backend_app/tee/main.py                        ["ml", "dl"]
+
+(A fourth gate, ``backend_app/tee/main.py``, existed when this module was written. RT-23
+deleted it as confirmed-dead code -- it crashed on import and was never actually deployed
+-- so it no longer needs to agree with the other three.)
 
 Each then refuses when it finds model nodes and the strategy carries no
 ``ml_model_path``. So a strategy whose model node is spelled ``ml_dl`` or ``ml_model`` was
 refused by the router's deploy and resume paths and waved straight through by the
-service's deploy path, the library clone path and the TEE start path — three gates out of
-four, for a strategy declaring a model it does not have.
+service's deploy path and the library clone path — two gates out of three, for a strategy
+declaring a model it does not have.
 
 The four spellings are not an invention of this module. They are the schema-version-1
 ``node["type"]`` values that denote a model block, and the canonical vocabulary folds all
@@ -36,12 +39,11 @@ removes is the disagreement, not the permission.
 WHY THE DEFINITION LIVES HERE
 -----------------------------
 It could not stay in ``routers/strategies.py``. ``strategy_service`` is imported BY the
-routers, so a router-level constant would invert the dependency, and ``tee/main.py`` has
-no business importing a FastAPI router to answer a question about four strings.
+routers, so a router-level constant would invert the dependency.
 
 ``ml_models`` would have been the topical home and is deliberately not used: it probes for
 tensorflow, joblib, xgboost and friends at import time to derive its model registry, and
-a strategy clone or a TEE start should not pay for that. This module imports nothing
+a strategy clone should not pay for that. This module imports nothing
 beyond ``typing`` and is meant to stay that way — ``tests/test_ml_node_detection_is_one_
 vocabulary.py`` asserts it.
 

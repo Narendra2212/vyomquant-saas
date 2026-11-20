@@ -3,12 +3,10 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Dashboard from '../../src/pages/Dashboard';
-import Portfolio from '../../src/pages/Portfolio';
 import TradeHistory from '../../src/pages/TradeHistory';
 import Strategies from '../../src/pages/Strategies';
 import RiskSettings from '../../src/pages/RiskSettings';
 import * as dashboardModule from '../../src/api/modules/dashboard';
-import * as portfolioModule from '../../src/api/modules/portfolio';
 import * as paperModule from '../../src/api/modules/paper';
 import * as ordersModule from '../../src/api/modules/orders';
 import * as strategiesModule from '../../src/api/modules/strategies';
@@ -65,137 +63,13 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     vi.clearAllMocks();
     wsSubscriptions.clear();
 
-    // Portfolio's LIVE branch issues FIVE reads in one `Promise.allSettled` -- the summary and
-    // positions each test mocks, plus the equity curve, the allocation and the heatmap. Those last
-    // three were left unmocked, so they were dispatched to the real backend through jsdom's XHR and
-    // rejected with `AggregateError` (nothing is listening during a test run). Because the page
-    // holds `isLoading` until all five settle, the whole grid stayed on "Loading..." for as long as
-    // those three sockets took to be refused -- fast on an idle machine, slower than the 1s
-    // `findByText`/`waitFor` window when the full suite is running, which is exactly the
-    // intermittent failure of invariant 1. Stubbing them here removes the network from these tests
-    // without changing what any of them assert: every one of the three resolves to `[]`, which is
-    // the same state the page reached when the read failed (`setEquityCurve([])`,
-    // `setAllocation([])`, `setHeatmapData([])`), so the rendering under test is identical -- only
-    // now it is reached deterministically and immediately.
-    vi.spyOn(portfolioModule.portfolioApi, 'getEquityCurve').mockResolvedValue([]);
-    vi.spyOn(portfolioModule.portfolioApi, 'getAllocation').mockResolvedValue([]);
-    vi.spyOn(portfolioModule.portfolioApi, 'getHeatmap').mockResolvedValue([]);
   });
 
   afterEach(() => {
     cleanup();
   });
 
-  // 1 & 2: LIVE -> PAPER and PAPER -> LIVE Switch in Portfolio
-  it('1 & 2: LIVE -> PAPER and PAPER -> LIVE switches replace state completely without data bleed', async () => {
-    vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockResolvedValue({
-      account: { total_equity: 50000, unrealized_pnl: 1200, realized_pnl: 400, available_balance: 30000 }
-    });
-    // Task 13.1: Portfolio's LIVE positions come from `GET /api/dashboard`. `degraded: null` is
-    // the healthy reading of BC-2's discriminator and is stated, not omitted -- omitting it is
-    // not the healthy case, it is an unreadable response shape.
-    //
-    // Task 16.1: the same read serves tier 1, so the body carries `overview` and answers PER
-    // ENVIRONMENT -- which is exactly what this invariant is about. `get_portfolio_overview`
-    // branches on `environment` server-side, so a PAPER switch cannot be served the live
-    // account's figures unless this page asks for the wrong one. `/api/portfolio/summary` is no
-    // longer read by the page at all (design.md §7.6: it carries no `available_balance`).
-    const overviewFor = (environment) => (environment === 'paper'
-      ? { total_value: 100000, available_balance: 100000, used_balance: 0, unrealized_pnl: 0, today_realized_pnl: 0, realized_pnl: 0, total_exposure: 0, currency: 'USD' }
-      : { total_value: 50000, available_balance: 30000, used_balance: 20000, unrealized_pnl: 1200, today_realized_pnl: 400, realized_pnl: 900, total_exposure: 61200, currency: 'USDT' });
-    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard')
-      .mockImplementation(({ environment } = {}) => Promise.resolve({
-        positions: environment === 'paper' ? [] : [
-          { id: 'p1', symbol: 'BTC/USDT', exchange_id: 'binance', side: 'long', contracts: 1.0, entry_price: 60000, mark_price: 61200, unrealized_pnl: 1200 }
-        ],
-        degraded: null,
-        overview: overviewFor(environment),
-        risk: {
-          open_positions_count: environment === 'paper' ? 0 : 1,
-          current_drawdown_pct_v2: 1.1
-        }
-      }));
-    vi.spyOn(paperModule.paperApi, 'getSummary').mockResolvedValue({
-      total_equity: 100000, unrealized_pnl: 0, realized_pnl: 0, available_balance: 100000
-    });
-    vi.spyOn(paperModule.paperApi, 'getPositions').mockResolvedValue([]);
-
-    render(<MemoryRouter><Portfolio /></MemoryRouter>);
-
-    // No `$` prefix on a tier-1 figure any more: `ds/Metric` groups the digits and the
-    // denomination comes from the server's own `overview.currency`.
-    //
-    // Task 16.2: the market is counted rather than fetched singly, because BTC/USDT now appears
-    // TWICE on the live page — once in the positions table and once above it, in Requirement
-    // 10.3's "Largest position" summary figure. Counting is also the stronger assertion for what
-    // this invariant is about: on the PAPER switch every occurrence has to go, not just the
-    // first one a query happens to find.
-    expect(await screen.findByText('50,000.00')).toBeDefined();
-    expect(screen.getAllByText('BTC/USDT').length).toBeGreaterThan(0);
-
-    // Switch to Paper. A labelled radio group as of task 16.2, not two buttons the selected one
-    // of which did nothing when pressed (Requirement 19.4).
-    fireEvent.click(screen.getByRole('radio', { name: 'Paper' }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('100,000.00').length).toBeGreaterThan(0);
-      expect(screen.queryAllByText('BTC/USDT')).toHaveLength(0);
-    });
-    // No bleed the other way either: the live equity is gone from the screen entirely.
-    expect(screen.queryByText('50,000.00')).toBeNull();
-
-    // Switch back to Live
-    fireEvent.click(screen.getByRole('radio', { name: 'Live' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('50,000.00')).toBeDefined();
-      expect(screen.getAllByText('BTC/USDT').length).toBeGreaterThan(0);
-    });
-  });
-
-  // 3 & 4: Live & Paper API Failures handled gracefully without fallback mixing
-  //
-  // Invariant 3 used to be spelled "renders zero state": the assertion was that a failed live
-  // read produced `$0.00` cards. That spelling is no longer correct behaviour - a `$0.00` for a
-  // read that never completed presents a fabricated figure as a measurement, which Requirement
-  // 28.5 forbids. The invariant being protected (a failed read must not silently look like a
-  // funded, zeroed account, and must not be papered over with paper data) is unchanged; it is now
-  // pinned as the failure being stated in words, with no figure of any kind shown.
-  //
-  // Invariant 4 - no fallback to the paper reads - is asserted exactly as before.
-  it('3 & 4: Live API failure states the failure instead of a figure and never falls back to paper', async () => {
-    // Task 13.1: one positions read, not a two-step fallback chain. The chain this used to stage
-    // -- `getOpenPositions().catch(() => getPositions())` -- addressed two routes that do not
-    // exist, so both legs 404d and both methods have since been deleted. The read is now
-    // `GET /api/dashboard`, and after task 16.1 it is also the read behind tier 1, so its
-    // rejection is the one failure this page has to state.
-    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockRejectedValue(new Error('Positions read did not complete'));
-    const paperSpy = vi.spyOn(paperModule.paperApi, 'getSummary');
-
-    render(<MemoryRouter><Portfolio /></MemoryRouter>);
-
-    // Requirement 14.4 / 28.5: the failure is stated in translated copy, and NO figure of any
-    // kind is shown for it -- not a zero, and not a row of markers.
-    //
-    // `getAllByText` as of task 16.2: that ONE rejection puts BOTH regions it serves into
-    // `error`, and each renders `ds/ErrorState` with the `portfolio` context copy. Two
-    // statements of one failure is the correct outcome here — tier 1 and the positions ledger
-    // are two view models over one read, and neither may show a figure.
-    await waitFor(() => {
-      expect(screen.getAllByText('Could not load your portfolio').length).toBeGreaterThan(0);
-    });
-    // The positions region says so too, and says nothing about the account: task 13.1 rendered
-    // the transport error verbatim here, and 16.2 replaced that with the translation, so what
-    // is asserted is the region's state and the absence of any claim of an empty ledger.
-    expect(document.querySelector('[data-region="positions"]').dataset.panelState).toBe('error');
-    expect(screen.queryByText('No open positions')).toBeNull();
-    expect(document.querySelectorAll('table')).toHaveLength(0);
-    expect(screen.queryByText('0.00')).toBeNull();
-    expect(document.querySelectorAll('[data-metric-tier]')).toHaveLength(0);
-    // Invariant 4, unchanged: a failed LIVE read never reaches for the paper account.
-    expect(paperSpy).not.toHaveBeenCalled();
-  });
-
+  // 1-4 rendered pages/Portfolio.jsx and went with it (PORTFOLIO-REMOVED-01).
   // 5 & 6 & 7 & 8: WebSocket Stale Event & Wrong Environment Rejection
   it('5, 6, 7, 8: Stale events and cross-environment WebSocket events are rejected by Dashboard', async () => {
     vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue({
@@ -243,7 +117,10 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     // selector that DOES match when a row is focused (see 3.3 in
     // `portfolio_phase3_workflow.test.jsx`), so it cannot pass vacuously.
     expect(await screen.findByRole('heading', { name: 'Strategies' })).toBeDefined();
-    expect(screen.getByText('Real Bot')).toBeDefined();
+    // The heading renders before the list read settles, so the row is AWAITED: asserting it
+    // synchronously raced the read, and lost on CI once this file's earlier (Portfolio) tests,
+    // which used to warm the module graph first, were removed.
+    expect(await screen.findByText('Real Bot', {}, { timeout: 10000 })).toBeDefined();
     expect(screen.queryByText('Focused target')).toBeNull();
   });
 
@@ -259,10 +136,14 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
       </MemoryRouter>
     );
 
-    // Task 17.1: the row is a table row and the fallback reason is stated once above the
-    // table, so the name appears in both places — hence the scoped lookup for the row.
-    expect(await screen.findByRole('table')).toBeDefined();
-    expect(within(screen.getByRole('table')).getByText('Crashing Bot')).toBeDefined();
+    // T14 (#345) rebuilt this listing as a card grid, so the row is a card in a `<ul>`
+    // rather than a table row. The assertion is unchanged in substance: the fallback
+    // reason is stated once above the grid and the name appears in both places, so the
+    // lookup stays scoped to the listing instead of matching either one.
+    expect(await screen.findByTestId('strategy-card-grid')).toBeDefined();
+    expect(
+      within(screen.getByTestId('strategy-card-grid')).getByText('Crashing Bot'),
+    ).toBeDefined();
     expect(screen.getByText('Strategy execution halted due to error.')).toBeDefined();
   });
 
@@ -333,6 +214,13 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     });
     vi.spyOn(riskModule.riskApi, 'getStrategyLimits').mockResolvedValue([]);
     vi.spyOn(riskModule.riskApi, 'getMarginHealth').mockResolvedValue({ margin_ratio: 10, free_margin: 90, risk_score: 10 });
+    // RISK-05: a mocked double, not the real unmocked `GET /api/risk/guard-status`.
+    vi.spyOn(riskModule.riskApi, 'getGuardStatus').mockResolvedValue({
+      consecutive_losses: 0,
+      consecutive_loss_limit: 3,
+      capital_utilization_pct: 0.1,
+      capital_utilization_limit_pct: 0.8,
+    });
 
     const { unmount } = render(<MemoryRouter><RiskSettings /></MemoryRouter>);
 

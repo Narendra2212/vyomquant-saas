@@ -1,7 +1,56 @@
 {
+  "_baseline_note_backtest_execute_shares_its_core": "AUTHORISED RE-RECORD. `execute_backtest`'s `raises` is now [] because its body moved into `_execute_version_backtest`, which the new asynchronous sibling `POST .../backtests/start` shares with it. The WIRE CONTRACT IS UNCHANGED: the same STRATEGY_NOT_FOUND 404, STRATEGY_GET_FAILED 500, BACKTEST_VERSION_UNAVAILABLE 422, BACKTEST_NOT_RUNNABLE 422 and BACKTEST_EXECUTE_FAILED 500 are raised by the same code in the same order; this capture reads a handler's OWN ast, and a handler that delegates raises nothing of its own. Extracted rather than copied deliberately: step 1 of that core is an authorization boundary (another tenant's strategy is a 404 identical to a missing one, Requirement 20.2), and two routes maintaining their own copy of that check is how one of them eventually stops making it. The coverage this list used to give is not dropped but MOVED AND STRENGTHENED, from a derived snapshot to direct assertions: tests/test_task_6_1_backtest_execute.py pins every one of those refusals for the synchronous route, and tests/test_backtest_async_start.py now pins the same set for the asynchronous one, including that a refusal arrives as a refusal rather than as an accepted job.",
+  "_baseline_note_backtester_delete_saved_run": "AUTHORISED RE-RECORD. Requirement 22.1 lists the backtest delete action and Requirement 10.1 makes Saved Backtest History the account's own record of its runs; the Backtester page now offers that action, so `pages/Backtester.jsx` calls `DELETE /api/backtests/{backtest_id}` through `api.strategies.deleteBacktest`. That is the whole of this delta: api_call_count 6 -> 7 and ONE added api_calls entry. The handler itself is UNCHANGED and pre-existing (routers/strategy_operations.delete_backtest, service-role, ownership-scoped on id AND user_id, constant {'success': true} per Requirement 20.2) -- it was reachable and simply uncalled by this surface before. No existing entry was removed, renamed, retyped or re-meaninged. Evidence: algo22-terminal/tests/unit/backtestDeleteSavedRun.test.jsx (9 tests, mutation-checked).",
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. The backtest handler gained ONE additive FastAPI dependency parameter, `_quota=Depends(check_backtest_quota)`, and lost none. Backtests are now a monthly allowance (Free 10, Trader 100, Pro Quant 500, Business 1500) and were previously ungated and unmetered. The dependency reserves one run before the job is enqueued; it changes no request field, no response field and no execution behaviour for a caller within their allowance. A caller over it receives 403 with a structured `BACKTEST_LIMIT_REACHED` refusal.",
-  "api_call_count": 6,
+  "_baseline_note_rl02_strategy_detail_rate_limit_restored": "RL-02 AUTHORISES the added `@limiter.limit(\"200/minute\")` decorator and `request: Request` parameter on GET /api/strategies/{strategy_id} (backend_app/routers/strategies.py::get_strategy_route). API-01 correctly deleted a shadowed duplicate of this route that strategies.py's own live handler always won over by registration order -- but the deleted duplicate carried this exact rate limit, which never travelled to the live handler, leaving it callable at an unbounded rate. This is a restoration of a protection that briefly existed, not a new behavioural surface: the route's response shape, status codes and auth requirement are unchanged. Evidence: commit c931a43, tests/test_task_8_2_deploy_preflight.py (42 passed, was 41 passed + 1 failed).",
+  "api_call_count": 7,
   "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.delete('/backtests/{backtest_id}')",
+            "limiter.limit('50/minute')"
+          ],
+          "handler": "delete_backtest",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "backtest_id": {
+              "annotation": "str"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "BACKTEST_DELETE_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "success": "bool"
+            }
+          ],
+          "route_path": "/api/backtests/{backtest_id}"
+        }
+      ],
+      "method": "DELETE",
+      "path": "/api/backtests/{expr}",
+      "path_template": "/api/backtests/{expr}",
+      "resolved": true,
+      "via": "api.strategies.deleteBacktest"
+    },
     {
       "handler_count": 1,
       "handlers": [
@@ -55,7 +104,8 @@
       "via": "api.strategies.listBacktests"
     },
     {
-      "handler_count": 3,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: list_strategies). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 2,
       "handlers": [
         {
           "decorators": [
@@ -136,46 +186,6 @@
             }
           ],
           "route_path": "/api/strategies/"
-        },
-        {
-          "decorators": [
-            "router.get('/strategies')",
-            "limiter.limit('200/minute')"
-          ],
-          "handler": "list_strategies",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "environment": {
-              "annotation": "Optional",
-              "has_default": true
-            },
-            "request": {
-              "annotation": "Request"
-            },
-            "status": {
-              "annotation": "Optional",
-              "has_default": true
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGIES_LIST_FAILED",
-              "status_code": 500
-            }
-          ],
-          "returns": [
-            "computed",
-            "computed"
-          ],
-          "route_path": "/api/strategies"
         }
       ],
       "method": "GET",
@@ -234,57 +244,20 @@
       "via": "api.strategies.versions"
     },
     {
-      "handler_count": 2,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: get_strategy). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 1,
       "handlers": [
         {
           "decorators": [
-            "router.get('/strategies/{strategy_id}')",
+            "router.get('/{strategy_id}')",
             "limiter.limit('200/minute')"
-          ],
-          "handler": "get_strategy",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "request": {
-              "annotation": "Request"
-            },
-            "strategy_id": {
-              "annotation": "str"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_GET_FAILED",
-              "status_code": 500
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_NOT_FOUND",
-              "status_code": 404
-            }
-          ],
-          "returns": [
-            "computed"
-          ],
-          "route_path": "/api/strategies/{strategy_id}"
-        },
-        {
-          "decorators": [
-            "router.get('/{strategy_id}')"
           ],
           "handler": "get_strategy_route",
           "module": "backend_app.routers.strategies",
           "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
             "strategy_id": {
               "annotation": "str"
             },
@@ -342,58 +315,7 @@
               "depends_on": "get_current_user"
             }
           },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str",
-                "report": {
-                  "one_of": [
-                    "computed",
-                    "null"
-                  ]
-                },
-                "strategy_id": "computed",
-                "version_id": "computed"
-              },
-              "error_code": "BACKTEST_VERSION_UNAVAILABLE",
-              "status_code": 422
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str",
-                "strategy_id": "computed",
-                "version_id": "computed"
-              },
-              "error_code": "BACKTEST_NOT_RUNNABLE",
-              "status_code": 422
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "BACKTEST_EXECUTE_FAILED",
-              "status_code": 500
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_GET_FAILED",
-              "status_code": 500
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_NOT_FOUND",
-              "status_code": 404
-            }
-          ],
+          "raises": [],
           "returns": [
             "computed"
           ],

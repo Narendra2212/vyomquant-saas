@@ -1,0 +1,169 @@
+# 10-paired-artifacts.yml — a router or migration change must bring its recorded baseline
+#
+# WHY THIS EXISTS, AND WHY IT IS WORTH A WHOLE WORKFLOW
+#
+# Six times now, a change to `backend_app/routers/**` or a migration has merged without
+# re-recording the artifact that describes it, and `main` has gone red AFTER the merge --
+# so the PR that caused it was already green and gone:
+#
+#   #283  069 schema baseline left behind
+#   #309  SUP-02 support surface  -> and this one SILENTLY BLOCKED EVERY PRODUCTION
+#                                    DEPLOY FOR A DAY, because `03 Deploy`'s gate
+#                                    refuses any commit whose `01 PR Check` failed.
+#                                    The backend sat 13 commits stale and nothing
+#                                    reported it.
+#   #314  MKT-07 frontend mocks
+#   #324  074's REVOKE read as a destructive statement
+#   #327  the hardening file's checksum (mine)
+#   #329  migration 075's column
+#
+# The cost is not the red build. It is that `01 PR Check` runs the WHOLE suite, so every
+# subsequent PR inherits the failure and nobody can tell their own change from the
+# ambient one -- and deploys stop without an alert.
+#
+# WHY A `paths` TRIGGER AND NOT A STEP IN `01 PR Check`
+# `01` already runs the tests that CATCH the drift. The problem is that they catch it
+# against the merge result, after the fact. This runs on the PR itself, before merge,
+# and says in one line which artifact is missing. It is cheap (a git diff, no database,
+# no install) so it can be required without slowing anything.
+#
+# IT IS OVERRIDABLE, DELIBERATELY. Not every router change alters the recorded surface --
+# a comment, a log line, a type hint. A guard that cannot be overridden gets disabled,
+# and a disabled guard is worth less than no guard. The escape hatch is a label, so the
+# override is visible on the PR and attributable, rather than a magic commit string.
+
+name: 10 Paired Artifacts
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'backend_app/routers/**'
+      - 'backend_app/migrations/**'
+      - 'migrations/**'
+      - 'scripts/provision_database.py'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  paired:
+    name: A router or migration change brings its baseline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need the merge base to diff against. `fetch-depth: 0` rather than a guessed
+          # depth: a long-lived branch would otherwise fall outside a shallow fetch and
+          # the diff would silently report every file as changed.
+          fetch-depth: 0
+
+      - name: Check the pairing
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # QUOTED, and it has to be: the `*` in `labels.*.name` is a YAML alias
+          # indicator at the start of a plain scalar, so the unquoted form makes the
+          # whole file unparseable — `yaml.scanner.ScannerError: while scanning an
+          # alias`. GitHub would have reported that as an invalid workflow, i.e. a
+          # guard that silently never runs, which is the exact failure mode this job
+          # exists to prevent. Caught by test_deploy04's own yaml.safe_load.
+          LABELS: "${{ join(github.event.pull_request.labels.*.name, ',') }}"
+        run: |
+          set -euo pipefail
+
+          # The three-dot merge base is what matters: a two-dot diff against the base
+          # BRANCH would attribute other people's merges to this PR.
+          MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          echo "merge base: $MERGE_BASE"
+          CHANGED=$(git diff --name-only "$MERGE_BASE" "$HEAD_SHA")
+
+          echo "::group::files changed in this PR"
+          echo "$CHANGED"
+          echo "::endgroup::"
+
+          has() { echo "$CHANGED" | grep -qE "$1"; }
+
+          FAILED=0
+          EXPLAIN=""
+
+          # ── routers -> the recorded API surface ──
+          #
+          # `tests/regression/baseline/surface_*.json` is what the surface tests compare
+          # against. ANY of them counts: a router change normally touches one surface, and
+          # demanding the specific matching file would need a router->surface map that
+          # would itself drift.
+          if has '^backend_app/routers/'; then
+            if has '^tests/regression/baseline/surface_.*\.json$'; then
+              echo "OK  routers changed, and a surface baseline changed with them"
+            else
+              FAILED=1
+              # Appended one line at a time, each indented INSIDE this block scalar.
+              # A multi-line shell string whose continuations sit at lower indentation
+              # terminates the YAML block and the next line is parsed as a YAML node --
+              # which is how the first draft of this file produced
+              # `ScannerError: while scanning an alias` on a leading `*`.
+              EXPLAIN="${EXPLAIN}  * backend_app/routers/** changed, but no tests/regression/baseline/surface_*.json did."$'\n'
+              EXPLAIN="${EXPLAIN}    If this PR changes a route's request or response shape, re-record the surface"$'\n'
+              EXPLAIN="${EXPLAIN}    and commit it HERE. #309 is what happens otherwise: main went red after the"$'\n'
+              EXPLAIN="${EXPLAIN}    merge and every production deploy was refused for a day."$'\n'
+            fi
+          fi
+
+          # ── migrations / provisioning -> the provisioning snapshot ──
+          #
+          # The snapshot records columns, policies, privileges, RLS and the migration
+          # checksums, so a migration almost always moves it. The exception is a migration
+          # that only adds a comment, which is what the label is for.
+          if has '^(backend_app/)?migrations/' || has '^scripts/provision_database\.py$'; then
+            if has '^staging/provisioning_snapshot\.json$'; then
+              echo "OK  a migration changed, and the provisioning snapshot changed with it"
+            else
+              FAILED=1
+              EXPLAIN="${EXPLAIN}  * a migration or the provisioning script changed, but"$'\n'
+              EXPLAIN="${EXPLAIN}    staging/provisioning_snapshot.json did not. Re-record it in this PR."$'\n'
+              EXPLAIN="${EXPLAIN}    NOTE the checksum is taken over read_text() -- universal-newline"$'\n'
+              EXPLAIN="${EXPLAIN}    translated -- so it is a digest of LF-NORMALISED TEXT, not of raw bytes."$'\n'
+              EXPLAIN="${EXPLAIN}    A raw-bytes digest fails the drift gate on any CRLF checkout."$'\n'
+            fi
+          fi
+
+          if [ "$FAILED" -eq 0 ]; then
+            echo "paired-artifact check passed"
+            exit 0
+          fi
+
+          # ── the escape hatch ──
+          if echo "${LABELS:-}" | tr ',' '\n' | grep -qx 'no-baseline-change-needed'; then
+            echo "::warning title=Paired-artifact check overridden::The 'no-baseline-change-needed' label is present, so this is a warning rather than a failure. Whoever added the label is asserting that this change does not alter any recorded artifact."
+            echo "$EXPLAIN"
+            exit 0
+          fi
+
+          echo "::error title=A recorded artifact is missing from this PR::$EXPLAIN"
+          # Indented echoes rather than a heredoc: heredoc BODY must start at column 1,
+          # which terminates this YAML block scalar and makes the workflow unparseable --
+          # the same class of bug as the EXPLAIN strings above, and the reason a guard
+          # like this needs its own test.
+          echo ""
+          echo "WHY THIS IS BLOCKING, AND HOW TO PROCEED"
+          echo ""
+          echo "'01 PR Check' runs the whole test suite, so a baseline that is stale"
+          echo "AFTER this merges fails on main and then on every later PR -- and the PR"
+          echo "that caused it is already green and gone. Worse, '03 Deploy' refuses any"
+          echo "commit whose '01 PR Check' failed, so a missing baseline stops production"
+          echo "shipping without raising an alert. That has happened six times, and once"
+          echo "it held the backend 13 commits stale for a day."
+          echo ""
+          echo "Either:"
+          echo "  1. re-record the artifact and commit it in this PR (the normal case), or"
+          echo "  2. add the label 'no-baseline-change-needed' if this change genuinely"
+          echo "     alters no recorded surface -- a comment, a log line, a type hint."
+          echo "     The override is a label so it is visible on the PR and attributable,"
+          echo "     rather than a magic string in a commit message."
+          echo ""
+          echo "Do not disable this job. It is the cheapest check in the repository:"
+          echo "a git diff, no database and no install."
+          exit 1

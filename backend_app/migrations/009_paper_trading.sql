@@ -193,10 +193,11 @@ BEGIN
             'Listing table.';
     END IF;
 
-    -- gen_random_uuid() is the default of every id column below. It lives in
-    -- pgcrypto on the baseline this repository targets; 001 and 007 already
-    -- rely on it, so this is a readable failure rather than a bare
-    -- undefined_function from inside a column default.
+    -- gen_random_uuid() is the default of every id column below. It still gets
+    -- checked, but note what it does NOT establish: gen_random_uuid() has been in
+    -- CORE PostgreSQL since version 13, so on any modern server this check passes
+    -- whether or not pgcrypto is installed. It is a check on the column defaults
+    -- here, not on the extension.
     IF NOT EXISTS (
         SELECT 1 FROM pg_proc p
           JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -205,13 +206,41 @@ BEGIN
         RAISE EXCEPTION
             '009 precondition failed: gen_random_uuid() is not available. '
             'Every paper_* id defaults to it. Enable it with '
-            'CREATE EXTENSION IF NOT EXISTS pgcrypto; (001 and 007 already '
-            'depend on it).';
+            'CREATE EXTENSION IF NOT EXISTS pgcrypto; on PostgreSQL 12 or '
+            'earlier, or upgrade -- it is in core from 13 onward.';
+    END IF;
+
+    -- gen_random_bytes() is the one that genuinely requires pgcrypto, and until
+    -- this check existed nothing verified it. The consequence was not local to
+    -- this file: migrations/referral_system_redesign.sql defines
+    -- generate_unique_referral_code() around gen_random_bytes(4), and a trigger on
+    -- public.profiles calls it, so a database without pgcrypto accepts the whole
+    -- provisioning run and then fails EVERY INSERT INTO public.profiles -- i.e.
+    -- every user signup -- with a bare undefined_function from inside a trigger.
+    --
+    -- Checked here, in the file that already owns a pgcrypto preflight, rather
+    -- than left to the file that needs it: this runs early in the numbered set and
+    -- a missing extension should stop provisioning at a readable message, not at a
+    -- broken signup path discovered later. referral_system_redesign.sql also
+    -- issues CREATE EXTENSION IF NOT EXISTS pgcrypto itself, so this is the
+    -- warning, not the only remedy.
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE p.proname = 'gen_random_bytes'
+    ) THEN
+        RAISE EXCEPTION
+            '009 precondition failed: gen_random_bytes() is not available, so '
+            'pgcrypto is NOT installed. generate_unique_referral_code() needs it '
+            'and a trigger on public.profiles calls that function, so every user '
+            'signup would fail. Enable it with '
+            'CREATE EXTENSION IF NOT EXISTS pgcrypto;';
     END IF;
 
     RAISE NOTICE '009 preflight: auth.users and public.library_strategies '
-                 'present, gen_random_uuid() available. Creating 13 new '
-                 'paper_* tables; no pre-existing table is touched.';
+                 'present, gen_random_uuid() and gen_random_bytes() available. '
+                 'Creating 13 new paper_* tables; no pre-existing table is '
+                 'touched.';
 END $$;
 
 -- ==========================================================================

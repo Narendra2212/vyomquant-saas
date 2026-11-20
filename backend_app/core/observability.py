@@ -671,6 +671,64 @@ _KEY_VALUE_IN_TEXT_RE = re.compile(
     re.VERBOSE,
 )
 
+#: A bare ``%``-style logging conversion specifier (``%s``, ``%r``, ``%-10.2f``, ``%%``, ...),
+#: and nothing else.
+#:
+#: WHY THIS EXISTS. `logging.Logger.critical(fmt, *args)` and friends are lazy: `record.msg`
+#: stays the literal, unsubstituted format string (`"authorization_source=%s"`) until a handler
+#: calls `record.getMessage()`, which does `msg % self.args`. `RedactingLogFilter` runs BEFORE
+#: that substitution, so `_redact_key_values_in_text` was seeing the placeholder token itself as
+#: the "value" to inspect -- and for any denied key (`authorization_source` matches the
+#: `authorization` entry in SECRET_KEY_NAMES as a contiguous token subsequence) it replaced that
+#: token with `[redacted]`, deleting one of `record.msg`'s conversion specifiers while
+#: `record.args` -- redacted separately, item by item, never shortened -- kept its original
+#: length. `record.getMessage()` then raised `TypeError: not all arguments converted during
+#: string formatting`, turning a logging call into a crash.
+#:
+#: Measured via `tests/test_role_granularity_and_audit.py::test_kill_switch_succeeds_for_operator_with_valid_reason`:
+#: `core/safety_audit.py`'s `record_safety_transition` is documented to "never raise into the
+#: caller" specifically so a database outage during a platform kill-switch activation cannot turn
+#: into a 500 telling the operator the halt failed when it actually succeeded (see that module's
+#: docstring). Its own "the write failed, here is the record for recovery" critical log -- the
+#: exact fallback that contract depends on -- logs `authorization_source=%s`, so the one case
+#: this filter is supposed to make safer (an audit write failing) was the one guaranteed to crash
+#: it instead.
+#:
+#: Skipping a bare specifier costs nothing: a REAL secret passed as a lazy `%s` argument was never
+#: visible to this key-value scanner anyway, because it lives in `record.args`, not in the
+#: `record.msg` text this function inspects -- `_redact_log_record` redacts `record.args` through
+#: `_redact_value`'s pattern matching, separately, below. This only stops the scanner from
+#: mistaking its own lack of a value yet for one.
+_BARE_PERCENT_SPEC_RE = re.compile(
+    r"^%[#0\-+ ]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[diouxXeEfFgGcrsa%]$"
+)
+
+#: The redaction placeholder itself, case-insensitively, with or without its closing
+#: bracket -- which is how `_KEY_VALUE_IN_TEXT_RE`'s value group actually captures it, since
+#: that group's character class excludes `]` (see its own comment: a value ends at a
+#: delimiter, and `]` is one). So a key immediately followed by `[redacted]` is captured as
+#: `[redacted` only.
+#:
+#: WHY THIS EXISTS. A caller can redact its own text before it ever reaches this filter --
+#: `exchange_executor.py`'s STEP 6.10 `_redact_credentials` does exactly that, replacing its
+#: own `api_key`/`api_secret`/`password` with the literal `"[REDACTED]"` before logging, for
+#: exactly the reason this module exists (an underlying library can echo a credential back
+#: into an exception message). Without this guard, `_redact_key_values_in_text` sees
+#: `apiKey=[REDACTED]` (`api_key`/`apiKey` is itself a denied key), matches `[REDACTED` as a
+#: SECOND, un-redacted-looking value, and replaces that already-safe placeholder with
+#: `REDACTED_PLACEHOLDER` again -- leaving the original, unmatched `]` behind as a stray
+#: character and silently lower-casing a caller's own uppercase spelling. The secret itself
+#: never re-leaks (both passes produce a placeholder, not the value), but the result is
+#: corrupted text (`apiKey=[redacted]]`) and a changed placeholder that broke
+#: `tests/test_exchange_credential_log_redaction.py`'s own assertion on the exact spelling
+#: `_redact_credentials` promises.
+#:
+#: Skipping it costs nothing: a value that already IS the placeholder has nothing left in it
+#: to protect.
+_ALREADY_REDACTED_RE = re.compile(
+    r"^" + re.escape(REDACTED_PLACEHOLDER.rstrip("]")) + r"\]?$", re.IGNORECASE
+)
+
 #: How deep :func:`redact` will walk. Deeper than the error catalogue's bound because a log record
 #: is not sent to a client and a paper event payload is legitimately nested; bounded all the same,
 #: because an unbounded walk in a logging path is a way to hang a process.
@@ -698,15 +756,26 @@ def _redact_key_values_in_text(text: str) -> str:
         match = _KEY_VALUE_IN_TEXT_RE.search(text, position)
         if match is None:
             break
-        if not is_denied_key(match.group("key")):
+        value = match.group("value")
+        if (
+            not is_denied_key(match.group("key"))
+            or _BARE_PERCENT_SPEC_RE.match(value)
+            or _ALREADY_REDACTED_RE.match(value)
+        ):
             # Keep the key as written and resume AT its separator, so a deny-listed pair inside
             # what would have been this pair's value is still reached.
+            #
+            # A bare `%s`/`%r`/... specifier is treated the same as a non-denied key: it is not a
+            # value yet (see `_BARE_PERCENT_SPEC_RE`'s docstring), so there is nothing here to
+            # redact, and a real value appearing later in the text must still be found. A value
+            # that already IS the placeholder (see `_ALREADY_REDACTED_RE`'s docstring) is left
+            # alone the same way, so a caller's own prior redaction is not corrupted by a second
+            # pass over what it already made safe.
             resume = match.start("gap")
             pieces.append(text[position:resume])
             position = resume
             continue
         quote = match.group("quote")
-        value = match.group("value")
         if value[:1] in ('"', "'") and value[-1:] == value[:1]:
             replacement = f"{value[0]}{REDACTED_PLACEHOLDER}{value[0]}"
         else:
@@ -1026,9 +1095,61 @@ def guarded_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-# Installed at import. The filter touches only the twelve logger names above, so no output from
-# any other module changes, and ``main.py``'s ``logging.basicConfig`` is neither called nor
-# altered from here.
+def install_root_log_redaction(root: Optional[logging.Logger] = None) -> int:
+    """LOG-01: attach :class:`RedactingLogFilter` to every HANDLER on the root logger.
+
+    :func:`install_log_redaction` only ever protects the thirteen names in
+    :data:`GUARDED_LOGGER_NAMES` - task 33.4's own scope, deliberately narrow (see this
+    module's docstring: "Attaching to the root's handlers instead would redact the
+    whole process's output, which the task forbids"). LOG-01 is the later finding that
+    asks for exactly the thing that task declined: billing, exchange, execution and
+    auth loggers carried no secret redaction at all, so a JWT, an API key or anything
+    else :data:`SECRET_VALUE_PATTERNS` matches could reach a log sink unredacted from
+    any of them.
+
+    THE DISTINCTION THAT MAKES THIS NECESSARY, NOT REDUNDANT WITH ``install_log_redaction``
+    ------------------------------------------------------------------------------------
+    A :class:`logging.Logger`'s own filters apply ONLY to records that logger itself
+    originates - ``Logger.handle`` checks ``self.filters``, never an ancestor's.
+    Attaching to a named logger (what :func:`install_log_redaction` does) therefore
+    protects only that one logger. A :class:`logging.Handler`'s filters, by contrast,
+    run for every record that reaches that handler via propagation, regardless of which
+    logger originated it - which is the mechanism this function uses to cover every
+    logger that is not individually guarded, without walking (or even knowing) its name.
+
+    A record from an already-guarded logger (e.g. ``PaperRepository``) is redacted once
+    by its own logger-level filter and then, if it propagates to the root handler,
+    passes through this filter too; the second pass is a no-op (nothing in already-
+    redacted text matches a secret pattern), not a double-mangling (see
+    ``tests/test_log01_root_redaction_covers_every_logger.py``).
+
+    Idempotent, same convention as :func:`install_log_redaction`: a handler that
+    already carries a :class:`RedactingLogFilter` is left alone.
+
+    Args:
+        root: the logger to read handlers from. Defaults to the real root logger;
+            injectable so a test can attach to its own logger instead of mutating the
+            process-wide root.
+
+    Returns:
+        How many handlers newly received the filter (0 if the root has no handlers yet
+        - e.g. before ``main.py``'s ``logging.basicConfig`` has run - or if every
+        handler already carried one).
+    """
+    target = logging.getLogger() if root is None else root
+    newly_guarded = 0
+    for handler in target.handlers:
+        if not any(
+            isinstance(existing, RedactingLogFilter) for existing in handler.filters
+        ):
+            handler.addFilter(RedactingLogFilter())
+            newly_guarded += 1
+    return newly_guarded
+
+
+# Installed at import. The filter touches only the thirteen logger names above, so no
+# output from any other module changes, and ``main.py``'s ``logging.basicConfig`` is
+# neither called nor altered from here.
 install_log_redaction()
 
 
@@ -1056,6 +1177,7 @@ __all__ = [
     "get_request_id",
     "guarded_logger",
     "install_log_redaction",
+    "install_root_log_redaction",
     "is_denied_key",
     "key_tokens",
     "log_fields",

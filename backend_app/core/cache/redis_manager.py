@@ -28,6 +28,46 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+#: The ``ENV`` values in which substituting an in-process dict for Redis is acceptable.
+#:
+#: Acceptable means "there is no second process to coordinate with". On a developer
+#: machine or in the test suite that is true. In any deployed environment it is false,
+#: and the consequence of getting it wrong is a distributed lock that reports success
+#: separately in every pod — see :meth:`SharedRedisManager._get_active_cache`.
+#:
+#: Kept as an alias of the canonical set in ``core/runtime_env.py`` so the two cannot
+#: diverge; the name stays because it is part of this module's established surface.
+from backend_app.core.runtime_env import LOCAL_STATE_ENVS as _MOCK_CACHE_ENVS  # noqa: E402
+
+
+def _mock_cache_is_acceptable() -> bool:
+    """Whether an in-memory cache may stand in for Redis.
+
+    FAILS CLOSED. Reads ``DEV_MODE`` and the real ``ENV`` / ``ENVIRONMENT`` variables
+    only — never ``VYOMQUANT_MODE``, which is a trading mode (``safe``/``paper``/
+    ``live``) and not a deployment environment. Confusing the two is the defect this
+    function replaces: the old check compared the trading mode against ``"production"``,
+    a value it can never hold, so it always permitted the mock.
+
+    An unset ``ENV`` returns ``False``. That is deliberately stricter than the
+    module-level ``DEV_MODE`` constant, which treats only ``development`` as dev: an
+    unconfigured deployment must not be handed a fake distributed lock.
+
+    Read per call rather than cached, because the test suite sets these with
+    ``monkeypatch.setenv`` and a cached value would make the decision depend on import
+    order.
+
+    Delegates to ``core/runtime_env.py``, which is now the single home for this
+    judgement. ``core/rate_limit.py`` needed the identical decision -- may this process
+    substitute local state for shared state? -- and had got it wrong in the same way, by
+    reading the trading mode. Two copies of a fail-closed rule are two things to drift,
+    so there is one.
+    """
+    from backend_app.core.runtime_env import local_state_is_acceptable
+
+    return local_state_is_acceptable()
+
+
 # DEV_MODE detection
 DEV_MODE = os.environ.get("DEV_MODE", "false").lower() == "true" or \
            os.environ.get("ENV", "").lower() == "development"
@@ -76,15 +116,10 @@ class MockRedisClient:
         """
         return self._store.pop(key, None)
 
-    async def incr(self, key: str) -> int:
-        val = int(self._store.get(key, 0)) + 1
-        self._store[key] = str(val)
-        return val
-
-    async def decr(self, key: str) -> int:
-        val = int(self._store.get(key, 0)) - 1
-        self._store[key] = str(val)
-        return val
+    # RED-01: a dead-on-arrival `incr`/`decr` (no `amount` parameter) used to sit here,
+    # shadowed by this class's own later, complete definitions below - Python keeps only
+    # the LAST `def` with a given name in a class body, so this one never ran. Removed
+    # rather than left as a second, misleading answer to "what does incr do here".
 
     async def incrby(self, key: str, amount: int) -> int:
         val = int(self._store.get(key, 0)) + amount
@@ -190,12 +225,8 @@ class MockRedisClient:
             self._store[key].insert(0, str(v))
         return len(self._store[key])
 
-    async def rpush(self, key: str, *values: Any) -> int:
-        if key not in self._store or not isinstance(self._store[key], list):
-            self._store[key] = []
-        for v in values:
-            self._store[key].append(str(v))
-        return len(self._store[key])
+    # RED-01: a byte-identical `rpush` duplicate used to sit here, shadowed by this
+    # class's own later definition below. Removed as dead code.
 
     async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
         if key not in self._store or not isinstance(self._store[key], dict):
@@ -292,6 +323,23 @@ class MockRedisClient:
     async def xgroup_create(self, stream: str, group: str, id: str = "$", mkstream: bool = False):
         """Mock xgroup_create for streams - no-op"""
         return True
+
+    async def xautoclaim(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        min_idle_time: int,
+        start_id: str = "0-0",
+        count: int = 10,
+    ):
+        """Mock xautoclaim - nothing is ever pending in the in-memory store."""
+        return (start_id, [], [])
+
+    async def xpending(self, stream: str, group: str):
+        """Mock xpending - no consumer groups exist in the in-memory store."""
+        return None
+
     
     async def zpopmin(self, key: str, count: int = 1):
         """Mock zpopmin for sorted sets - returns empty list"""
@@ -617,17 +665,80 @@ class SharedRedisManager:
             raise AttributeError(f"Redis client {type(client)} does not support Lua script execution")
 
     async def _get_active_cache(self):
-        """Get active Redis cache client or mock client in non-production environments."""
+        """The real Redis client, the in-memory mock in dev/test, or ``None``.
+
+        ``None`` means "no cache is available". Every proxy method on this class already
+        treats that as a miss or a refusal, which is the fail-closed direction.
+
+        ═══════════════════════════════════════════════════════════════════════════
+        WHY THE FALLBACK BELOW IS NOT A MODE COMPARISON ANY MORE
+        ═══════════════════════════════════════════════════════════════════════════
+        The last branch used to read::
+
+            from backend_app.core.safety_config import get_vyomquant_mode
+            if get_vyomquant_mode() != "production":
+                return self._mock_client
+            return None
+
+        ``get_vyomquant_mode()`` returns ``VYOMQUANT_MODE``, whose documented values are
+        ``safe`` / ``paper`` / ``live`` (``core/deployment_config.py``). **None of them is
+        ``"production"``** — that is a value of the separate ``ENV`` variable. So the
+        comparison was between two different vocabularies and could never be false, and
+        the ``return None`` below it was unreachable.
+
+        Reproduced during the pre-launch audit with the exact ECS task-definition
+        settings (``ENV=production``, ``VYOMQUANT_MODE=paper``, ``DEV_MODE=false``) and
+        Redis unreachable::
+
+            get_vyomquant_mode()                 = 'paper'
+            get_vyomquant_mode() != "production" -> True
+            _get_active_cache() returned         : MockRedisClient
+
+        WHY THAT IS A TRADING DEFECT AND NOT A CACHING ONE. This manager backs two
+        controls that must be global rather than per-process:
+
+          * ``master_executor``'s execution lock —
+            ``set(f"execution:{user}:{symbol}:{execution_id}", nx=True, ex=30)``
+          * ``DistributedIdempotency._atomic_check_and_set``'s Lua check-and-set claim
+            (FIN-CRITICAL-004). This example previously named
+            ``IdempotentExchangeSubmission.claim_submission``, which lived in
+            ``backend/distributed_execution/`` and was deleted under HY-02 as unreachable
+            code. The argument below is unchanged by the substitution — it was always
+            about the manager, not about which caller holds the claim — but the live
+            claim is the one in ``core/distributed_idempotency.py``.
+
+        ``MockRedisClient`` is backed by a plain ``dict`` on a module-global instance, so
+        it is **per process**. Every pod therefore wins its own ``NX`` and both controls
+        silently become no-ops across pods — while still reporting success. That last
+        clause is what makes it worse than an outage: no exception is raised, so the
+        fail-closed handling added for the duplicate-submission defect never fires,
+        because it defends against a store that *errors*, not one that *lies*. N pods
+        consuming one signal produce N real orders.
+
+        So an unavailable cache in a non-development deployment now returns ``None``.
+        A refused lock makes ``BotRunner`` skip the tick and ``claim_submission`` refuse,
+        which is the correct answer to "I cannot coordinate with the other workers".
+
+        Regression: tests/test_redis_fallback_does_not_fake_a_distributed_lock.py
+        """
         if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
             return self._mock_client
-        
+
         await self._ensure_manager()
         if self._redis_manager and getattr(self._redis_manager, "cache", None):
             return self._redis_manager.cache
-        
-        from backend_app.core.safety_config import get_vyomquant_mode
-        if get_vyomquant_mode() != "production":
+
+        # No real cache. The in-memory stand-in is only ever acceptable where there is
+        # no second process to coordinate with — i.e. a developer machine or the test
+        # suite, which `DEV_MODE` above already covers. Anywhere else, say so.
+        if _mock_cache_is_acceptable():
             return self._mock_client
+
+        logger.error(
+            "Redis is unavailable and this is not a development environment, so no "
+            "cache is being substituted. Distributed locks and idempotency claims will "
+            "refuse rather than silently succeed per-process."
+        )
         return None
 
     async def keys(self, pattern: str = "*") -> list:
@@ -720,15 +831,9 @@ class SharedRedisManager:
                 logger.warning(f"EXISTS failed for '{key}': {e}")
         return False
 
-    async def setex(self, key: str, ttl: int, value: Any):
-        """Proxy to cache setex method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.setex(key, ttl, value)
-            except Exception as e:
-                logger.warning(f"SETEX failed for '{key}': {e}")
-        return None
+    # RED-01: a byte-identical `setex` duplicate used to sit here, shadowed by this
+    # class's own later definition below. Removed as dead code (see that definition's
+    # own comment on the duplicate-method pattern across this class).
 
     async def getdel(self, key: str) -> Optional[str]:
         """Read a key and delete it **atomically**; returns the value, or ``None``.
@@ -790,25 +895,15 @@ class SharedRedisManager:
         )
         return None
 
-    async def incr(self, key: str) -> int:
-        """Proxy to cache incr method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.incr(key)
-            except Exception as e:
-                logger.warning(f"INCR failed for '{key}': {e}")
-        return 0
-
-    async def decr(self, key: str) -> int:
-        """Proxy to cache decr method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.decr(key)
-            except Exception as e:
-                logger.warning(f"DECR failed for '{key}': {e}")
-        return 0
+    # RED-01: dead duplicates of incr, decr, lrange, llen, rpush, lpop and expire used to
+    # sit here, all shadowed by this class's own later definitions below (Python keeps
+    # only the LAST `def` with a given name in a class body). Several of these were not
+    # even behaviourally identical to the definition that actually ran (e.g. this
+    # `incr`/`decr` took no `amount`; the versions below do) -- dead code that documents
+    # behaviour nothing here produces is worse than no comment at all. Removed.
+    #
+    # incrby/decrby are NOT duplicates and were never shadowed - this is their one and
+    # only definition (subscription_engine.py's usage-quota tracking calls them).
 
     async def incrby(self, key: str, amount: int) -> int:
         """Proxy to cache incrby method."""
@@ -830,81 +925,10 @@ class SharedRedisManager:
                 logger.warning(f"DECRBY failed for '{key}': {e}")
         return 0
 
-    async def lrange(self, key: str, start: int, end: int) -> list:
-        """Proxy to lrange method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.lrange(key, start, end)
-            except Exception as e:
-                logger.warning(f"LRANGE failed for '{key}': {e}")
-        return []
+    # RED-01: a dead `xadd` duplicate used to sit here, shadowed by this class's own
+    # later definition below (which additionally adds retries and raises PublishError
+    # for TRADING_CRITICAL_STREAMS -- this simpler version never ran). Removed.
 
-    async def llen(self, key: str) -> int:
-        """Proxy to llen method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.llen(key)
-            except Exception as e:
-                logger.warning(f"LLEN failed for '{key}': {e}")
-        return 0
-
-    async def rpush(self, key: str, *values: Any) -> int:
-        """Proxy to rpush method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.rpush(key, *values)
-            except Exception as e:
-                logger.warning(f"RPUSH failed for '{key}': {e}")
-        return 0
-
-    async def lpop(self, key: str) -> Optional[str]:
-        """Proxy to lpop method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.lpop(key)
-            except Exception as e:
-                logger.warning(f"LPOP failed for '{key}': {e}")
-        return None
-    
-    async def expire(self, key: str, seconds: int) -> bool:
-        """Proxy to expire method."""
-        if DEV_MODE:
-            return await self._mock_client.expire(key, seconds)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            try:
-                return await self._redis_manager.cache.expire(key, seconds)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"EXPIRE failed for '{key}': {e}")
-                return False
-        return False
-    
-    async def xadd(self, stream: str, data: dict, **kwargs):
-        """Proxy to xadd method (for streams)."""
-        if DEV_MODE:
-            return await self._mock_client.xadd(stream, data, **kwargs)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.events:
-            try:
-                import json
-                body = {
-                    k: json.dumps(v) if not isinstance(v, str) else v
-                    for k, v in data.items()
-                }
-                return await self._redis_manager.events.xadd(stream, body, **kwargs)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"XADD failed for '{stream}': {e}")
-                return None
-        return None
-    
     async def xrevrange(self, stream: str, count: int = None, **kwargs):
         """Proxy to xrevrange method (for streams)."""
         if DEV_MODE:
@@ -1037,15 +1061,8 @@ class SharedRedisManager:
                 logger.warning(f"LPOP failed for '{key}': {e}")
         return None
 
-    async def zremrangebyscore(self, key: str, min: Any, max: Any) -> int:
-        """Proxy to cache zremrangebyscore method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.zremrangebyscore(key, min, max)
-            except Exception as e:
-                logger.warning(f"ZREMRANGEBYSCORE failed for '{key}': {e}")
-        return 0
+    # RED-01: a byte-identical `zremrangebyscore` duplicate used to sit here, shadowed
+    # by this class's own later definition below. Removed as dead code.
 
     async def zcard(self, key: str) -> int:
         """Proxy to cache zcard method."""
@@ -1118,11 +1135,54 @@ class SharedRedisManager:
         return 0.0
 
     async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
-        """Proxy to cache hset method."""
+        """Proxy to cache hset method.
+
+        EVERY CALL THROUGH THIS METHOD FAILED IN PRODUCTION until 2026-10-25, and failed
+        silently, because the line below read::
+
+            await client.hset(key, name=name, value=value, mapping=mapping)
+
+        redis-py's signature is ``hset(name, key=None, value=None, mapping=None,
+        items=None)`` -- its ``name`` is the REDIS KEY and its ``key`` is the hash FIELD,
+        the opposite of this wrapper's parameter names. So ``key`` bound positionally to
+        redis-py's ``name`` and ``name=name`` bound to it again::
+
+            TypeError: HashCommands.hset() got multiple values for argument 'name'
+
+        caught by the ``except`` below, logged at WARNING, and swallowed into ``return 0``.
+        Observed firing every 10 seconds in all four worker services the moment INF-03's
+        workers were first deployed -- which is also why nobody had seen it: the loudest
+        caller is WorkerBase's heartbeat, and no worker had ever run in production.
+
+        WHAT WAS SILENTLY NOT BEING WRITTEN: ``worker:health:*`` (so WorkerBase's
+        "unhealthy after three consecutive failures" heartbeat, Requirement 26.5, reported
+        nothing at all and any liveness probe reading those keys saw an empty hash),
+        dag_task_queue's task data/status/result hashes, worker_registry and lease_manager
+        state, heartbeat_manager's component health, and strategies.py's walk-forward job
+        status.
+
+        The field is passed POSITIONALLY now, which is correct for both backends: redis-py
+        reads it as its ``key``, and the in-memory stub's own signature is
+        ``hset(key, name, value, mapping)`` in that order.
+        """
+        # THREE CALL SITES PASS A DICT AS `name` (strategies.py's walk-forward status
+        # writes, now fixed at source). Those were no-ops while this method was broken;
+        # with the call below fixed they would become `HSET key "{'status': ...}" None` --
+        # a garbage field containing a stringified dict, which is WORSE than the failure
+        # it replaced. So a mapping arriving in the field position is treated as the
+        # mapping it plainly is, and said out loud rather than silently reinterpreted.
+        if isinstance(name, dict) and mapping is None:
+            logger.warning(
+                "hset('%s', ...) received a dict as the field name; treating it as "
+                "`mapping`. Pass mapping=<dict> explicitly -- relying on this is one "
+                "refactor away from writing a stringified dict as a field name.", key,
+            )
+            mapping, name, value = name, None, None
+
         client = await self._get_active_cache()
         if client:
             try:
-                return await client.hset(key, name=name, value=value, mapping=mapping)
+                return await client.hset(key, name, value, mapping=mapping)
             except Exception as e:
                 logger.warning(f"HSET failed for '{key}': {e}")
         return 0
@@ -1272,6 +1332,72 @@ class SharedRedisManager:
                 logging.getLogger(__name__).warning(f"Redis XGROUP_CREATE failed for '{stream}': {e}")
                 return False
         return False
+
+    async def xautoclaim(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        min_idle_time: int,
+        start_id: str = "0-0",
+        count: int = 10,
+    ):
+        """Reclaim entries abandoned in a consumer group's PEL, with fail-soft behavior.
+
+        WORKER-01. An entry delivered by XREADGROUP stays in the Pending Entries List
+        until it is XACKed. If the consumer that took it dies first -- or declines to ACK
+        because the job failed -- nothing redelivers it on its own. Without this call a
+        command sits pending forever, which is the silent-loss half of WORKER-01.
+
+        Returns ``(next_start_id, entries, deleted_ids)`` exactly as redis-py does, so the
+        caller can page through the PEL. On any failure it returns an empty claim rather
+        than raising, matching every other stream proxy here: a reaper that crashed the
+        worker loop would be worse than one that finds nothing this pass.
+
+        ``min_idle_time`` is milliseconds. Pass a comfortable multiple of the poll
+        interval -- a threshold inside one poll period does not detect abandonment, it
+        manufactures it by stealing entries from a consumer that is still working on them
+        (the rule ``training_worker.MIN_STALE_TO_INTERVAL_RATIO`` states for heartbeats).
+        """
+        empty = (start_id, [], [])
+        if DEV_MODE:
+            return empty
+
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xautoclaim(
+                    stream, group, consumer, min_idle_time, start_id=start_id, count=count
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Redis XAUTOCLAIM failed for '{stream}'/'{group}': {e}"
+                )
+                return empty
+        return empty
+
+    async def xpending(self, stream: str, group: str):
+        """Summarise a consumer group's PEL, with fail-soft behavior.
+
+        Used for observability -- "how many commands are stuck?" is the question that
+        makes a dead-letter stream actionable. Returns ``None`` when unavailable, which is
+        distinguishable from a real summary reporting zero pending entries.
+        """
+        if DEV_MODE:
+            return None
+
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xpending(stream, group)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Redis XPENDING failed for '{stream}'/'{group}': {e}"
+                )
+                return None
+        return None
 
     async def zpopmin(self, key: str, count: int = 1):
         """Pop minimum scores from sorted set with fail-soft behavior."""

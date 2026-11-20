@@ -662,7 +662,14 @@ class TestOneSynchronousResponse:
         async def _client(user):
             return _Client()
 
+        # `create_backtest` inserts through the service-role seam (see the
+        # backtest_service module header); this test is about the INSERT payload
+        # carrying `version_id`, so both seams return the same recorder.
+        async def _write_client():
+            return _Client()
+
         service._get_supabase = _client
+        service._get_write_supabase = _write_client
 
         import asyncio
 
@@ -728,16 +735,15 @@ class TestTheVenueIsResolvedNotHardcoded:
         """The venue comes from ``DEFAULT_EXCHANGE`` — the same resolution the preview uses."""
         seen = {}
 
-        class _Engine:
-            def __init__(self, exchange_id=None, **kw):
-                seen["exchange_id"] = exchange_id
-
-            async def connect(self):
-                return "connected"
+        # PERF-01: the feed is the POOLED public client (connection_engine.get_public_exchange),
+        # not a fresh ConnectionEngine per backtest; the venue is still DEFAULT_EXCHANGE.
+        async def _pooled(exchange_id):
+            seen["exchange_id"] = exchange_id
+            return "connected"
 
         monkeypatch.setenv("DEFAULT_EXCHANGE", "kraken")
         monkeypatch.setattr(
-            "backend_app.backend.connection_engine.ConnectionEngine", _Engine
+            "backend_app.backend.connection_engine.get_public_exchange", _pooled
         )
 
         import asyncio

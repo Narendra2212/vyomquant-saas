@@ -11,6 +11,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { Activity, TrendingUp, BarChart3, Zap, Target, AlertTriangle, CheckCircle, Play, RefreshCw, Download, ChevronDown, ChevronRight } from "lucide-react";
 import { Tag2, PanelTitle } from "../components/common/primitives";
 import { token } from "../design/tokens";
+import { alpha } from "../design/alpha";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { post } from "../api";
@@ -280,7 +281,7 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
         
         {/* Warnings */}
         {report.warnings && report.warnings.length > 0 && (
-          <div style={{ marginTop: 16, padding: 12, background: `${token.status.loss.fg}20`, border: `1px solid ${token.status.loss.fg}`, borderRadius: 8 }}>
+          <div style={{ marginTop: 16, padding: 12, background: `${alpha(token.status.loss.fg, 13)}`, border: `1px solid ${token.status.loss.fg}`, borderRadius: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <AlertTriangle size={16} style={{ color: token.status.loss.fg }} />
               <span style={{ fontSize: 11, fontWeight: 600, color: token.status.loss.fg }}>Warnings</span>
@@ -294,7 +295,7 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
         )}
         
         {/* Deployment Gate */}
-        <div style={{ marginTop: 16, padding: 12, background: report.deployment_approved ? `${token.status.profit.fg}20` : `${token.status.loss.fg}20`, border: `1px solid ${report.deployment_approved ? token.status.profit.fg : token.status.loss.fg}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ marginTop: 16, padding: 12, background: report.deployment_approved ? `${alpha(token.status.profit.fg, 13)}` : `${alpha(token.status.loss.fg, 13)}`, border: `1px solid ${report.deployment_approved ? token.status.profit.fg : token.status.loss.fg}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 8 }}>
           {report.deployment_approved ? (
             <CheckCircle size={20} style={{ color: token.status.profit.fg }} />
           ) : (

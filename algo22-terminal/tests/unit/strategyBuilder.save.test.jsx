@@ -363,3 +363,106 @@ describe('saving from the page', () => {
     );
   });
 });
+
+/*
+ * LAUNCH AUDIT — a server refusal of the save is SHOWN, not swallowed.
+ * Production: an account over its plan's strategy limit clicked Save and nothing visible
+ * happened; the 403 reason only reached a status-line string. These reject the way `apiClient`
+ * really does — an `ApiError`-shaped object with `status` and `data`, and no `.response`.
+ */
+describe('server refusals of the save are visible', () => {
+  const apiError = (status, detail) =>
+    Object.assign(new Error('Request failed'), { name: 'ApiError', status, data: { detail } });
+
+  const rejectSaveWith = (error) => {
+    mockClient.post.mockImplementation((url) =>
+      url === '/api/strategies'
+        ? Promise.reject(error)
+        : Promise.resolve({ status: 'compiled', dag_hash: 'h', execution_graph: {} }),
+    );
+  };
+
+  const clickSave = async () => {
+    await waitFor(() => expect(screen.getByTestId('registry-state').textContent).toContain('ready'));
+    const save = await screen.findByRole('button', { name: 'Save' });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+  };
+
+  it('a plan-limit refusal renders the upgrade prompt with the server reason', async () => {
+    rejectSaveWith(apiError(403, {
+      code: 'QUOTA_EXCEEDED',
+      message: 'Your Free plan allows 1 strategy. You have 27.',
+      upgrade_message: 'Trader lets you run up to 3 strategies.',
+      required_plan: 'trader',
+      cta_label: 'Upgrade to Trader',
+      current: 27,
+      limit: 1,
+    }));
+    renderBuilder({ id: null, name: 'Over limit', graph_json: graphFor({ symbol: 'ETH/USDT', timeframe: '4h' }) });
+    await clickSave();
+
+    const prompt = await screen.findByTestId('save-refusal');
+    expect(prompt.textContent).toContain('Your Free plan allows 1 strategy');
+    expect(prompt.textContent).toContain('Upgrade to Trader');
+    expect(screen.getByTestId('save-state').textContent).toMatch(/refused/i);
+  });
+
+  it('a server graph refusal (422) lists each issue in the not-saved panel', async () => {
+    rejectSaveWith(apiError(422, {
+      error: 'STRATEGY_GRAPH_INVALID',
+      message: '1 error',
+      errors: [{
+        code: 'EDGE_TYPE_MISMATCH', severity: 'error', node_id: 'n-data', edge_id: null,
+        field: 'close', message: 'Port types do not match.', fix_hint: 'Connect a PRICE_SERIES.',
+      }],
+    }));
+    renderBuilder({ id: null, name: 'Bad graph', graph_json: graphFor({ symbol: 'ETH/USDT', timeframe: '4h' }) });
+    await clickSave();
+
+    const panel = await screen.findByTestId('save-issues');
+    expect(panel.textContent).toContain('Port types do not match.');
+    expect(panel.querySelector('[data-code="EDGE_TYPE_MISMATCH"]')).not.toBeNull();
+  });
+
+  it('any other failure states the server sentence in the status strip', async () => {
+    rejectSaveWith(apiError(500, 'Strategy storage is temporarily unavailable.'));
+    renderBuilder({ id: null, name: 'Outage', graph_json: graphFor({ symbol: 'ETH/USDT', timeframe: '4h' }) });
+    await clickSave();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('save-state').textContent).toContain('Strategy storage is temporarily unavailable.'),
+    );
+  });
+});
+
+describe('after a successful save the header says so', () => {
+  it('says Not saved yet before any save', async () => {
+    renderBuilder({ id: null, name: 'Fresh', graph_json: graphFor({ symbol: 'ETH/USDT', timeframe: '4h' }) });
+    await waitFor(() => expect(screen.getByTestId('registry-state').textContent).toContain('ready'));
+    expect(screen.getByTestId('builder-save-chip').textContent).toBe('Not saved yet');
+  });
+
+  it('shows the saved version and enables Backtest and Deploy', async () => {
+    // The shape POST /api/strategies really answers: the strategy row with the version fields
+    // appended (`created.update(version_result)` in routers/strategies.py).
+    mockClient.post.mockImplementation((url) =>
+      url === '/api/strategies'
+        ? Promise.resolve({ id: 'strategy-1', name: 'Saved one', version_saved: true, version: 'v1.0', version_id: 'ver-1' })
+        : Promise.resolve({ status: 'compiled', dag_hash: 'h', execution_graph: {} }),
+    );
+    renderBuilder({ id: null, name: 'Saved one', graph_json: graphFor({ symbol: 'ETH/USDT', timeframe: '4h' }) });
+    await waitFor(() => expect(screen.getByTestId('registry-state').textContent).toContain('ready'));
+    const save = await screen.findByRole('button', { name: 'Save' });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+
+    await waitFor(() => expect(screen.getByTestId('save-state').textContent).toMatch(/Saved/));
+    await waitFor(() => expect(document.body.textContent).toContain('Version v1.0'));
+    // The save state is stated in words beside the name, not only in a toast that vanishes.
+    expect(screen.getByTestId('builder-save-chip').textContent).toBe('Saved');
+    expect(screen.getByTestId('builder-save-chip').dataset.saveState).toBe('saved');
+    expect(document.body.textContent).not.toContain('Save this strategy before backtesting');
+    expect(document.body.textContent).not.toContain('Save this strategy before deploying');
+  });
+});

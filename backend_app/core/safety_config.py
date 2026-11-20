@@ -15,11 +15,116 @@ from typing import Optional
 logger = logging.getLogger("SafetyConfig")
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#  PRODUCTION_ROUTER_ENABLED — ONE DEFINITION, FAIL CLOSED  (ENV-04)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+
+#: The only spelling that mounts the production execution router. Compared
+#: case-insensitively after stripping.
+#:
+#: DELIBERATELY NARROW. ``1`` / ``yes`` / ``on`` are NOT accepted, because widening the
+#: enabling vocabulary is a permissiveness increase on a switch whose entire purpose is
+#: explicit enablement. They are not silently ignored either: an unrecognised value is
+#: refused AND logged by name, so ``PRODUCTION_ROUTER_ENABLED=1`` leaves the router off and
+#: says so, rather than leaving an operator to believe they enabled something.
+_ROUTER_ENABLE_VALUE = "true"
+
+#: Spellings that mean "off" and need no warning, because they are unambiguous.
+_ROUTER_DISABLE_VALUES = frozenset({"false", "0", "no", "off", ""})
+
+
+def production_router_enabled() -> bool:
+    """Whether ``execution_router`` may be mounted at ``/api/execution``.
+
+    THE SINGLE AUTHORITATIVE DEFINITION (ENV-04). This value used to be computed by two
+    identical lines in two modules::
+
+        # core/safety_config.py:131  AND  core/feature_flags.py:39
+        PRODUCTION_ROUTER_ENABLED: bool = os.getenv("PRODUCTION_ROUTER_ENABLED", "True").lower() == "true"
+
+    and five other places in this repository stated a different answer:
+
+        core/feature_flags.py docstring ......... "PRODUCTION_ROUTER_ENABLED: False
+                                                   (unverified safety)"
+        the code on the next line ............... default "True"
+        ecs-task-definition-full.json ........... "False"
+        new_task_def.json ....................... "False"
+        td15.json ............................... "False"
+        infra/rollback/taskdef-...-145-....json . "False"
+        .env.example ............................ False
+        deployment_go_no_go.md .................. True   (corrected with this change)
+
+    THE DEFAULT IS NOW OFF, which is the direction this switch has to fail. A flag whose
+    ABSENCE mounts an execution surface is a flag that mounts it on every deployment that
+    forgot to set it, and "forgot" is the normal case for a new environment, a rollback to
+    an older task definition, or a local process. Explicit enablement is required: unset
+    means off, in every environment.
+
+    ENVIRONMENT DOES NOT ENTER INTO IT, on purpose. Making the default depend on ``ENV``
+    would give the flag three behaviours to reason about instead of one, and it is exactly
+    the shape that produced RUNTIME-01 (a ``DEV_MODE`` read that quietly overrode
+    ``ENV=production``). The flag is the only switch, and it is read the same way
+    everywhere.
+
+    WHAT IS ON THE OTHER SIDE OF IT, STATED ACCURATELY. ``execution_router`` exposes one
+    endpoint, ``POST /api/execution/signal``, and that endpoint constructs
+    ``ExecutionEngine()`` with no ``portfolio_state`` on the line BEFORE its ``try``, so it
+    raises ``ValueError`` and returns 500 on every request without reaching any venue
+    (measured in ``tests/test_execution_paths_that_claim_an_exchange.py``). So this finding
+    is a configuration-coherence and fail-open-DIRECTION defect, not a live-order exposure,
+    and it is not being reported as one. The direction still matters: the endpoint is an
+    order-submission surface by construction and one repair to its constructor is all that
+    separates it from reaching ``execute_trade``.
+
+    Regression: tests/test_env04_production_router_requires_explicit_enablement.py
+    """
+    raw = os.getenv("PRODUCTION_ROUTER_ENABLED")
+    if raw is None:
+        return False
+
+    normalised = raw.strip().lower()
+    if normalised == _ROUTER_ENABLE_VALUE:
+        return True
+    if normalised not in _ROUTER_DISABLE_VALUES:
+        logger.warning(
+            "PRODUCTION_ROUTER_ENABLED is set to %r, which is not a recognised value. "
+            "The production execution router is DISABLED. The only value that enables it "
+            "is 'true' (case-insensitive).",
+            raw,
+        )
+    return False
+
+
 def validate_safety_config_integrity() -> None:
     """
     Validate safety configuration integrity.
-    
-    FAIL-CLOSED: Validates that safety controls cannot be manipulated via environment variables.
+
+    THIS FUNCTION HAS NO CALL SITES (TRADE-06). Nothing in the application, the entrypoints
+    or CI invokes it, and it has never run. It is kept as a record rather than deleted, and
+    it must not be wired up as-is: its live-trading branch compares ``VYOMQUANT_MODE`` /
+    ``AERORA_MODE`` against ``"live_trading"``, which is the ``SystemMode`` ENUM value and
+    not a value either variable ever holds — the trading modes are ``safe`` / ``paper`` /
+    ``live`` (see ``get_vyomquant_mode`` and its callers). So the branch cannot fire even in
+    production.
+
+    ITS ``PRODUCTION_ROUTER_ENABLED`` ASSERTION WAS REMOVED (ENV-04). It read::
+
+        production_router = os.getenv("PRODUCTION_ROUTER_ENABLED", "true").lower()
+        if production_router != "true":
+            raise ValueError("CRITICAL: Production router disabled. ...
+                             Production requires PRODUCTION_ROUTER_ENABLED=true")
+
+    which demanded the OPPOSITE of the policy every other source in this repository states:
+    it treated a DISABLED execution router as evidence of environment-variable tampering and
+    refused to start, while the ``feature_flags`` docstring, ``.env.example`` and all four
+    task definitions say the router should be off. Both directions could not be right, and
+    the one worth keeping is the one that does not require an execution surface to be
+    mounted. Had this function ever been called, it would have refused to boot the four
+    deployments this repository actually ships.
+
+    Nothing else here is changed, and nothing new is enforced: the live control for the
+    router is :func:`production_router_enabled`, read at import by both ``ExecutionFlags``
+    classes and by ``main.py``'s mount decision.
     """
     env = os.getenv("ENV", "development").lower()
     
@@ -41,15 +146,13 @@ def validate_safety_config_integrity() -> None:
                     "Environment variable manipulation detected."
                 )
         
-        # Validate PRODUCTION_ROUTER_ENABLED cannot be accidentally disabled
-        production_router = os.getenv("PRODUCTION_ROUTER_ENABLED", "true").lower()
-        if production_router != "true":
-            raise ValueError(
-                "CRITICAL: Production router disabled. "
-                "This may indicate environment variable manipulation. "
-                "Production requires PRODUCTION_ROUTER_ENABLED=true"
-            )
-        
+        # The PRODUCTION_ROUTER_ENABLED assertion that used to sit here has been removed
+        # (ENV-04). See this function's docstring: it required the execution router to be
+        # MOUNTED in production, which is the opposite of what the feature-flag docstring,
+        # .env.example and all four task definitions say, and it would have refused to boot
+        # every deployment this repository ships. The authoritative definition is
+        # production_router_enabled() above, and omission leaves the router off.
+
         logger.info("[SAFETY_CONFIG] Production safety configuration validated")
     else:
         logger.info(f"[SAFETY_CONFIG] Development environment detected ({env}), safety validation relaxed")
@@ -110,6 +213,11 @@ class ExecutionFlags:
     All flags default to FALSE (blocked) for safety.
     """
     
+    #: PAPER-14: set ONLY by :meth:`freeze_all`, the emergency halt. The other flags cannot tell
+    #: "frozen" from "safe mode with live trading off" (both leave everything False), and a
+    #: simulated paper evaluation must run in the second and stop in the first.
+    FROZEN: bool = False
+
     # Master kill switch - overrides all other settings
     LIVE_TRADING_ENABLED: bool = False
     PAPER_TRADING_ENABLED: bool = False
@@ -128,7 +236,11 @@ class ExecutionFlags:
     REQUIRE_IDEMPOTENCY_KEY: bool = True
     
     # ---------------------------------------------------------
-    PRODUCTION_ROUTER_ENABLED: bool = os.getenv("PRODUCTION_ROUTER_ENABLED", "True").lower() == "true"
+    #: ENV-04: one definition, read from production_router_enabled() above rather than
+    #: recomputed here. This used to be a second, identical copy of the same
+    #: os.getenv(..., "True") line that core/feature_flags.py also carried, so the default
+    #: had to be changed in two places to change at all.
+    PRODUCTION_ROUTER_ENABLED: bool = production_router_enabled()
 
     
     @classmethod
@@ -149,6 +261,7 @@ class ExecutionFlags:
                 "Production requires explicit authorization for safety control operations."
             )
         
+        cls.FROZEN = True
         cls.LIVE_TRADING_ENABLED = False
         cls.PAPER_TRADING_ENABLED = False
         cls.MANUAL_ORDER_EXECUTION = False
@@ -208,6 +321,21 @@ class SafetyMonitor:
     Checks that can be performed before any execution.
     """
     
+    @staticmethod
+    def check_simulation_allowed(operation: str) -> Optional[str]:
+        """The gate for a SIMULATED evaluation (a paper session): only the emergency freeze.
+
+        PAPER-14. ``check_execution_allowed`` is the gate on anything that can reach an exchange,
+        and in ``VYOMQUANT_MODE=safe`` - the posture production runs while live trading is off -
+        it refuses every ``strategy_signal``. A paper session reaches no exchange: its intents go
+        to the paper simulator and nowhere else. Applying the live gate to it meant no paper
+        session in production had EVER produced a signal, order or fill (11 sessions, 370 closed
+        candles, 0 signals). A simulated evaluation still stops when the platform is frozen.
+        """
+        if ExecutionFlags.FROZEN:
+            return f"[BLOCKED] EXECUTION BLOCKED: system freeze is active (operation: {operation})"
+        return None
+
     @staticmethod
     def check_execution_allowed(operation: str) -> Optional[str]:
         """

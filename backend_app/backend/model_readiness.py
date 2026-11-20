@@ -1,8 +1,12 @@
 """
 backend_app/backend/model_readiness.py
 
-The two Requirement 17 gates that stand between a trained model and a routed order:
-the artifact **checksum** gate (17.6) and the feature-schema **drift** gate (17.7).
+The gates that stand between a trained model and a routed order: the artifact
+**checksum** gate (Requirement 17.6), the feature-schema **drift** gate (Requirement
+17.7), and the minimum **performance** gate (finding ML-01 - see the "GATE 3" section
+below) that closes the hole the first two were never meant to close: a model that is
+undertrained, overfit or near-random passes 17.6 and 17.7 exactly as easily as a good
+one, because both are integrity checks, not quality checks.
 
 Spec: strategy-builder task 8.6. ``design.md`` -> "DAG runtime contract" (the
 ``AWAITING_MODEL`` row of the imperfect-reality table) and "Model artifact checksum
@@ -98,6 +102,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 logger = logging.getLogger("ModelReadiness")
@@ -129,6 +134,13 @@ CODE_FEATURE_SCHEMA_NOT_RECORDED = "FEATURE_SCHEMA_NOT_RECORDED"
 CODE_FEATURE_COLUMNS_UNDETERMINED = "FEATURE_COLUMNS_UNDETERMINED"
 CODE_MODEL_NODE_NOT_IN_PLAN = "MODEL_NODE_NOT_IN_PLAN"
 CODE_MODEL_BLOCK_CHANGED = "MODEL_BLOCK_CHANGED"
+
+#: Finding ML-01's gate - see the "GATE 3" section below for the full rationale.
+CODE_PERFORMANCE_SUFFICIENT = "PERFORMANCE_SUFFICIENT"
+CODE_PERFORMANCE_BELOW_THRESHOLD = "PERFORMANCE_BELOW_THRESHOLD"
+CODE_PERFORMANCE_METRICS_MISSING = "PERFORMANCE_METRICS_MISSING"
+CODE_PERFORMANCE_TASK_UNDETERMINED = "PERFORMANCE_TASK_UNDETERMINED"
+CODE_PERFORMANCE_GATE_PREDATES_GOVERNANCE = "PERFORMANCE_GATE_PREDATES_GOVERNANCE"
 
 #: Reported on an order-only difference. Not a refusal - see the module docstring.
 WARNING_FEATURE_ORDER_DIFFERS = "FEATURE_ORDER_DIFFERS"
@@ -179,6 +191,29 @@ class FeatureSchemaVerdict:
     actual: Optional[List[str]] = None
     details: Dict[str, Any] = field(default_factory=dict)
     warnings: Tuple[Dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class PerformanceVerdict:
+    """The ML-01 answer for one model version: is it better than noise?
+
+    See the "GATE 3" section below for what is checked and why those specific numbers.
+    ``ok`` is true for a model that clears the bar AND for one bound before the gate
+    existed (:data:`CODE_PERFORMANCE_GATE_PREDATES_GOVERNANCE`) - the latter is a pass,
+    not an exemption that is hidden, which is why it gets its own code rather than
+    reusing :data:`CODE_PERFORMANCE_SUFFICIENT`.
+    """
+
+    ok: bool
+    node_id: str
+    model_version_id: Optional[str]
+    code: str
+    message: str
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def runtime_state(self) -> str:
+        return NODE_READY if self.ok else AWAITING_MODEL
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -748,15 +783,318 @@ def compare_feature_schema(
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# BOTH GATES, OVER A WHOLE VERSION
+# GATE 3 - MINIMUM MODEL PERFORMANCE (finding ML-01)
+#
+# WHAT THIS GATE CLOSES
+# ----------------------
+# 17.6 proves the stored bytes are the trained bytes. 17.7 proves the graph still feeds
+# the model the columns it was trained on. Neither one asks whether the model learned
+# anything: an undertrained, overfit or near-random model passes both exactly as easily
+# as a good one, because both are integrity checks, not quality checks. This is the
+# quality check - the one ML-01's audit found missing.
+#
+# WHERE THE NUMBERS COME FROM, NOT INVENTED
+# -------------------------------------------
+# ``training_runtime.StatefulEstimator.evaluate`` (the only thing that produces
+# ``train_metrics``/``val_metrics``/``test_metrics``) returns exactly two shapes:
+#   * classification - ``{"rows", "loss", "accuracy", "f1_macro"}``
+#   * regression     - ``{"rows", "mse", "mae", "r2"}``
+# This gate reads those two shapes and nothing else; it does not invent a third metric,
+# and it does not apply a classification bar to a regression model or vice versa. The
+# model family in play (xgboost, random forest, logistic regression, ...) is irrelevant
+# to which bar applies - only ``task`` is, and ``task`` is read off of which of those two
+# metric shapes the recorded document actually has, which is the one thing every model
+# family that reaches this gate has in common.
+#
+# ``ml_dataset.LabelMode`` has exactly two members, and ``LabelMode.CLASSIFICATION`` is
+# ALWAYS the three-way down/flat/up label (``CLASS_DOWN=0, CLASS_FLAT=1, CLASS_UP=2`` -
+# see that module's header). There is no binary variant anywhere in this platform. That
+# is what makes a single classification threshold defensible rather than arbitrary: a
+# classifier that knows nothing about the market scores ~1/3 (0.3333...) by always
+# guessing one class, not ~1/2.
+#
+# WHY THESE SPECIFIC THRESHOLDS, AND WHY THEY ARE CONSERVATIVE
+# --------------------------------------------------------------
+# MIN_CLASSIFICATION_TEST_ACCURACY = 0.35
+#   The random 3-way baseline is 1/3 = 0.3333. 0.35 adds roughly 1.7 percentage points
+#   of margin - enough to not refuse a model that is genuinely at the baseline but
+#   measured a hair above it by sampling noise on a modest test split, not enough to
+#   demand any real skill. A model that clears 0.35 is still a WEAK model; this gate
+#   only refuses "indistinguishable from chance", and leaves "how good" to the trader,
+#   who now sees the real number in the StrategyBuilder UI panel this finding also adds.
+#
+# MIN_REGRESSION_TEST_R2 = 0.0
+#   R^2 is exactly 0 for a model that is no better than always predicting the split's
+#   mean forward return (the weakest baseline there is for a regression target), and
+#   negative for a model that is WORSE than that constant. Requiring a strictly positive
+#   R^2 excludes only "actively harmful" models - ones that add zero or negative
+#   information relative to doing nothing - never merely mediocre ones. There is no
+#   margin added here because R^2's own zero point already IS the floor; padding it
+#   would be the aspirational number this gate is deliberately not trying to be.
+#
+# Both constants are named and documented here, not buried in the comparison below, so a
+# later change to either is a diff to a single commented line, not an archaeology dig
+# through the branch that uses it.
+#
+# WHICH SPLIT IS CHECKED
+# -----------------------
+# The held-out TEST split when it was scored; VALIDATION when it was not (a run that
+# ended before the dataset carried usable test rows still carries a validation score).
+# NEVER the training split - a model's score on the rows it was fit to says nothing
+# about whether it generalises, which is precisely the blind spot this gate exists to
+# close, so using it here would defeat the gate's own purpose.
+#
+# GOING FORWARD, NOT RETROACTIVE
+# --------------------------------
+# This mirrors ``EarlyStoppingMonitor.from_config``'s own convention a few hundred lines
+# up in ``training_worker.py``: "a row written before this governance landed ... keeps
+# its old behaviour exactly ... because retrofitting a stop rule onto a job that was
+# admitted without one would change what its author was promised." The same promise
+# applies here. A model version bound BEFORE :data:`MODEL_PERFORMANCE_GATE_EFFECTIVE_AT`
+# is not re-judged against a bar that did not exist when it was trained and bound - it
+# passes this gate with :data:`CODE_PERFORMANCE_GATE_PREDATES_GOVERNANCE`, visibly, not
+# silently skipped. A row whose ``created_at`` cannot be read at all (missing, or not a
+# parseable timestamp - the shape every pre-finding caller and test fixture in this
+# codebase already uses) is treated the same way: this gate cannot prove such a row
+# postdates itself, and "cannot prove it is new" must not become "block a production
+# position that has been running since before this code existed". A NEWLY bound model
+# version always has a real ``created_at`` (004d defaults it to ``NOW()``), so this
+# never shields a model bound after the gate shipped - only ones this gate genuinely
+# cannot date.
+#
+# WHAT THIS GATE DOES **NOT** CLOSE
+# ------------------------------------
+# Model drift and staleness over time - whether a model that was good when trained is
+# still good months later as the market regime moves - is NOT checked here and is not
+# claimed to be. That is a monitoring concern (comparing live performance against the
+# recorded training-time baseline on a schedule), not a one-time gate evaluated at
+# bind/deploy time, and it remains an open follow-up the REMEDIATION_LEDGER records
+# honestly as outstanding.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: See the "WHY THESE SPECIFIC THRESHOLDS" note above. A three-way (down/flat/up)
+#: classifier guessing blind scores ~0.3333; this is that baseline plus a small margin
+#: for sampling noise, not an aspirational figure.
+MIN_CLASSIFICATION_TEST_ACCURACY: float = 0.35
+
+#: See the "WHY THESE SPECIFIC THRESHOLDS" note above. R^2 <= 0 means "no better than
+#: predicting the mean, or worse" - the floor is R^2's own zero point, not padded.
+MIN_REGRESSION_TEST_R2: float = 0.0
+
+#: The gate exists from this moment on. A ``model_versions`` row ``created_at`` strictly
+#: before this is governed by the two gates that existed when it was bound (17.6, 17.7)
+#: and not retroactively re-judged by this one - see "GOING FORWARD, NOT RETROACTIVE"
+#: above. Expressed as a constant, not a call to "now", so the cutoff cannot drift
+#: between two evaluations of the same row in the same deploy.
+MODEL_PERFORMANCE_GATE_EFFECTIVE_AT: datetime = datetime(2026, 11, 3, tzinfo=timezone.utc)
+
+#: Metric keys that identify a regression ``evaluate()`` document
+#: (``training_runtime.StatefulEstimator.evaluate``'s regression branch).
+_REGRESSION_METRIC_KEYS: Tuple[str, ...] = ("mse", "mae", "r2")
+
+#: Metric keys that identify a classification ``evaluate()`` document (same source,
+#: classification branch).
+_CLASSIFICATION_METRIC_KEYS: Tuple[str, ...] = ("accuracy", "f1_macro")
+
+
+def _parse_created_at(value: Any) -> Optional[datetime]:
+    """``row["created_at"]`` as an aware ``datetime``, or ``None`` if it cannot be read.
+
+    Reuses ``training_worker.parse_timestamp`` - the one routine this platform already
+    has for "whatever PostgREST handed back" - rather than writing a second one that
+    could disagree with it about what counts as parseable.
+    """
+    try:
+        from backend_app.backend.training_worker import parse_timestamp
+
+        return parse_timestamp(value)
+    except Exception:  # noqa: BLE001 - unreadable is unreadable, never a 500 here
+        return None
+
+
+def _best_available_metrics(
+    row: Mapping[str, Any]
+) -> Tuple[Optional[Mapping[str, Any]], Optional[str]]:
+    """``(metrics, split_name)`` for the most trustworthy scored split, or ``(None, None)``.
+
+    Test before validation, and training never: see "WHICH SPLIT IS CHECKED" above. A
+    split with zero rows (``{"rows": 0}``, what ``_score_splits`` records when a split
+    could not be scored at all) is not usable and is skipped rather than compared
+    against.
+    """
+    for split_name, key in (("test", "test_metrics"), ("val", "val_metrics")):
+        metrics = row.get(key)
+        if not isinstance(metrics, Mapping) or not metrics:
+            continue
+        try:
+            rows = int(metrics.get("rows") or 0)
+        except (TypeError, ValueError):
+            rows = 0
+        if rows > 0:
+            return metrics, split_name
+    return None, None
+
+
+def _detect_task(metrics: Mapping[str, Any]) -> Optional[str]:
+    """``"classification"`` / ``"regression"`` / ``None``, from which keys are present.
+
+    Read off the metrics document itself rather than off ``hyperparameters.label_mode``
+    (recorded only when the training config happened to carry that key - see
+    ``model_versioning.HYPERPARAMETER_CONFIG_KEYS``) or off ``block_id`` (a model family
+    name, not a task). The metrics shape is the one thing every model family that scored
+    a split has in common, so it is the one reliable signal.
+    """
+    if any(key in metrics for key in _REGRESSION_METRIC_KEYS):
+        return "regression"
+    if any(key in metrics for key in _CLASSIFICATION_METRIC_KEYS):
+        return "classification"
+    return None
+
+
+def _finite(value: Any) -> Optional[float]:
+    """``value`` as a plain ``float``, or ``None`` for ``None``/NaN/±inf.
+
+    ``sanitize_epoch_metrics`` already turns NaN into ``None`` before a document is
+    written, but a row built by hand (a test, or a document from before that sanitiser
+    existed) might still carry a raw NaN, and a NaN compares false to everything, which
+    would silently read as "passes no comparison" rather than "unreadable".
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def evaluate_model_performance(row: Mapping[str, Any]) -> PerformanceVerdict:
+    """ML-01's gate for one model version: does it clear the minimum quality bar?
+
+    Never raises, for the same reason :func:`verify_artifact_checksum` never raises: the
+    runtime wants a verdict it can put on a node, not an exception on its hot path.
+    "Cannot tell" is a refusal here exactly as it is in the other two gates, EXCEPT for
+    the one case "GOING FORWARD, NOT RETROACTIVE" above carves out: a row bound before
+    this gate existed is not refused for failing a bar it was never measured against.
+    """
+    node_id = _row_node_id(row)
+    model_version_id = _row_model_version_id(row)
+    base: Dict[str, Any] = {"node_id": node_id, "model_version_id": model_version_id}
+
+    created_at = _parse_created_at(row.get("created_at"))
+    if created_at is None or created_at < MODEL_PERFORMANCE_GATE_EFFECTIVE_AT:
+        # No readable ``created_at`` is treated the same as one before the cutoff: this
+        # gate cannot prove such a row postdates itself, and "cannot prove it is new"
+        # must not become "block a production position that has been running since
+        # before this code existed". See "GOING FORWARD, NOT RETROACTIVE" above.
+        when = created_at.isoformat() if created_at is not None else "an unrecorded date"
+        return PerformanceVerdict(
+            True,
+            node_id,
+            model_version_id,
+            CODE_PERFORMANCE_GATE_PREDATES_GOVERNANCE,
+            f"The active model version for node {node_id!r} was bound on {when}, "
+            f"which this gate cannot place after the minimum model-performance gate "
+            f"(effective {MODEL_PERFORMANCE_GATE_EFFECTIVE_AT.date().isoformat()}) took "
+            f"effect. It is not retroactively re-judged against a bar it may predate.",
+            {**base, "created_at": when},
+        )
+
+    metrics, split_used = _best_available_metrics(row)
+    if metrics is None:
+        return PerformanceVerdict(
+            False,
+            node_id,
+            model_version_id,
+            CODE_PERFORMANCE_METRICS_MISSING,
+            f"The active model version for node {node_id!r} records no usable held-out "
+            f"(test or validation) metrics, so its real-world performance cannot be "
+            f"verified before it is bound to a live or paper deployment.",
+            dict(base),
+        )
+
+    task = _detect_task(metrics)
+    if task is None:
+        return PerformanceVerdict(
+            False,
+            node_id,
+            model_version_id,
+            CODE_PERFORMANCE_TASK_UNDETERMINED,
+            f"The {split_used} metrics recorded for node {node_id!r}'s model version "
+            f"carry none of the recognised classification ({', '.join(_CLASSIFICATION_METRIC_KEYS)}) "
+            f"or regression ({', '.join(_REGRESSION_METRIC_KEYS)}) keys, so whether it "
+            f"clears the minimum performance bar cannot be determined.",
+            {**base, "split": split_used, "metrics": dict(metrics)},
+        )
+
+    if task == "classification":
+        metric_name, threshold = "accuracy", MIN_CLASSIFICATION_TEST_ACCURACY
+        value = _finite(metrics.get(metric_name))
+        passes = value is not None and value >= threshold
+        comparison = "below"
+    else:
+        metric_name, threshold = "r2", MIN_REGRESSION_TEST_R2
+        value = _finite(metrics.get(metric_name))
+        passes = value is not None and value > threshold
+        comparison = "at or below"
+
+    if value is None:
+        return PerformanceVerdict(
+            False,
+            node_id,
+            model_version_id,
+            CODE_PERFORMANCE_METRICS_MISSING,
+            f"The {split_used} metrics recorded for node {node_id!r}'s model version do "
+            f"not include a usable {metric_name!r} value, so its performance against "
+            f"the minimum bar cannot be verified.",
+            {**base, "split": split_used, "metric": metric_name},
+        )
+
+    details = {
+        **base,
+        "split": split_used,
+        "task": task,
+        "metric": metric_name,
+        "value": value,
+        "threshold": threshold,
+    }
+
+    if not passes:
+        return PerformanceVerdict(
+            False,
+            node_id,
+            model_version_id,
+            CODE_PERFORMANCE_BELOW_THRESHOLD,
+            f"Node {node_id!r}'s model scores {metric_name}={value:.4f} on its "
+            f"{split_used} split, {comparison} the minimum bar of {threshold:.4f}. A "
+            f"model this weak is refused rather than bound to a live or paper "
+            f"deployment where it would risk capital.",
+            details,
+        )
+
+    return PerformanceVerdict(
+        True,
+        node_id,
+        model_version_id,
+        CODE_PERFORMANCE_SUFFICIENT,
+        f"Node {node_id!r}'s model scores {metric_name}={value:.4f} on its {split_used} "
+        f"split, at or above the minimum bar of {threshold:.4f}.",
+        details,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ALL THREE GATES, OVER A WHOLE VERSION
 # ══════════════════════════════════════════════════════════════════════════
 
 
 @dataclass(frozen=True)
 class ModelGateReport:
-    """Every 17.6/17.7 verdict for one strategy version, and the first refusal.
+    """Every 17.6/17.7/ML-01 verdict for one strategy version, and the first refusal.
 
-    ``unbound_nodes`` is separate from the two verdict lists because "this ML node has no
+    ``unbound_nodes`` is separate from the verdict lists because "this ML node has no
     active model version at all" is Requirement 17.5's business (the version should not
     have reached ``READY``), and reporting it as a checksum failure would misname it.
     """
@@ -764,12 +1102,13 @@ class ModelGateReport:
     version_id: str
     artifacts: Tuple[ArtifactVerdict, ...] = ()
     schemas: Tuple[FeatureSchemaVerdict, ...] = ()
+    performance: Tuple[PerformanceVerdict, ...] = ()
     unbound_nodes: Tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
         return not self.unbound_nodes and all(
-            v.ok for v in (*self.artifacts, *self.schemas)
+            v.ok for v in (*self.artifacts, *self.schemas, *self.performance)
         )
 
     @property
@@ -784,6 +1123,9 @@ class ModelGateReport:
 
     def first_schema_failure(self) -> Optional[FeatureSchemaVerdict]:
         return next((v for v in self.schemas if not v.ok), None)
+
+    def first_performance_failure(self) -> Optional[PerformanceVerdict]:
+        return next((v for v in self.performance if not v.ok), None)
 
 
 def evaluate_model_gates(
@@ -802,13 +1144,17 @@ def evaluate_model_gates(
     version look bound (it is caught as ``MODEL_NODE_NOT_IN_PLAN`` if it is checked at
     all, and simply not consulted otherwise).
 
-    Checksum before schema, per node: a corrupt artifact makes the recorded schema
-    meaningless, so reporting drift against it would be reporting a derived fact about a
-    file we have just established is not the file.
+    Checksum, then schema, then performance (ML-01), per node: a corrupt artifact makes
+    the recorded schema meaningless, so reporting drift against it would be reporting a
+    derived fact about a file we have just established is not the file - and a drifted
+    schema means the recorded metrics were measured against columns this version's graph
+    no longer feeds the model, so judging its performance would be judging the wrong
+    thing. Each gate only runs once the one before it passed.
     """
     ml_nodes = [str(nid) for nid in (getattr(plan, "ml_nodes", None) or ())]
     artifacts: List[ArtifactVerdict] = []
     schemas: List[FeatureSchemaVerdict] = []
+    performance: List[PerformanceVerdict] = []
     unbound: List[str] = []
 
     for node_id in ml_nodes:
@@ -820,12 +1166,17 @@ def evaluate_model_gates(
         artifacts.append(artifact)
         if not artifact.ok:
             continue
-        schemas.append(compare_feature_schema(row, plan, registry))
+        schema = compare_feature_schema(row, plan, registry)
+        schemas.append(schema)
+        if not schema.ok:
+            continue
+        performance.append(evaluate_model_performance(row))
 
     return ModelGateReport(
         version_id=str(version_id),
         artifacts=tuple(artifacts),
         schemas=tuple(schemas),
+        performance=tuple(performance),
         unbound_nodes=tuple(unbound),
     )
 
@@ -844,13 +1195,23 @@ __all__ = [
     "CODE_MODEL_BLOCK_CHANGED",
     "CODE_MODEL_NODE_NOT_IN_PLAN",
     "CODE_MODEL_READY",
+    "CODE_PERFORMANCE_BELOW_THRESHOLD",
+    "CODE_PERFORMANCE_GATE_PREDATES_GOVERNANCE",
+    "CODE_PERFORMANCE_METRICS_MISSING",
+    "CODE_PERFORMANCE_SUFFICIENT",
+    "CODE_PERFORMANCE_TASK_UNDETERMINED",
+    "MIN_CLASSIFICATION_TEST_ACCURACY",
+    "MIN_REGRESSION_TEST_R2",
+    "MODEL_PERFORMANCE_GATE_EFFECTIVE_AT",
     "WARNING_FEATURE_ORDER_DIFFERS",
     "ArtifactVerdict",
     "FeatureSchemaVerdict",
     "ModelGateReport",
+    "PerformanceVerdict",
     "compare_feature_schema",
     "declared_feature_columns",
     "evaluate_model_gates",
+    "evaluate_model_performance",
     "model_ready",
     "recorded_feature_columns",
     "verify_artifact_checksum",

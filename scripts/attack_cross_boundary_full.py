@@ -3,8 +3,8 @@ ULTIMATE CROSS-BOUNDARY CONSISTENCY & CRASH RESILIENCE ATTACK SUITE
 DO NOT CERTIFY — HOSTILE STRESS, CONCURRENCY, AND ACCOUNTING LEDGER
 
 Sections:
-1. STRIPE -> SUBSCRIPTION -> WORKER -> BOT RACE & CRASH MATRIX
-2. STRIPE WEBHOOK CONCURRENT DEDUPLICATION (10, 50, 100 WORKERS)
+1. PAYMENT -> SUBSCRIPTION -> WORKER -> BOT RACE & CRASH MATRIX
+2. RAZORPAY WEBHOOK CONCURRENT DEDUPLICATION (10, 50, 100 WORKERS)
 3. FEE ACCOUNTING CROSS-CURRENCY (BTC, USDT, BNB, MULTI-FEE, MAKER/TAKER)
 4. POSITION -> PORTFOLIO -> DASHBOARD CONSISTENCY (185-TRADE COMPLEX MATRIX)
 5. DATABASE CONCURRENCY (MULTI-WORKER RACE ON SAME ORDER & POSITION)
@@ -13,7 +13,7 @@ Sections:
 8. 10,000-EVENT GOLDEN ACCOUNTING LEDGER (STEP-BY-STEP COMPARISON)
 """
 
-import sys, io, os, asyncio, threading, uuid, time, random, concurrent.futures
+import sys, io, os, asyncio, json, threading, uuid, time, random, concurrent.futures
 from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN, getcontext
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -54,10 +54,10 @@ def record_bug(bug_id, sev, name, detail, expected, actual, impact, proof="LOGIC
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. STRIPE -> SUBSCRIPTION -> WORKER -> BOT RACE
+# 1. PAYMENT -> SUBSCRIPTION -> WORKER -> BOT RACE
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "=" * 72)
-print("SECTION 1 — STRIPE -> SUBSCRIPTION -> WORKER -> BOT RACE & CRASHES")
+print("SECTION 1 — PAYMENT -> SUBSCRIPTION -> WORKER -> BOT RACE & CRASHES")
 print("=" * 72)
 
 from backend_app.workers.command_worker import CommandWorker
@@ -111,13 +111,30 @@ with patch("backend_app.core.subscription_middleware.get_user_subscription", Asy
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. STRIPE WEBHOOK CONCURRENT DEDUPLICATION (100 WORKERS)
+# 2. RAZORPAY WEBHOOK CONCURRENT DEDUPLICATION (100 WORKERS)
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "=" * 72)
-print("SECTION 2 — STRIPE WEBHOOK CONCURRENT DEDUPLICATION")
+print("SECTION 2 — RAZORPAY WEBHOOK CONCURRENT DEDUPLICATION")
 print("=" * 72)
+#
+# Was a Stripe harness: it patched stripe.Webhook.construct_event, set STRIPE_SECRET_KEY,
+# and called stripe_webhook(...) with a `stripe_signature=` kwarg. Stripe is removed from
+# the product in full, so that import alone killed this entire script at module scope --
+# sections 3 onwards never ran either.
+#
+# The property under test is unchanged and is the one that matters for money: N concurrent
+# deliveries of the SAME event must produce exactly ONE execution. Razorpay is the only
+# gateway now, so it is driven through razorpay_webhook.
+#
+# The signature is REAL, not stubbed. The body bytes are fixed and the harness computes
+# hmac.new(secret, body, sha256).hexdigest() over exactly those bytes, so the production
+# _validate_webhook_signature runs for all 100 deliveries. Stubbing it would have been less
+# work and would have quietly removed the signature path from what this section proves.
 
-from backend_app.routers.billing import stripe_webhook
+import hashlib
+import hmac as _hmac
+
+from backend_app.routers.billing import razorpay_webhook
 
 class AtomicMockRedis:
     """Thread-safe in-memory Redis mock — implements SET NX EX atomically."""
@@ -136,36 +153,55 @@ class AtomicMockRedis:
     async def setex(self, key, ttl, val):
         with self._lock:
             self.store[key] = val
+    async def delete(self, key):
+        with self._lock:
+            self.store.pop(key, None)
 
 
-os.environ["STRIPE_SECRET_KEY"] = "sk_live_test_1234567890"
-os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test_1234567890"
+_WEBHOOK_SECRET = "whsec_razorpay_concurrency_probe"
+os.environ["RAZORPAY_KEY_ID"] = "rzp_live_concurrencyprobe"
+os.environ["RAZORPAY_KEY_SECRET"] = "razorpay_secret_concurrency_probe"
+os.environ["RAZORPAY_WEBHOOK_SECRET"] = _WEBHOOK_SECRET
 
 shared_atomic_redis = AtomicMockRedis()
 
 EVENT_ID_TARGET = "evt_concurr_test_100"
 
-_mock_event = {
-    "id": EVENT_ID_TARGET,
-    "type": "checkout.session.completed",
-    "data": {
-        "object": {
-            "client_reference_id": "usr_123",
-            "metadata": {"item_key": "pro_999"},
-            "payment_intent": "pi_abc",
-            "amount_total": 99900
+# One fixed body for every delivery, so one signature is valid for every delivery -- which
+# is exactly the redelivery case: the same bytes arriving many times.
+_RAZORPAY_BODY = json.dumps({
+    "event": "payment.captured",
+    "payload": {
+        "payment": {
+            "entity": {
+                "id": "pay_concurr_test_100",
+                "amount": 99900,
+                "currency": "INR",
+                "created_at": 1600000000,
+                "notes": {"user_id": "usr_123", "item": "pro_999"},
+            }
         }
-    }
-}
+    },
+}, separators=(",", ":")).encode()
+
+_RAZORPAY_SIGNATURE = _hmac.new(
+    _WEBHOOK_SECRET.encode(), _RAZORPAY_BODY, hashlib.sha256
+).hexdigest()
+
 
 def simulate_webhook_call(event_id, payload_body):
     """Each thread gets its own event loop; patches are already applied globally."""
     mock_req = AsyncMock()
     mock_req.body.return_value = payload_body
-    mock_req.headers = {}
+    # `headers` must be a real mapping, not an AsyncMock attribute: the handler reads
+    # `x-razorpay-signature` off it and `_razorpay_event_id` reads `x-razorpay-event-id`.
+    mock_req.headers = {
+        "x-razorpay-signature": _RAZORPAY_SIGNATURE,
+        "x-razorpay-event-id": event_id,
+    }
     try:
         res = asyncio.run(
-            stripe_webhook(MagicMock(), mock_req, stripe_signature="t=1600000000,v1=sig_123")
+            razorpay_webhook(MagicMock(), mock_req, x_razorpay_signature=_RAZORPAY_SIGNATURE)
         )
         return res if isinstance(res, dict) else {"status": "success"}
     except Exception as exc:
@@ -176,22 +212,31 @@ def simulate_webhook_call(event_id, payload_body):
         return {"status": "error", "detail": msg}
 
 # Apply all patches globally ONCE before threads are spawned.
-import stripe as _stripe_mod
 import backend_app.routers.billing as _billing_mod
 
-_p1 = patch.object(_stripe_mod.Webhook, "construct_event", return_value=_mock_event)
-_p2 = patch.object(_billing_mod, "_validate_keys", return_value="sk_live_test_1234567890")
+# The IP allow-list is defence in depth around a cryptographic check, and a MagicMock
+# request has no routable client address, so it is the one control stubbed here. The
+# signature it layers on top is NOT stubbed -- see the note at the top of this section.
+_p1 = patch.object(_billing_mod, "_validate_webhook_ip", return_value=None)
+_p2 = patch.object(_billing_mod, "_validate_keys", return_value="rzp_live_concurrencyprobe")
 _p3 = patch.object(_billing_mod, "redis_manager", new=shared_atomic_redis)
-_p4 = patch.object(_billing_mod, "_process_stripe_entitlement", new=AsyncMock())
+_p4 = patch.object(_billing_mod, "_process_razorpay_entitlement", new=AsyncMock())
+# The durable claim (SEC-03) defers to Redis when no service credential is configured,
+# which is this environment. Pinned to True so the section measures the Redis lock it is
+# actually about, rather than an absent Supabase.
+_p5 = patch.object(_billing_mod, "acquire_webhook_processing", new=AsyncMock(return_value=True))
+_p6 = patch.object(_billing_mod, "mark_webhook_completed", new=AsyncMock())
+_p7 = patch.object(_billing_mod, "release_webhook_processing", new=AsyncMock())
 
-for _p in (_p1, _p2, _p3, _p4):
+_patches = (_p1, _p2, _p3, _p4, _p5, _p6, _p7)
+for _p in _patches:
     _p.start()
 
 try:
     results_100 = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
         futures = [
-            executor.submit(simulate_webhook_call, EVENT_ID_TARGET, b'{"id": "evt_concurr_test_100"}')
+            executor.submit(simulate_webhook_call, EVENT_ID_TARGET, _RAZORPAY_BODY)
             for _ in range(100)
         ]
         for f in concurrent.futures.as_completed(futures):
@@ -200,26 +245,43 @@ try:
             except Exception as exc:
                 results_100.append({"status": "error", "detail": str(exc)})
 finally:
-    for _p in (_p1, _p2, _p3, _p4):
+    for _p in _patches:
         _p.stop()
 
-successes  = [r for r in results_100 if r.get("status") == "success"]
+# THE PROPERTY UNDER TEST IS THE LOCK, NOT THE HANDLER'S BUSINESS OUTCOME.
+#
+# Classified as ADMITTED vs REFUSED rather than success vs duplicate. The one delivery that
+# wins the race runs the handler body against a SYNTHETIC payload, so what it returns
+# depends on how complete that payload is -- a payment.captured whose notes carry no
+# matching order answers {"status": "ignored", "reason": "order_mismatch"}, which is a
+# correct refusal by the handler and has nothing to do with deduplication. Scoring on
+# `status == "success"` therefore reported a WEBHOOK-DEDUP-01 bug for a run that had
+# deduplicated perfectly: 99 refused, 1 admitted.
+#
+# "Exactly one delivery got past the lock" is the invariant, and it is measured directly.
 duplicates = [r for r in results_100 if r.get("status") == "duplicate"]
+admitted   = [r for r in results_100 if r.get("status") != "duplicate"]
 errors     = [r for r in results_100 if r.get("status") == "error"]
 
 print(f"  100 concurrent deliveries of {EVENT_ID_TARGET}: "
-      f"{len(successes)} success, {len(duplicates)} duplicate, {len(errors)} error")
+      f"{len(admitted)} admitted past the idempotency lock, {len(duplicates)} refused as duplicate")
+for r in admitted:
+    print(f"    admitted outcome: {r}")
+if errors:
+    print(f"  first error: {errors[0].get('detail')!r}")
 
-if len(successes) == 1 and len(duplicates) == 99:
-    record_pass("2.1 Exactly ONE execution processed under 100 concurrent Stripe webhook deliveries (99 duplicates rejected)")
-elif len(successes) + len(duplicates) == 100 and len(successes) == 1:
-    record_pass("2.1 Exactly ONE execution processed under 100 concurrent Stripe webhook deliveries")
+if len(admitted) == 1 and len(duplicates) == 99 and not errors:
+    record_pass(
+        "2.1 Exactly ONE of 100 concurrent Razorpay webhook deliveries was admitted past "
+        "the idempotency lock (99 refused as duplicates, 0 errors)"
+    )
 else:
     record_bug(
         "WEBHOOK-DEDUP-01", "P0",
         "Concurrent webhook deduplication failed",
-        f"{len(successes)} processed", "Exactly 1 success",
-        f"{len(successes)} successes / {len(errors)} errors",
+        f"{len(admitted)} admitted past the lock, {len(errors)} errored",
+        "Exactly 1 admitted, 99 duplicates, 0 errors",
+        f"{len(admitted)} admitted / {len(duplicates)} duplicates / {len(errors)} errors",
         "Multiple entitlement grants on concurrent delivery"
     )
 

@@ -16,11 +16,14 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 import asyncio
+import inspect
 import logging
+import uuid
 import os
 import time
-from decimal import Decimal
-from typing import Optional
+from datetime import datetime, timezone
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -41,9 +44,21 @@ from backend_app.backend.indicators_backend import (adx, atr,
                                                     stochastic, supertrend,
                                                     trix, vortex_indicator,
                                                     williams_r, wma)
+from backend_app.backend.deployment_runtime import (ClosedBar,
+                                                    GraphSignalEvaluator,
+                                                    is_graph_blueprint)
 from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.backend.ml_models import create_ml_block
+# RT-16. Module scope rather than the function-local import this file uses for
+# `generate_execution_id`, because `_SETTLING_STATUSES` is built at import time. Safe:
+# `core.models.execution_record` imports only `core.database` and `core.metrics`, so it
+# does not reach back into `backend/` and there is no cycle.
+from backend_app.core.models.execution_record import (FILL_STATE_ACCEPTED,
+                                                      FILL_STATE_PARTIAL)
 from backend_app.core.risk_manager import RiskVerdict, TradeRequest
+# Imported as a MODULE so `schedule_user_notification` resolves at call time and a test
+# can replace it. See the same note in routers/risk.py.
+from backend_app.core import notification_dispatcher
 from backend_app.backend.strategy_builder import StrategyEngine
 
 logger = logging.getLogger("BotRunner")
@@ -68,8 +83,517 @@ TF_SEC = {
 # Maximum seconds to wait for ML inference before skipping
 ML_INFERENCE_TIMEOUT = float(os.getenv("ML_INFERENCE_TIMEOUT", 2.0))
 
+#: RISK-05. `InstitutionalRiskManager.validate_trade_request`'s flash-crash check (3. in
+#: that method's own numbered comments, `core/risk_manager.py`) compares `current_price`
+#: against the simple average of `TradeRequest.recent_prices` and rejects at
+#: `RiskThresholds.flash_crash_price_deviation_pct` (10%) deviation -- real, enforcing code
+#: that no caller anywhere in this codebase ever populated `recent_prices` for, so the
+#: check could never fire. The same shape of bug RISK-04 found for `current_drawdown_pct`.
+#:
+#: This bot already maintains a per-tick OHLCV circular buffer for its own (symbol,
+#: timeframe) in `self.data_processor` (warmed from history at boot, appended to on every
+#: completed bar -- see `_warm_up_from_history`/`process_live_tick`), so feeding it real
+#: closes costs no new fetch, no new credentials and no new latency: the data already
+#: exists in the process for the strategy's own indicators. 20 completed bars is the
+#: window; at this bot's own timeframe that is 20 minutes on a 1m symbol, 100 minutes on a
+#: 5m one, and so on -- the SMA window scales with how the bot itself ticks, same as every
+#: other indicator this engine computes from `self.data_processor`.
+BLACK_SWAN_SMA_WINDOW_BARS = 20
+
 # Maximum reconnection attempts before giving up
 MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", 5))
+
+
+#: RT-16. Engine result statuses that carry a real, venue-reported quantity. ``completed``
+#: is a confirmed full fill; ``partially_filled`` is a confirmed part fill and is just as
+#: real as exposure. ``accepted`` is deliberately absent -- the venue holds the order and
+#: has filled nothing, so there is nothing to credit yet.
+_SETTLING_STATUSES = frozenset({"completed", FILL_STATE_PARTIAL})
+
+
+def settle_exposure(*, side: str, qty: Decimal, previous_exposure: Decimal, result):
+    """RT-06: the exposure consequence of one ``execute_with_idempotency`` result.
+
+    Returns ``(filled_qty, new_exposure)``. Blocked, failed and ``skipped_*`` outcomes
+    (a dedupe replay, a contention skip, an ambiguous prior submission, a refused live
+    order) executed nothing in this call and leave exposure exactly as it was. This used
+    to treat every status except two as a full fill of ``qty`` and counted a deduplicated
+    ``skipped_completed`` replay a second time.
+
+    RT-16 added ``partially_filled``. The engine used to report any accepted order as
+    ``completed``, so a partial fill never had its own status and this function never
+    needed one; now that it does, treating it as a non-event would under-credit real
+    exposure -- the mirror of the bug being fixed, and equally wrong.
+
+    RT-16 deliberately did NOT touch the ``.get("size", qty)`` fallback, and that is worth
+    recording because it looks like part of the same defect and is not. The phantom
+    exposure came from the STATUS: an accepted-but-unfilled order was reported as
+    ``completed``, so it reached this branch at all. With the status corrected, an
+    accepted order never gets here, and the fallback's remaining job is to handle a
+    genuine ``completed`` result whose quantity is missing.
+    For that case the requested quantity is the SAFE answer, not a guess to be refused.
+    ``previous_exposure`` is the bot's only record of what it holds and it gates position
+    limits: over-stating it makes the bot trade LESS than it could, while under-stating it
+    makes the bot believe it has room it does not have and buy again. Refusing to credit a
+    confirmed fill is the dangerous direction. Pinned by
+    tests/test_rt06_exposure_follows_completed_fills_only.py::
+    test_completed_without_a_reported_size_uses_the_requested_quantity.
+    The fallback is NOT extended to ``partially_filled``: crediting a full requested
+    quantity for a result that says only part of it filled would be self-contradictory,
+    and the engine always reports a quantity on that path.
+    """
+    status = result.get("status") if result else None
+    if status not in _SETTLING_STATUSES:
+        return Decimal("0"), previous_exposure
+
+    trade_result = result.get("result", {}) or {}
+    inner = (trade_result.get("trade_result") or {})
+    if status == FILL_STATE_PARTIAL:
+        raw_size = inner.get("size")
+        if raw_size is None:
+            logger.error(
+                "RT-16: a %r result carried no filled quantity, so there is nothing "
+                "trustworthy to credit -- a partial fill of an unstated amount cannot be "
+                "assumed to be the whole order. Exposure left unchanged at %s.",
+                status, previous_exposure,
+            )
+            return Decimal("0"), previous_exposure
+    else:
+        raw_size = inner.get("size", qty)
+    try:
+        filled_qty = Decimal(str(raw_size))
+    except (InvalidOperation, ValueError, TypeError):
+        logger.error(
+            "RT-16: settle_exposure could not read %r as a filled quantity for a %r "
+            "result. Exposure left unchanged at %s.",
+            raw_size, status, previous_exposure,
+        )
+        return Decimal("0"), previous_exposure
+    if filled_qty <= 0:
+        return Decimal("0"), previous_exposure
+
+    if side == "buy":
+        new_exposure = (previous_exposure + filled_qty).quantize(Decimal("0.00000001"))
+    else:
+        new_exposure = max(Decimal("0"), (previous_exposure - filled_qty).quantize(Decimal("0.00000001")))
+    return filled_qty, new_exposure
+
+
+def telemetry_fee_and_slippage(
+    *,
+    result: Optional[dict],
+    decision_price,
+    filled_qty,
+) -> tuple:
+    """TRADE-13: `(fee, fee_currency, slippage)` for `telemetry.log_execution`'s new fields.
+
+    A pure, synchronous read of the SAME `execute_with_idempotency` result `settle_exposure`
+    above already reads — nothing here calls the exchange, the execution-record repository,
+    or anything on the hot completion path; it only extracts fields `_execute_trade_internal`
+    already computed (`trade_result.fee`, `.fee_currency`, `.executed_price`) so the
+    fire-and-forget telemetry write can carry them.
+
+    `fee` is the venue's own fee, read from the live branch's `actual_fee`
+    (`execution_engine._execute_trade_internal`, itself read off the CCXT fill response).
+
+    `slippage` is `|executed_price - decision_price| x filled_qty` — the same absolute-cost
+    definition `paper_simulator.slippage_amount` already uses for the paper path, applied
+    here to a LIVE fill's own `decision_price` (the price the order was sized and submitted
+    at — `execute_with_idempotency`'s `price` argument) and `executed_price` (the venue's).
+
+    Every return is `None`, never a fabricated `0.0`, when the input needed to compute it is
+    absent or unreadable — a fee or slippage of exactly zero is a claim the venue made, not
+    a default this function is entitled to invent.
+
+    Returns ``(fee, fee_currency, slippage)``.
+    """
+    trade_result = (
+        result.get("result", {}).get("trade_result")
+        if isinstance(result, dict) and isinstance(result.get("result"), dict)
+        else None
+    )
+    if not isinstance(trade_result, dict):
+        return None, None, None
+
+    fee = None
+    try:
+        raw_fee = trade_result.get("fee")
+        fee = float(raw_fee) if raw_fee is not None else None
+    except (TypeError, ValueError):
+        fee = None
+
+    fee_currency = trade_result.get("fee_currency") or None
+
+    slippage = None
+    try:
+        executed_price = trade_result.get("executed_price")
+        if executed_price is not None and decision_price is not None and filled_qty:
+            slippage = abs(float(executed_price) - float(decision_price)) * float(filled_qty)
+    except (TypeError, ValueError):
+        slippage = None
+
+    return fee, fee_currency, slippage
+
+
+def _coerce_authorized_until(raw: Any) -> Optional[datetime]:
+    """Read ``authorized_until`` off a blueprint, whatever shape it arrived in.
+
+    A blueprint built in-process carries a ``datetime``; one rebuilt from a
+    ``strategy_deployments`` row on resume carries whatever PostgREST serialised the
+    ``TIMESTAMPTZ`` to, which is an ISO-8601 string. Both are accepted.
+
+    AN UNPARSEABLE VALUE IS NOT TREATED AS "NO LIMIT". Returning ``None`` for a value that
+    was *present but unreadable* would silently convert a bounded live deployment into an
+    unbounded one -- the exact failure this feature exists to prevent. A naive datetime is
+    read as UTC, matching how every other instant in this codebase is stored, so the
+    comparison in :func:`evaluate_authorization_window` can never raise on a
+    naive/aware mismatch.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo is not None else raw.replace(tzinfo=timezone.utc)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            raise RuntimeError(
+                "authorized_until was present on this deployment's blueprint but could "
+                f"not be read as an instant: {raw!r}. Refusing to start rather than "
+                "treating an unreadable expiry as no expiry, which would let a live "
+                "marketplace deployment outlive the period that paid for it."
+            )
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    raise RuntimeError(
+        "authorized_until was present on this deployment's blueprint with an "
+        f"unsupported type {type(raw).__name__}. Refusing to start rather than treating "
+        "it as no expiry."
+    )
+
+
+#: OBS-01: how often a running bot persists its self-report (plus every phase change).
+RUNTIME_REPORT_INTERVAL_S = 30.0
+
+
+def venue_order_id_of(result: Any) -> Optional[str]:
+    """SIG-VENUE-01: the exchange's order id from an ``execute_with_idempotency`` result,
+    or ``None``. TRADE-12 stores it at ``result["result"]["trade_result"]["order_id"]``."""
+    if not isinstance(result, dict):
+        return None
+    inner = result.get("result")
+    trade = inner.get("trade_result") if isinstance(inner, dict) else None
+    candidate = trade.get("order_id") if isinstance(trade, dict) else None
+    text = str(candidate).strip() if candidate is not None else ""
+    return text or None
+
+
+def _decimal_or_none(value: Any) -> Optional[Decimal]:
+    try:
+        number = Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+    return number if number.is_finite() else None
+
+
+def fill_report_of(
+    result: Any, decision_price: Any, filled_qty: Any, symbol: Any
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """TRACE-FILL-01: ``(average_price, fees, slippage)`` as the execution reported them.
+
+    Found on 2026-11-15: Signal Trace's execution block was written from constants -- the
+    DECISION price as the fill price, an assumed 0.1% fee, ``slippage=0.0005`` and
+    ``latency_ms=10`` on every signal -- so a paper fill at 70.465215 (70.43 plus the
+    simulator's slippage) read as 70.44 with a 0.05% slippage nobody measured.
+
+    * price: ``trade_result.executed_price``; ``None`` when nothing filled.
+    * fee: ``trade_result.fee`` in the quote currency (``core.fee_conversion``): a base-asset
+      fee -- Binance's default on a buy -- is converted at the fill price; any other asset,
+      or an accepted order's placeholder, is ``None``.
+    * slippage: the signed fraction ``(fill - decision) / decision``.
+    """
+    filled = _decimal_or_none(filled_qty)
+    if filled is None or filled <= 0 or not isinstance(result, dict):
+        return None, None, None
+    inner = result.get("result")
+    trade = inner.get("trade_result") if isinstance(inner, dict) else None
+    if not isinstance(trade, dict):
+        return None, None, None
+    executed = _decimal_or_none(trade.get("executed_price"))
+    if executed is not None and executed <= 0:
+        executed = None
+    # LIVE-FEE-01: stated in quote -- a base-asset fee is converted at the fill price.
+    from backend_app.core.fee_conversion import fee_in_quote
+
+    fee = None
+    if trade.get("fill_state") != "accepted":
+        fee = fee_in_quote(
+            trade.get("fee"), trade.get("fee_currency"), symbol, executed,
+            paper=bool(trade.get("paper_ledger")),
+        )
+    decision = _decimal_or_none(decision_price)
+    slippage = None
+    if executed is not None and decision is not None and decision > 0:
+        slippage = float((executed - decision) / decision)
+    return (
+        None if executed is None else float(executed),
+        None if fee is None else float(fee),
+        slippage,
+    )
+
+
+def quote_coin_of(symbol: Any) -> str:
+    """The quote currency of a CCXT symbol: ``BTC/USDC`` -> ``USDC``,
+    ``BTC/USDT:USDT`` -> ``USDT``. ``USDT`` only when the symbol names no quote at all,
+    which is the pre-existing boot behaviour (LIVE-QUOTE-01)."""
+    text = str(symbol or "")
+    if "/" not in text:
+        return "USDT"
+    return text.split("/", 1)[1].split(":", 1)[0].strip().upper() or "USDT"
+
+
+def evaluate_authorization_window(
+    authorized_until: Optional[datetime],
+    *,
+    now: datetime,
+) -> Optional[str]:
+    """MKT-05: refuse an order once a marketplace deployment's paid period has ended.
+
+    Returns ``None`` when the order may proceed, or a refusal reason when it may not --
+    the same contract as :func:`evaluate_deployment_execution_limits`, so the caller
+    treats both identically.
+
+    WHY THIS IS ON THE ORDER PATH AND NOT LEFT TO THE EXPIRY SWEEP
+    ----------------------------------------------------------------
+    ``backend/marketplace/expiry_sweep.py`` already expires Subscriptions and moves the
+    matching ``strategy_deployments`` rows to ``'stopped'`` every 30 seconds. For a PAPER
+    marketplace deployment that is the whole story, because the subscriber deploy path
+    starts no runtime at all. For a LIVE deployment it is not sufficient, for two
+    independent reasons, and both are reasons about somebody's money:
+
+      1. THE SWEEP DOES NOT STOP A RUNTIME. It writes the deployment row directly. A bot
+         running in another process keeps placing real orders against a row that reads
+         ``'stopped'``. ``backend/deployment_state.py``'s own docstring names that class
+         of defect as the reason it exists.
+
+      2. THE SWEEP IS A POLLER. A guarantee about real money must not depend on a worker
+         being alive. This platform has already shipped with worker services absent from
+         production entirely -- OPS-TRAIN-01, where the training worker had no production
+         task definition and queued jobs sat QUEUED forever.
+
+    So the end of the window is enforced HERE, in the same function call chain that
+    constructs the order, on every tick. With the sweep worker dead, a live marketplace
+    deployment still stops trading the moment its period ends.
+
+    ``authorized_until`` IS ``None`` FOR EVERY DEPLOYMENT THAT HAS NO PERIOD
+    -------------------------------------------------------------------------
+    A first-party deployment is entitled by ownership and has no period, so this is a
+    complete no-op for it -- and for every deployment that predates MKT-05. Only a
+    marketplace deployment carries the column, and
+    ``chk_sd_marketplace_live_is_bounded`` (migration 056) makes it impossible for a LIVE
+    marketplace deployment to exist without one. So "``None`` means unbounded" is safe
+    here precisely because the database refuses the one case where it would not be.
+
+    THE COMPARISON IS ``>=``, NOT ``>``
+    -------------------------------------
+    ``marketplace/entitlement_resolver.py`` treats ``now >= period_expiry`` as EXPIRED,
+    and ``tests/property/test_entitlement_expiry_boundary.py`` pins that boundary to the
+    microsecond. Using ``>`` here would admit one order at exactly the expiry instant
+    that the resolver would refuse a new deployment for, which is a disagreement about
+    when a paid period ends. The two must read the same.
+    """
+    if authorized_until is None:
+        return None
+
+    if now >= authorized_until:
+        return (
+            "this deployment's marketplace subscription period ended at "
+            f"{authorized_until.isoformat()} (now {now.isoformat()}), so it is no "
+            "longer authorized to place orders"
+        )
+    return None
+
+
+#: BOT-03. Namespace for the deterministic UUIDs written to ``signals.order_id`` /
+#: ``signals.trade_id`` when no real order UUID is available. Fixed, so a retried trace write
+#: for the same execution produces the same id rather than a second one.
+_SIGNAL_TRACE_NAMESPACE = uuid.UUID("6f1d5a4e-2b3c-4d8e-9f10-5a6b7c8d9e0f")
+
+
+def signal_uuid_for(kind: str, execution_id: Any) -> str:
+    """A UUID for a signal-trace id column, derived deterministically from ``execution_id``.
+
+    BOT-03: ``signals.order_id`` and ``signals.trade_id`` are UUID columns. The bot wrote
+    its execution id (``exec-...``) and ``tr_...`` there, Postgres rejected every update, and
+    the failure was logged at DEBUG - so no bot signal ever recorded its fill, failure, fees or
+    a kill-switch refusal: all of them stayed "accepted" (production, 2026-11-13). A value that
+    already IS a UUID is kept as-is.
+    """
+    text = str(execution_id or "")
+    try:
+        return str(uuid.UUID(text))
+    except (ValueError, AttributeError, TypeError):
+        return str(uuid.uuid5(_SIGNAL_TRACE_NAMESPACE, f"{kind}:{text}"))
+
+
+def signal_order_uuid(execution_id: Any, result: Any) -> str:
+    """The order id for a signal trace: the venue/ledger order UUID when the result carries one.
+
+    The paper ledger returns the ``paper_orders`` row id, so using it links the trace to the
+    order the paper account actually recorded. Anything else falls back to
+    :func:`signal_uuid_for`.
+    """
+    candidate = result.get("order_id") if isinstance(result, dict) else getattr(result, "order_id", None)
+    if candidate:
+        try:
+            return str(uuid.UUID(str(candidate)))
+        except (ValueError, AttributeError, TypeError):
+            pass
+    return signal_uuid_for("order", execution_id)
+
+
+def clamp_paper_entry_to_plan_limit(
+    qty: Decimal, price: Decimal, max_trade: Optional[float]
+) -> Tuple[Optional[Decimal], Optional[str]]:
+    """PAPER-20: shrink a paper ENTRY to the plan's per-trade notional limit.
+
+    Returns ``(qty, note)``. ``note`` is ``None`` when nothing changed. ``qty`` is
+    ``None`` when the limit leaves nothing to trade at this precision.
+
+    Why: a paper bot sizes from the paper account (~$100k by default), so a 10%-of-equity
+    strategy asks for ~$10k a trade, and the Free plan's $1,000 ``max_trade`` rejected every
+    entry after the first - production deployment 6547c7b2 made one round trip and then 19
+    rejected BUYs. The owner chose (2026-11-12) to have paper entries REDUCED to the plan
+    limit instead, and the signal records that it was. Paper only: a live order above the
+    limit is still refused by the risk engine, unchanged. Rounded DOWN at the precision the
+    strategy already sized at, so the result can never exceed the limit.
+    """
+    if max_trade is None or price <= 0 or qty <= 0:
+        return qty, None
+    limit = Decimal(str(max_trade))
+    if qty * price <= limit:
+        return qty, None
+    exponent = qty.normalize().as_tuple().exponent
+    step = Decimal(1).scaleb(min(int(exponent), 0)) if isinstance(exponent, int) else Decimal("0.000001")
+    clamped = (limit / price).quantize(step, rounding=ROUND_DOWN)
+    if clamped <= 0:
+        return None, (
+            f"paper entry of {qty} at {price} is above the plan's ${limit:,} per-trade limit "
+            f"and nothing remains at this precision once reduced"
+        )
+    return clamped, (
+        f"paper entry reduced from {qty} to {clamped} to fit the plan's ${limit:,} "
+        f"per-trade limit"
+    )
+
+
+def evaluate_deployment_execution_limits(
+    execution_config: Dict[str, Any],
+    *,
+    side: str,
+    qty: Decimal,
+    price: Decimal,
+    current_exposure: Decimal,
+    is_reduce_only: bool,
+) -> Optional[str]:
+    """DEPLOY-01: the per-deployment limits ``execution_config`` actually carries, consulted
+    at order-construction time, immediately before a signal becomes a submitted order.
+
+    Returns ``None`` when the order may proceed, or a human-readable refusal reason when it
+    may not -- the same shape the risk manager's own trade-request check returns, so the
+    caller (``BotRunner._inner_loop``) ``continue``s on either exactly as it already does
+    for a non-``APPROVED`` risk verdict.
+
+    WHAT THIS ENFORCES, AND WHY ONLY THESE TWO
+    -------------------------------------------
+    ``deployment_binding.ENFORCED_EXECUTION_CONFIG_FIELDS`` names exactly the two fields
+    this function reads: ``max_order_notional`` and ``max_open_positions``. The other three
+    published fields (``slippage_tolerance_bps``, ``order_timeout_seconds``,
+    ``retry_policy``) have no corresponding mechanism on this platform's order path
+    (``ExecutionEngine.execute_with_idempotency`` is a market-only, synchronous submit with
+    no slippage-tolerance check, no per-order timeout and no retry policy to hand a value
+    to), so ``deployment_binding.normalise_execution_config`` continues to refuse them at
+    deploy time rather than silently storing a limit nothing would apply.
+
+    EMPTY ``execution_config`` IS A COMPLETE NO-OP
+    -----------------------------------------------
+    Every ``if ... is not None`` below is a no-op for an absent key, so a deployment that
+    never set ``execution_config`` (the overwhelming majority, and every deployment that
+    predates DEPLOY-01) is evaluated identically to before this function existed -- it
+    always returns ``None`` for such a deployment and nothing it does changes.
+
+    ``max_order_notional`` -- REFUSE, NOT CLAMP
+    --------------------------------------------
+    Matches ``ExecutionGuard._validate_order_size``'s own disposition for the identical
+    situation (an order whose notional exceeds a configured ceiling): BLOCK the order
+    entirely rather than silently resize it to fit. Silently clamping would execute a
+    DIFFERENT, smaller order than the strategy's signal asked for, with no record that a
+    substitution happened -- the same "approximation nobody asked for" this platform avoids
+    everywhere else (``deployment_runtime``'s own module docstring states the identical
+    rule for sizing: "a size that cannot be computed is not replaced by a default").
+
+    Skipped for a reduce-only signal (``is_reduce_only``): a position-reducing order is not
+    the risk this cap exists to bound, the same reasoning
+    ``ExecutionGuard.validate_trade``'s ``reduce_only`` skip and
+    ``routers/orders.py``'s cancel/close-all endpoints already apply to their own
+    capital-dependent checks.
+
+    ``max_open_positions`` -- THE DEPLOYMENT'S OWN POSITION COUNT, NOT THE ACCOUNT'S
+    -----------------------------------------------------------------------------------
+    One ``BotRunner`` is one ``(user, symbol, strategy)`` and
+    ``deployment_binding.resolve_binding_market`` refuses a version whose plan reads more
+    than one market (``MARKET_AMBIGUOUS``), so a single deployment can hold AT MOST ONE net
+    position -- ``current_exposure > 0`` (holding) or not (flat). ``max_open_positions`` is
+    therefore evaluated against that 0-or-1 count, not against the user's whole account
+    (which ``paper_trading_service.place_order`` already caps separately, from
+    ``risk_settings.max_positions`` -- a different, pre-existing, account-wide limit this
+    function does not duplicate or override).
+
+    That makes this cap a genuine but NARROW lever given the current architecture: at
+    ``max_open_positions=0`` it refuses the deployment's only possible entry (effectively
+    "this deployment may observe but never open a position"); at any value >= 1 it can
+    never refuse an opening order, because the deployment can never hold more than one
+    position to begin with. This is stated plainly rather than oversold: the field is
+    genuinely consulted, and the value it is checked against is accurate for THIS
+    deployment, but a deployment that wants a cap that binds above zero needs a
+    multi-position execution model this codebase does not have yet.
+    """
+    if is_reduce_only:
+        return None
+
+    max_notional = execution_config.get("max_order_notional")
+    if max_notional is not None:
+        try:
+            cap = Decimal(str(max_notional))
+            notional = Decimal(str(qty)) * Decimal(str(price))
+        except (InvalidOperation, TypeError, ValueError):
+            cap = None
+            notional = None
+        if cap is not None and notional is not None and cap > 0 and notional > cap:
+            return (
+                f"max_order_notional exceeded: order notional {notional} > "
+                f"deployment cap {cap} (execution_config.max_order_notional)"
+            )
+
+    max_positions = execution_config.get("max_open_positions")
+    if max_positions is not None and str(side).lower().strip() in ("buy", "long"):
+        try:
+            cap_positions = int(max_positions)
+        except (TypeError, ValueError):
+            cap_positions = None
+        if cap_positions is not None:
+            currently_open = 1 if Decimal(str(current_exposure)) > 0 else 0
+            # Opening the deployment's one possible position: flat now, about to buy.
+            if currently_open == 0 and currently_open >= cap_positions:
+                return (
+                    f"max_open_positions exceeded: this deployment already holds "
+                    f"{currently_open} open position(s) >= cap {cap_positions} "
+                    f"(execution_config.max_open_positions)"
+                )
+
+    return None
 
 
 class BotRunner:
@@ -87,10 +611,21 @@ class BotRunner:
         global_state,
         *,
         paper_trading: bool,
+        public_market_data_factory=None,
     ):
         self.user_id = user_id
         self.symbol = symbol
         self.blueprint = strategy_blueprint
+
+        # RT-01: how a PAPER bot obtains market data. ``None`` = the venue's public, keyless
+        # ccxt endpoints. Tests inject a fake. It is NEVER the DEV_MODE mock: that streams a
+        # constant 50,000 for every symbol.
+        self._public_market_data_factory = public_market_data_factory
+        # RT-01/RT-08: why the runtime stopped, for the fleet to write to the deployment row.
+        self.exit_reason: Optional[str] = None
+        # RT-08: set by the fleet from the deployment row. A paused bot keeps consuming market
+        # data (so indicators stay current) but opens no new orders.
+        self.paused: bool = False
 
         # ── THE MODE. REQUIRED, KEYWORD-ONLY, AND NOT READ FROM THE BLUEPRINT ──
         #
@@ -140,6 +675,32 @@ class BotRunner:
         if not self.exchange_id:
             raise ValueError("exchange_id must be provided in strategy blueprint")
 
+        # DEPLOY-01: this deployment's own execution_config, threaded in by
+        # `deployment_runtime.build_runtime_blueprint` from the binding
+        # (`deployment_binding.normalise_execution_config`'s output). Absent on every
+        # blueprint built before DEPLOY-01 and on a legacy (non-DeploymentBinding) deploy,
+        # in which case this is `{}` and `evaluate_deployment_execution_limits` is a
+        # complete no-op -- no regression to the pre-existing behaviour.
+        raw_execution_config = strategy_blueprint.get("execution_config")
+        self.execution_config: Dict[str, Any] = (
+            dict(raw_execution_config) if isinstance(raw_execution_config, dict) else {}
+        )
+
+        # MKT-05: the instant this deployment's marketplace subscription period ends,
+        # threaded in by `deployment_runtime.build_runtime_blueprint` from
+        # `strategy_deployments.authorized_until`. `None` for a first-party deployment,
+        # which is entitled by ownership and has no period, and for every blueprint built
+        # before MKT-05 -- in which case `evaluate_authorization_window` is a complete
+        # no-op. See that function's docstring for why the window is enforced here, on the
+        # order path, rather than left to the 30-second expiry sweep.
+        self.authorized_until: Optional[datetime] = _coerce_authorized_until(
+            strategy_blueprint.get("authorized_until")
+        )
+        #: Latch so the durable stop is requested ONCE rather than on every tick after
+        #: expiry. The order refusal itself is unconditional and re-evaluated every tick;
+        #: only the stop request is latched.
+        self._authorization_stop_requested = False
+
         # ── ML block ─────────────────────────────────────────────────────
         self.ml_model_path = strategy_blueprint.get("ml_model_path")
         self.ml_block = create_ml_block(self.ml_model_path)
@@ -157,12 +718,60 @@ class BotRunner:
         # ── Strategy evaluation engine ───────────────────────────────────
         self.strategy_engine = StrategyEngine(self.risk_manager, self.telemetry)
 
+        # RT-02/RT-05: a deployment of a builder-saved strategy is evaluated by the canonical
+        # DAG runtime (DAGEngine.execute_plan), not by the legacy buy_logic/sell_logic engine.
+        # Constructed here so an uncompilable graph fails the START, not the first tick.
+        self.graph_eval: Optional[GraphSignalEvaluator] = (
+            GraphSignalEvaluator(strategy_blueprint)
+            if is_graph_blueprint(strategy_blueprint)
+            else None
+        )
+
         # ── Exposure tracking (coins held) ───────────────────────────────
         self.recovered_exposure_coins = Decimal("0")
+
+        # RT-21: the last ticked price, for close_position() -- which runs from the
+        # fleet's heartbeat task, not from inside _inner_loop, so it has no local `price`
+        # of its own. `None` until the first tick; close_position refuses rather than
+        # invent one.
+        self._last_price: Optional[float] = None
 
     # ══════════════════════════════════════════════════════════════════════
     #  BOOT SEQUENCE
     # ══════════════════════════════════════════════════════════════════════
+
+    async def _seed_paper_engine_from_ledger(self, paper_ledger) -> None:
+        """PAPER-20: start a paper bot from the paper account it will trade, not $10,000.
+
+        The engine was built on a synthetic ``{"total_equity": 10000.0}`` and only became a
+        copy of the stored account after its FIRST fill (``_reconcile_from_paper_ledger``),
+        so the first trade was sized from $10k and every later one from the real balance
+        (~$100k) - a bot that changed behaviour after one round trip. Reconciling at boot
+        makes every trade, the first included, sized from the same stored figures. A read
+        failure keeps the synthetic balance and says so; it does not stop the bot.
+        """
+        try:
+            snapshot = await asyncio.to_thread(paper_ledger.snapshot, self.symbol)
+            self.execution_engine._reconcile_from_paper_ledger(snapshot)
+            # PAPER-EXP-01: the exposure every risk check reads. The paper branch of
+            # `_recover_live_state` returned without setting it, so it stayed at 0 after
+            # every restart: the $5,000 free-plan cap was judged against 0, the bot bought
+            # another full cap, and the QA account reached 1,122 SOL (~$80,000) across
+            # deploys. Seeded from the ledger's open long, the same figure the reduce-only
+            # guard reads.
+            held = await asyncio.to_thread(
+                paper_ledger.open_long_size, paper_ledger.ledger_symbol(self.symbol)
+            )
+            self.recovered_exposure_coins = max(Decimal("0"), Decimal(str(held)))
+            logger.info(
+                f"[PAPER] Bot {self.user_id}/{self.symbol} starts from the paper account: "
+                f"cash {snapshot.cash}, open long {self.recovered_exposure_coins}"
+            )
+        except Exception as exc:  # noqa: BLE001 - reported, and the bot still runs
+            logger.warning(
+                f"[PAPER] Bot {self.user_id}/{self.symbol}: could not read the paper account "
+                f"at start ({exc}); sizing from the synthetic balance until the first fill."
+            )
 
     async def _recover_live_state(self):
         """
@@ -183,22 +792,54 @@ class BotRunner:
         # the constructor for what reading it from the blueprint did.
         is_paper = self.paper_trading
 
-        # FIX 2: Paper trading fast-path — skip ALL real CCXT calls.
-        # Real exchange I/O can take 30-270s and kills the Gunicorn worker.
+        if self.ccxt_bridge is not None:   # a reconnect: release the old client first
+            try:
+                await self.ccxt_bridge.disconnect()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"previous market-data client did not close cleanly: {exc}")
+
+        # PAPER bots hold NO credentials and place NO real orders, but they need REAL market
+        # data: a paper result computed on invented prices is worse than no result.
+        #
+        # RT-01. This branch used to build a ``ConnectionEngine`` with no keys, call
+        # ``_apply_mock_interface()`` -- a no-op, because ``exchange`` is None until
+        # ``connect()`` -- and hand ``DataEngine(None)`` to the loop, which died on its first
+        # attribute read, retried five times and exited "cleanly" while the deployment row still
+        # said ``running``. Even with a client the mock streams a constant 50,000 for every
+        # symbol. It now connects KEYLESSLY to the venue's public market data, with the DEV_MODE
+        # mock disabled, so a failure to reach the venue is a failed start the fleet records
+        # rather than fabricated prices.
         if is_paper:
             logger.info(
-                f"[PAPER] Bot {self.user_id}/{self.symbol}: skipping real exchange "
-                f"connection (paper_trading=True). Using mock interface."
+                f"[PAPER] Bot {self.user_id}/{self.symbol}: connecting to PUBLIC market data "
+                f"on {self.exchange_id} (no credentials; no real orders)."
             )
-            self.ccxt_bridge = ConnectionEngine(
-                self.exchange_id,
-                api_key=None,
-                secret_key=None,
-            )
-            # Inject mock interface directly — avoids network call
-            self.ccxt_bridge._apply_mock_interface()
-            self.exchange = self.ccxt_bridge.exchange
+            self.ccxt_bridge, self.exchange = await self._connect_public_market_data()
             self.data_engine = DataEngine(self.exchange)
+
+            # ── PAPER-01: THE CANONICAL PAPER LEDGER ──────────────────────
+            # This module used to have NO import edge to `backend_app/backend/paper/`
+            # at all, so a bot's paper fills were simulated inside `ExecutionEngine`
+            # against the synthetic balance below and written to no `paper_*` table.
+            # A trader who deployed in paper mode got real simulated executions that
+            # `GET /api/paper/account`, `/positions`, `/orders`, `/trades` and
+            # `/summary` -- and therefore `PaperTrading.jsx` -- did not show, and that
+            # did not survive a restart.
+            #
+            # The ledger routes each fill through `PaperTradingService.place_order`,
+            # which is the same canonical path `POST /api/paper/orders` uses: the
+            # arithmetic is `paper/paper_accounting`, the writes are
+            # `paper/paper_repository`, and the DEFAULT account needs no `session_id`
+            # -- which is what makes it usable here, since a BotRunner bot has no
+            # Paper_Session. Migration 013 relaxed `session_id` on the seven child
+            # tables for exactly this case.
+            #
+            # The engine's in-process cash and positions become a COPY of the stored
+            # rows (`ExecutionEngine._reconcile_from_paper_ledger`), so there is one
+            # answer to "what is my cash" rather than two.
+            from backend_app.backend.paper.bot_paper_ledger import BotPaperLedger
+
+            paper_ledger = BotPaperLedger(self.user_id)
 
             # Use synthetic paper balance
             portfolio_state = {"total_equity": 10000.0}
@@ -208,6 +849,10 @@ class BotRunner:
                 risk_manager=self.risk_manager,
                 portfolio_state=portfolio_state,
                 exchange_executor=None,
+                # PAPER-01. Present only on the paper branch: a LIVE engine must never
+                # hold one, and `tests/test_paper01_botrunner_fills_reach_the_ledger_postgres.py`
+                # asserts the live construction below passes none.
+                paper_ledger=paper_ledger,
                 # PAPER, stated rather than implied by the `exchange_executor=None`
                 # above. That null used to be the only thing keeping this engine's
                 # orders off a real exchange; the engine now refuses the live branch
@@ -217,16 +862,48 @@ class BotRunner:
                 # tests/test_execution_engine_mode_matches_its_branch.py
                 execution_environment=ExecutionEnvironment.PAPER,
             )
+            await self._seed_paper_engine_from_ledger(paper_ledger)
+            await self._warm_up_from_history()
             logger.info(f"[PAPER] Bot {self.user_id}/{self.symbol} ready (paper mode).")
             return
 
         # LIVE path — real keys, real exchange, real OHLCV warmup
         keys = self.vault.load_decrypted_keys(self.user_id, self.exchange_id)
+
+        # EXCH-STATE-02: a live bot opens real orders, so it starts only on a key whose
+        # RECORDED verdict permits that -- verified by the venue, not read-only, not able
+        # to withdraw. Checked before anything connects, so a refused key is never used.
+        from backend_app.backend.api_key_vault import (
+            CredentialNotTradeable,
+            credential_trade_block_reason,
+        )
+        block_reason = credential_trade_block_reason(keys)
+        if block_reason:
+            raise CredentialNotTradeable(
+                f"Refusing to start live bot {self.user_id}/{self.symbol} on "
+                f"{self.exchange_id}: {block_reason}."
+            )
+
+        # EXCH-STATE-02: the ENVIRONMENT is the stored key's (EXCH-06 `sandbox`), not a
+        # blueprint flag -- a key belongs to exactly one environment, and dialling the
+        # other one with it either fails or, worse, routes a testnet strategy to live.
+        # A blueprint that names an environment different from its key is refused.
+        key_sandbox = bool(keys.get("sandbox"))
+        blueprint_testnet = self.blueprint.get("testnet")
+        if blueprint_testnet is not None and bool(blueprint_testnet) != key_sandbox:
+            raise CredentialNotTradeable(
+                f"Refusing to start live bot {self.user_id}/{self.symbol}: the strategy asks "
+                f"for {'testnet' if blueprint_testnet else 'live'} but the stored "
+                f"{self.exchange_id} key is a {'testnet' if key_sandbox else 'live'} key."
+            )
+        self._key_sandbox = key_sandbox
+
         self.ccxt_bridge = ConnectionEngine(
             self.exchange_id,
             api_key=keys["api_key"],
             secret_key=keys["secret_key"],
             password=keys.get("password"),
+            testnet=key_sandbox,
         )
         self.exchange = await self.ccxt_bridge.connect()
         self.data_engine = DataEngine(self.exchange)
@@ -236,33 +913,71 @@ class BotRunner:
             self.ml_block.load_model_to_memory(self.ml_model_path)
 
         # 3. Recover live balance for position sizing
-        if self.ccxt_bridge.api_key:
-            wallet = await self.data_engine.fetch_wallet_balance_snapshot()
-        else:
-            wallet = {"USDT": {"total": 10000.0}}
-            
+        #
+        # RT-07: a live bot is sized from the account's MEASURED quote balance. There is
+        # no substitute figure: this used to fall back to 10,000 when the wallet showed
+        # a zero (or no) quote balance, and to a fabricated {"USDT": 10000} wallet when
+        # no API key was present, and that number became the engine's `total_equity` -
+        # i.e. the capital ceiling real orders are checked against.
+        if not self.ccxt_bridge.api_key:
+            raise RuntimeError(
+                f"Refusing to start live bot {self.user_id}/{self.symbol}: no exchange API "
+                "key is available, so the account balance cannot be measured."
+            )
+        wallet = await self.data_engine.fetch_wallet_balance_snapshot()
+
         base_coin = self.symbol.split("/")[0]
-        quote_coin = self.symbol.split("/")[1] if "/" in self.symbol else "USDT"
-        
-        self.recovered_exposure_coins = Decimal(
-            str(wallet.get(base_coin, {}).get("total", 0.0))
+        quote_coin = quote_coin_of(self.symbol)
+
+        # POS-01: the bot's position is what THIS deployment bought and sold, never the
+        # account's whole holding of the base coin. Seeding it from the wallet total made
+        # coins the user already owned count as the bot's exposure (every buy refused as
+        # "over max exposure" on a funded account) and, worse, made an exit signal close
+        # "the whole position" - selling the user's own coins the bot never bought. Rebuilt
+        # from this deployment's executed fills and capped at what the wallet holds.
+        wallet_base = Decimal(str((wallet.get(base_coin) or {}).get("total", 0.0)))
+        own_position, position_source = await self._own_position_from_fills()
+        self.recovered_exposure_coins = max(Decimal("0"), min(own_position, wallet_base))
+        self._runtime_report(
+            position_base=float(self.recovered_exposure_coins),
+            position_source=position_source,
+            wallet_base_total=float(wallet_base),
         )
-        
-        quote_balance = Decimal(str(wallet.get(quote_coin, {}).get("total", 10000.0)))
-        if quote_balance == 0:
-            quote_balance = Decimal("10000.0")
-            
+
+        quote_balance = Decimal(str((wallet.get(quote_coin) or {}).get("total", 0)))
+        if quote_balance <= 0:
+            raise RuntimeError(
+                f"Refusing to start live bot {self.user_id}/{self.symbol}: the measured "
+                f"{quote_coin} balance is {quote_balance}, not a positive amount."
+            )
+
         portfolio_state = {"total_equity": float(quote_balance)}
 
         # LIVE: Initialize real ExchangeExecutor
+        #
+        # `user_id` IS THE POINT OF THIS CALL, NOT DECORATION. `get_exchange_executor`
+        # memoises executors in a process-global dict, and its key used to be
+        # `f"{exchange_id}:{sandbox}"` — which does not mention the account. The keys
+        # three lines below were just decrypted out of the vault for THIS user, so in a
+        # worker that had already started a binance bot for somebody else, this call
+        # returned THAT trader's executor and every order this strategy produced would
+        # have been signed with their credentials and filled against their balance.
+        # Regression: tests/test_exchange_executor_cache_is_per_tenant.py
         from backend_app.backend.exchange_executor import get_exchange_executor
         exchange_exec = get_exchange_executor(
             exchange_id=self.exchange_id,
             api_key=keys["api_key"],
             api_secret=keys["secret_key"],
-            sandbox=self.blueprint.get("testnet", False),
-            password=keys.get("password")
+            sandbox=key_sandbox,
+            password=keys.get("password"),
+            user_id=self.user_id,
         )
+        # CONN-02: connect - and on a testnet, prove the sandbox endpoint - NOW, so a bad
+        # key or a failed verification stops the deploy at boot rather than surfacing as a
+        # refused or failed first order.
+        ensure_connected = getattr(exchange_exec, "_ensure_connected", None)
+        if ensure_connected is not None:
+            await ensure_connected()
 
         # ═══════════════════════════════════════════════════════════════════
         # CRITICAL FIX C2: Use unified ExecutionEngine instead of deprecated OrderEngine
@@ -281,17 +996,251 @@ class BotRunner:
             execution_environment=ExecutionEnvironment.LIVE,
         )
 
-        # 4. Warm up the Numba circular buffer with historical OHLCV
-        ohlcv = await self.data_engine.fetch_historical_ohlcv(
-            self.symbol, timeframe=self.blueprint.get("timeframe", "1m"), limit=1_000
-
-        )
-        self.data_processor.warm_up_history(self.symbol, self.timeframe_sec, ohlcv)
+        # 4. Warm up the Numba circular buffer (and the DAG window) with historical OHLCV
+        await self._warm_up_from_history()
 
         logger.info(
             f"Bot ready — {self.symbol} on {self.exchange_id}. "
             f"Exposure: {self.recovered_exposure_coins} {base_coin}"
         )
+
+    async def _connect_public_market_data(self):
+        """``(bridge, exchange)`` for the venue's PUBLIC data. Never carries credentials."""
+        if self._public_market_data_factory is not None:
+            return await self._public_market_data_factory(self.exchange_id)
+        from backend_app.backend.connection_engine import ConnectionEngine
+
+        bridge = ConnectionEngine(self.exchange_id, api_key=None, secret_key=None)
+        exchange = await bridge.connect(allow_mock=False)
+        return bridge, exchange
+
+    def _runtime_report(self, *, force: bool = False, **fields: Any) -> None:
+        """OBS-01: update this bot's self-report and, at most every
+        ``RUNTIME_REPORT_INTERVAL_S`` (or on a phase change / ``force``), persist it to the
+        deployment row's ``runtime_status``. Never raises and never blocks the tick."""
+        try:
+            rt = self.__dict__.setdefault("_runtime_status", {})
+            phase_changed = "phase" in fields and fields["phase"] != rt.get("phase")
+            rt.update(fields)
+            now = time.time()
+            last = self.__dict__.get("_runtime_flushed_at", 0.0)
+            if not (force or phase_changed or now - last >= RUNTIME_REPORT_INTERVAL_S):
+                return
+            deployment_id = (self.blueprint or {}).get("deployment_id")
+            if not deployment_id:
+                return
+            self._runtime_flushed_at = now
+            rt["updated_at"] = datetime.now(timezone.utc).isoformat()
+            evaluator = getattr(self, "graph_eval", None)
+            if evaluator is not None:
+                rt["refusals"] = dict(getattr(evaluator, "refusals", None) or {})
+            asyncio.get_running_loop().create_task(
+                self._write_runtime_status(str(deployment_id), dict(rt))
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must never affect trading
+            pass
+
+    async def _write_runtime_status(self, deployment_id: str, snapshot: Dict[str, Any]) -> None:
+        try:
+            from backend_app.backend.deployment_state import DeploymentStateStore
+
+            await DeploymentStateStore().write_runtime_status(deployment_id, snapshot)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"runtime status for {deployment_id} not written: {exc}")
+
+    async def _own_position_from_fills(self) -> Tuple[Decimal, str]:
+        """POS-01: this deployment's net filled base quantity, from its executed signals.
+
+        ``(position, source)``. A deployment with no id, or whose fills cannot be read,
+        starts FLAT: a bot that under-counts its position can at worst buy again within
+        its limits, while one that over-counts sells coins it never bought.
+        """
+        deployment_id = (self.blueprint or {}).get("deployment_id")
+        if not deployment_id:
+            return Decimal("0"), "no_deployment_id_flat"
+        try:
+            from backend_app.core.dependencies import get_service_supabase
+
+            sb = get_service_supabase()
+            q = (
+                sb.table("signals")
+                .select("decision, filled")
+                .eq("deployment_id", str(deployment_id))
+                .gt("filled", 0)
+                .execute()
+            )
+            res = await q if inspect.isawaitable(q) else q
+            rows = list(getattr(res, "data", None) or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"Bot {self.user_id}/{self.symbol}: own fills unreadable ({exc}); "
+                "starting flat rather than adopting the wallet's holdings."
+            )
+            return Decimal("0"), "fills_unreadable_flat"
+        net = Decimal("0")
+        for row in rows:
+            qty = Decimal(str(row.get("filled") or 0))
+            if str(row.get("decision") or "").upper() == "BUY":
+                net += qty
+            else:  # SELL and CLOSE both reduce the position
+                net -= qty
+        return net, f"own_fills:{len(rows)}"
+
+    def _watchdog_idle_seconds(self) -> float:
+        """How long the tick stream may stay silent before the watchdog checks the clock:
+        a quarter of a bar, between 5 s and 30 s."""
+        tf = float(getattr(self, "timeframe_sec", 60) or 60)
+        return max(5.0, min(tf / 4.0, 30.0))
+
+    async def _ticks_with_watchdog(self):
+        """STREAM-01: the live trade stream, plus a synthetic tick whenever a bar boundary
+        passes with no trade.
+
+        Candles are built from trades (``process_live_tick``), so on a market nobody is
+        trading - an exchange TESTNET's USDC pairs, or a thin real pair overnight - or on a
+        websocket that stalls without raising, no candle ever closed and the strategy was
+        never evaluated. The bot stayed "running", silently, forever: during the live
+        testnet run a BTC/USDC bot reported ``ticks: 0`` from boot. The watchdog keeps the
+        stream's pending read alive (it is never cancelled, so no trade is lost) and, when
+        the stream has been silent past a bar boundary, reads the venue's last price over
+        REST and yields it as a zero-volume tick at the current time - which closes the
+        bar through the same path a real trade would. A bar with no trades is flat at the
+        last traded price, which is what this produces.
+        """
+        stream = self.data_engine.stream_live_ticks(self.symbol).__aiter__()
+        pending = None
+        try:
+            while True:
+                if pending is None:
+                    pending = asyncio.ensure_future(stream.__anext__())
+                done, _ = await asyncio.wait({pending}, timeout=self._watchdog_idle_seconds())
+                if pending in done:
+                    try:
+                        item = pending.result()
+                    except StopAsyncIteration:
+                        return
+                    finally:
+                        pending = None
+                    yield item
+                    continue
+                synthetic = await self._synthetic_tick_if_bar_due()
+                if synthetic is not None:
+                    yield synthetic
+        finally:
+            if pending is not None and not pending.done():
+                pending.cancel()
+
+    async def _synthetic_tick_if_bar_due(self) -> Optional[Dict[str, Any]]:
+        """A zero-volume tick at the venue's last price when a bar boundary has passed
+        since the last tick, else ``None``. Reports the silence either way."""
+        now_ms = int(time.time() * 1000)
+        tf_ms = int(float(getattr(self, "timeframe_sec", 60) or 60) * 1000)
+        last_ms = self.__dict__.get("_last_tick_ms")
+        if last_ms is None:
+            last_ms = self.__dict__.setdefault("_watchdog_started_ms", now_ms)
+        idle_s = round((now_ms - int(last_ms)) / 1000.0, 1)
+        boundary_passed = now_ms // tf_ms > int(last_ms) // tf_ms
+        grace_ms = min(2_000, tf_ms // 10)  # let a trade straddling the boundary arrive first
+        if not boundary_passed or now_ms % tf_ms < grace_ms:
+            self._runtime_report(seconds_since_last_tick=idle_s)
+            return None
+        try:
+            ticker = await self.data_engine.exchange.fetch_ticker(self.symbol)
+            price = float((ticker or {}).get("last") or (ticker or {}).get("close") or 0.0)
+        except Exception as exc:  # noqa: BLE001 - a failed poll is reported, not fatal
+            self._runtime_report(
+                phase="no_market_data",
+                seconds_since_last_tick=idle_s,
+                last_error=f"REST price poll: {type(exc).__name__}: {str(exc)[:200]}",
+                last_error_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return None
+        if price <= 0:
+            self._runtime_report(phase="no_market_data", seconds_since_last_tick=idle_s)
+            return None
+        rt = self.__dict__.get("_runtime_status", {})
+        self._runtime_report(
+            phase="streaming_quiet_market",
+            seconds_since_last_tick=idle_s,
+            synthetic_ticks=int(rt.get("synthetic_ticks", 0)) + 1,
+        )
+        return {"timestamp": now_ms, "price": price, "amount": 0.0, "synthetic": True}
+
+    def _on_stream_error(self, stream_name: str, error: Exception) -> None:
+        self._runtime_report(
+            phase="stream_error",
+            last_error=f"{stream_name}: {type(error).__name__}: {str(error)[:300]}",
+            last_error_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    async def _record_refused_signal(
+        self, order_payload: Dict[str, Any], reason: str, *, price: float, volume: float,
+        timestamp_ms: int, live_state: Dict[str, Any], capital: float,
+    ) -> None:
+        """SIG-REFUSE-01: record a signal this bot generated and then REFUSED before the risk
+        engine, as a rejected signal in Signal Trace.
+
+        Refusals ahead of the risk engine (the deployment's own execution limits) used to be
+        a log line and a ``continue``: no signal row, no audit entry, nothing in the UI. A
+        live bot refusing every signal correctly was indistinguishable from a dead one.
+        Best-effort: a recording failure is logged and never affects trading.
+        """
+        try:
+            from backend_app.backend.signal_service import get_signal_service
+
+            sig_svc = await get_signal_service()
+            server_user = {"id": self.user_id, "_server_side": True}
+            sig = await sig_svc.create_signal(
+                user=server_user,
+                strategy_id=str(self.blueprint.get("id") or self.blueprint.get("strategy_id", "default")),
+                strategy_version=str(self.blueprint.get("current_version", "1.0")),
+                deployment_id=str(self.blueprint.get("deployment_id", self.blueprint.get("id", "default"))),
+                exchange_id=self.exchange_id,
+                symbol=self.symbol,
+                timeframe=str(self.blueprint.get("timeframe", "1m")),
+                worker_id=f"worker_{self.user_id}_{self.symbol.replace('/', '_')}",
+                decision=str(order_payload.get("side", "BUY")).upper(),
+                indicators=live_state,
+                market_info={"price": price, "volume": volume, "timestamp": timestamp_ms},
+                environment="PAPER" if self.paper_trading else None,
+            )
+            sig_id = (sig or {}).get("id")
+            if not sig_id:
+                return
+            await sig_svc.update_risk_decision(
+                user=server_user,
+                signal_id=sig_id,
+                risk_passed=False,
+                risk_reason=reason,
+                position_size=float(order_payload.get("qty") or 0.0),
+                capital=capital,
+                exposure=float(self.recovered_exposure_coins * Decimal(str(price))),
+            )
+        except Exception as exc:  # noqa: BLE001 - recording must never stop trading
+            logger.warning(
+                f"Bot {self.user_id}/{self.symbol}: could not record a refused signal: {exc}"
+            )
+
+    async def _warm_up_from_history(self) -> None:
+        """Fill the Numba buffer and the DAG window from CLOSED historical bars.
+
+        The newest row an exchange returns is usually the still-FORMING candle. Treating it as
+        closed would hand every indicator a partial bar and lose that bar's real close, so it is
+        dropped when its period has not ended.
+        """
+        timeframe = self.blueprint.get("timeframe", "1m")
+        ohlcv = await self.data_engine.fetch_historical_ohlcv(
+            self.symbol, timeframe=timeframe, limit=1_000
+        )
+        now_ms = int(time.time() * 1000)
+        tf_ms = self.timeframe_sec * 1000
+        closed = [row for row in (ohlcv or []) if int(row[0]) + tf_ms <= now_ms]
+        self.data_processor.warm_up_history(self.symbol, self.timeframe_sec, closed)
+        if self.graph_eval is not None and closed:
+            admitted = self.graph_eval.warm_up([ClosedBar.from_ohlcv_row(r) for r in closed])
+            logger.info(
+                f"Bot {self.user_id}/{self.symbol}: DAG window warmed with {admitted} closed bars."
+            )
 
     # ══════════════════════════════════════════════════════════════════════
     #  LIVE TRADING LOOP
@@ -317,6 +1266,13 @@ class BotRunner:
 
             except Exception as e:
                 reconnect_attempts += 1
+                self._last_error = f"{type(e).__name__}: {e}"
+                self._runtime_report(
+                    phase="reconnecting",
+                    reconnect_attempts=reconnect_attempts,
+                    last_error=str(self._last_error)[:300],
+                    last_error_at=datetime.now(timezone.utc).isoformat(),
+                )
                 wait = min(2**reconnect_attempts, 60)
                 logger.error(
                     f"Bot {self.user_id}/{self.symbol} loop crashed: {e}. "
@@ -337,12 +1293,133 @@ class BotRunner:
                     logger.critical(f"Reconnection failed: {reconnect_err}")
 
         if reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+            self.exit_reason = (
+                f"gave up after {MAX_RECONNECT_ATTEMPTS} reconnection attempts"
+                + (f": {self._last_error}" if getattr(self, "_last_error", None) else "")
+            )
             logger.critical(
                 f"Bot {self.user_id}/{self.symbol} gave up after "
                 f"{MAX_RECONNECT_ATTEMPTS} reconnection attempts."
             )
 
         await self.shutdown()
+
+    #: Outcomes that are neither a fill nor a failure, and so announce nothing.
+    #:
+    #: `accepted` means the venue HOLDS the order and has filled nothing -- telling the
+    #: customer their trade executed would be false, and telling them it failed would be
+    #: false too. `skipped_*` means the idempotency layer refused a replay because an
+    #: identical execution already ran, so THIS call did nothing and the original already
+    #: produced its own notification. Announcing either would be the fabricated alert the
+    #: brief forbids.
+    _QUIET_ORDER_STATUSES = frozenset({
+        FILL_STATE_ACCEPTED, "accepted",
+        "skipped_completed", "skipped_executing",
+    })
+
+    #: Outcomes the venue confirmed as a fill, whole or partial.
+    _FILLED_ORDER_STATUSES = frozenset({"completed", FILL_STATE_PARTIAL, "partially_filled"})
+
+    def _notify_order_outcome(
+        self,
+        *,
+        status,
+        side: str,
+        requested_qty,
+        filled_qty,
+        price,
+        execution_id: str,
+        message: str = "",
+    ) -> None:
+        """Tell the customer what happened to their order. Never raises.
+
+        T10. Trade execution and order failure were the two event classes with NO producer
+        anywhere in the tree -- a customer's strategy could fill an order, or fail to, and
+        the platform told them nothing. The stated blocker was that this loop is
+        synchronous; `notification_dispatcher.schedule_user_notification` is the answer to
+        that, and it is the same mechanism `routers/risk.record_risk_violation` already
+        uses.
+
+        TOTALITY IS NOT OPTIONAL HERE. This is called from inside the execution block
+        whose `except` rolls exposure back. An exception escaping it would roll back a
+        REAL, SETTLED FILL -- the bot would then believe it holds nothing after buying,
+        which is exactly the RT-02 defect this loop already carries a comment about. So
+        every failure mode is caught and logged, and nothing propagates.
+
+        THE OUTCOME IS PART OF THE IDEMPOTENCY KEY, not just the execution id. An intent
+        reported failed and then, on a retry, filled is two different things to tell a
+        customer; keying on the execution id alone would de-duplicate the second away.
+        """
+        try:
+            status_text = str(status) if status is not None else None
+            if status_text in self._QUIET_ORDER_STATUSES:
+                return
+
+            is_paper = bool(getattr(self, "paper_trading", False))
+            mode = "paper" if is_paper else "live"
+            filled = status_text in self._FILLED_ORDER_STATUSES
+            symbol = getattr(self, "symbol", "")
+            strategy_id = (getattr(self, "blueprint", None) or {}).get("strategy_id")
+
+            if filled:
+                # "Paper" in the title because a simulated fill must never be passed off
+                # as a venue fill. The customer decides what to do next on this.
+                title = "Paper Order Filled" if is_paper else "Order Filled"
+                shape = {
+                    "event_type": "trade_executed",
+                    "category": "trade",
+                    "severity": "success",
+                    "title": title,
+                    "message": (
+                        f"{side.upper()} {filled_qty} {symbol} at {price}."
+                        + (" Simulated fill." if is_paper else "")
+                    ),
+                    "idempotency_key": f"order_filled:{execution_id}",
+                }
+            else:
+                title = "Paper Order Failed" if is_paper else "Order Failed"
+                detail = f" {message}" if message else ""
+                shape = {
+                    "event_type": "order_failed",
+                    "category": "trade",
+                    # `error`: the customer's strategy intended a trade and it did not
+                    # happen. `order_failed` is deliberately NOT in
+                    # PREFERENCE_KEY_BY_EVENT_TYPE, so no switch can suppress it.
+                    "severity": "error",
+                    "title": title,
+                    "message": (
+                        f"{side.upper()} {requested_qty} {symbol} did not execute"
+                        f" (status: {status_text}).{detail}"
+                    ),
+                    "idempotency_key": f"order_failed:{execution_id}",
+                }
+
+            notification_dispatcher.schedule_user_notification(
+                user_id=getattr(self, "user_id", ""),
+                event_type=shape["event_type"],
+                category=shape["category"],
+                severity=shape["severity"],
+                title=shape["title"],
+                message=shape["message"],
+                strategy_id=strategy_id,
+                exchange=getattr(self, "exchange_id", None),
+                metadata={
+                    "mode": mode,
+                    "symbol": symbol,
+                    "side": side,
+                    "status": status_text,
+                    "requested_qty": str(requested_qty),
+                    "filled_qty": str(filled_qty),
+                    "execution_id": execution_id,
+                    "idempotency_key": shape["idempotency_key"],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - must never reach the tick's except
+            logger.error(
+                "[NOTIFY_ORDER] could not schedule order-outcome notification for "
+                "user=%s execution_id=%s: %s",
+                getattr(self, "user_id", "?"), execution_id, exc,
+            )
 
     async def _inner_loop(self):
         """
@@ -354,8 +1431,24 @@ class BotRunner:
         FIX ME-6: Wraps ML inference in asyncio.wait_for() with timeout.
         """
         logger.info(f"Bot {self.user_id}/{self.symbol} inner loop started.")
+        # OBS-01: the stream reports its own failures to this bot's self-report.
+        try:
+            self.data_engine.on_stream_error = self._on_stream_error
+        except Exception:  # noqa: BLE001
+            pass
+        self._runtime_report(
+            phase="waiting_for_market_data",
+            mode="paper" if self.paper_trading else "live",
+            symbol=self.symbol,
+            booted_at=datetime.now(timezone.utc).isoformat(),
+            ticks=0,
+            bars_closed=0,
+            force=True,
+        )
 
-        async for ticks in self.data_engine.stream_live_ticks(self.symbol):
+        # STREAM-01: ticks come through a watchdog, so a quiet market or a silently stalled
+        # websocket still closes candles on time (see `_ticks_with_watchdog`).
+        async for ticks in self._ticks_with_watchdog():
             for tick in (ticks if isinstance(ticks, list) else [ticks]):
                 timestamp_ms = tick.get("timestamp", int(time.time() * 1000))
                 price = float(tick.get("price", tick.get("last", 0)))
@@ -363,6 +1456,19 @@ class BotRunner:
 
                 if price <= 0:
                     continue
+
+                self._last_price = price
+                self._last_tick_ms = int(timestamp_ms)
+                rt = self.__dict__.get("_runtime_status", {})
+                synthetic_tick = bool(tick.get("synthetic"))
+                self._runtime_report(
+                    phase="streaming_quiet_market" if synthetic_tick else "streaming",
+                    ticks=int(rt.get("ticks", 0)) + (0 if synthetic_tick else 1),
+                    last_tick_at=datetime.fromtimestamp(
+                        int(timestamp_ms) / 1000, tz=timezone.utc
+                    ).isoformat(),
+                    last_price=price,
+                )
 
                 # ── Update Numba matrix ───────────────────────────────────
                 new_candles = self.data_processor.process_live_tick(
@@ -372,66 +1478,301 @@ class BotRunner:
                 if not new_candles:
                     continue  # no closed candle yet — keep accumulating ticks
 
-                # ── Get historical matrix ─────────────────────────────────
-                matrix = self.data_processor.get_historical_matrix_for_ml(
-                    self.symbol, self.timeframe_sec
+                self._runtime_report(
+                    bars_closed=int(rt.get("bars_closed", 0)) + len(new_candles),
+                    last_bar_closed_at=datetime.now(timezone.utc).isoformat(),
                 )
-                if len(matrix) < 30:
-                    continue  # not enough history for indicators
 
-                close = matrix[:, 4].astype("float64")
-                high = matrix[:, 2].astype("float64")
-                low = matrix[:, 3].astype("float64")
-                volume_arr = matrix[:, 5].astype("float64")
-
-                # ── FIX ME-1: Compute ALL indicator values ─────────────────
-                live_state = self._build_live_state(price, close, high, low, volume_arr)
-
-                # ── ML inference (FIX ME-6: timeout guard) ───────────────
-                if self.ml_block:
-                    try:
-                        confidence = await asyncio.wait_for(
-                            asyncio.to_thread(self.ml_block.live_inference, matrix),
-                            timeout=ML_INFERENCE_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            f"ML inference timeout on {self.symbol}. Skipping tick."
-                        )
+                # ── Per-tick state for the strategy engine in use ─────────
+                if self.graph_eval is None:
+                    live_state = await self._legacy_live_state(price)
+                    if live_state is None:
                         continue
-                    live_state["ML_Prediction"] = float(confidence)
                 else:
-                    live_state["ML_Prediction"] = 1.0  # no ML: trust technicals only
+                    # The DAG window carries its own history and indicators; this dict only
+                    # feeds the signal-trace audit record below.
+                    live_state = {"Close": price, "ML_Prediction": 1.0}
 
                 # ── Fetch live USDT balance for position sizing ───────────
                 # Cache this every N seconds instead of every tick in production
-                try:
-                    wallet = await self.data_engine.fetch_wallet_balance_snapshot()
-                    bal_usdt = float(wallet.get("USDT", {}).get("free", 0.0))
-                except Exception:
-                    bal_usdt = 0.0
+                if self.paper_trading:
+                    # A paper bot's capital is its ledger cash. Its market-data connection is
+                    # keyless, so there is no wallet to read (and a read would only fail).
+                    bal_usdt = float(self.execution_engine.cash)
+                else:
+                    try:
+                        wallet = await self.data_engine.fetch_wallet_balance_snapshot()
+                        # LIVE-QUOTE-01: the free balance of THIS pair's quote coin, the
+                        # same coin boot measured equity in (`quote_coin` above). Reading
+                        # "USDT" for every pair sized a BTC/USDC or ADA/USDC bot from the
+                        # wrong currency - zero on an account holding only USDC.
+                        bal_usdt = float(
+                            (wallet.get(quote_coin_of(self.symbol)) or {}).get("free", 0.0)
+                        )
+                    except Exception:
+                        bal_usdt = 0.0
 
                 # ── Evaluate strategy ─────────────────────────────────────
-                order_payload = await self.strategy_engine.run_logic(
-                    user_id=self.user_id,
-                    symbol=self.symbol,
-                    strategy_blueprint=self.blueprint,
-                    current_state=live_state,
-                    live_balance_usdt=bal_usdt,  # FIX SB-1 in strategy_builder
-                )
+                if self.graph_eval is not None:
+                    # RT-02/RT-05: the canonical DAG evaluator (DAGEngine.execute_plan).
+                    order_payload = await asyncio.to_thread(
+                        self.graph_eval.on_closed_bars,
+                        [ClosedBar.from_candle(c) for c in new_candles],
+                        price=price,
+                        equity=float(self.execution_engine.current_equity),
+                        free_quote=bal_usdt,
+                        position_base=float(self.recovered_exposure_coins),
+                    )
+                    if order_payload:
+                        order_payload["user_id"] = self.user_id
+                else:
+                    order_payload = await self.strategy_engine.run_logic(
+                        user_id=self.user_id,
+                        symbol=self.symbol,
+                        strategy_blueprint=self.blueprint,
+                        current_state=live_state,
+                        live_balance_usdt=bal_usdt,  # FIX SB-1 in strategy_builder
+                    )
 
+                self._runtime_report(
+                    last_evaluation_at=datetime.now(timezone.utc).isoformat(),
+                    last_evaluation=(
+                        f"signal: {order_payload.get('side')} {order_payload.get('qty')}"
+                        if order_payload else "no_signal"
+                    ),
+                    force=bool(order_payload),
+                )
                 if not order_payload:
+                    continue
+
+                if self.paused:
+                    logger.info(f"Bot {self.user_id}/{self.symbol} is paused; signal not executed.")
                     continue
 
                 # ── FIX ME-3: is_reduce_only from explicit payload field ──
                 is_reduce = order_payload.get("reduce_only", False)
+
+                # ── MKT-05: has this deployment's paid period ended? ──────
+                # FIRST, before every other check, because an unauthorized deployment
+                # should not be evaluated against its limits at all -- the question is not
+                # "is this order within bounds" but "may this deployment still trade".
+                # Re-evaluated every tick rather than cached, so a clock that crosses the
+                # boundary mid-run is honoured without a restart.
+                authorization_reason = evaluate_authorization_window(
+                    self.authorized_until, now=datetime.now(timezone.utc)
+                )
+                if authorization_reason is not None:
+                    logger.warning(
+                        f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                        f"{authorization_reason}"
+                    )
+                    # Refuse the order unconditionally, then ask for a durable stop ONCE.
+                    # The refusal is what protects the money; the stop request is what
+                    # stops this bot spinning for the rest of the process's life. It goes
+                    # through `DeploymentStateStore` rather than writing 'stopped'
+                    # directly, because the owning process is the only thing that knows
+                    # this bot's `recovered_exposure_coins` and so the only thing that can
+                    # flatten the position correctly -- see `request_close`'s RT-21
+                    # contract and `FleetManager._honour_close_request`.
+                    if not self._authorization_stop_requested:
+                        self._authorization_stop_requested = True
+                        await self._request_authorization_stop()
+                    continue
+
+                # ── PAPER-20: paper entries are reduced to the plan's per-trade limit ──
+                # Before DEPLOY-01 and the risk engine, so both judge the reduced order.
+                paper_clamp_note = None
+                if self.paper_trading and not is_reduce:
+                    tier_limits = getattr(self.risk_manager, "tier_limits", None) or {}
+                    tier_key = str(self.blueprint.get("user_tier") or "free").lower().strip()
+                    tier = tier_limits.get(tier_key) or tier_limits.get("free") or {}
+                    new_qty, paper_clamp_note = clamp_paper_entry_to_plan_limit(
+                        Decimal(str(order_payload.get("qty", 0))),
+                        Decimal(str(price)),
+                        tier.get("max_trade"),
+                    )
+                    if paper_clamp_note:
+                        logger.info(f"Bot {self.user_id}/{self.symbol}: {paper_clamp_note}")
+                    if new_qty is None:
+                        continue
+                    order_payload["qty"] = float(new_qty)
+
+                # ── DEPLOY-01: per-deployment execution_config limits ─────
+                # Consulted BEFORE the risk-engine check and before any order_id/lock is
+                # minted, so a refusal here costs nothing and looks exactly like a
+                # non-APPROVED risk verdict to everything downstream (same `continue`).
+                # See `evaluate_deployment_execution_limits`'s own docstring for what it
+                # does and does not enforce.
+                execution_limit_reason = evaluate_deployment_execution_limits(
+                    self.execution_config,
+                    side=str(order_payload.get("side", "")),
+                    qty=Decimal(str(order_payload.get("qty", 0))),
+                    price=Decimal(str(price)),
+                    current_exposure=self.recovered_exposure_coins,
+                    is_reduce_only=is_reduce,
+                )
+                if execution_limit_reason is not None:
+                    logger.warning(
+                        f"Bot {self.user_id}/{self.symbol}: order refused by this "
+                        f"deployment's execution_config -- {execution_limit_reason}"
+                    )
+                    self._runtime_report(
+                        last_evaluation=f"refused: {execution_limit_reason}", force=True
+                    )
+                    # SIG-REFUSE-01: recorded, not only logged. A log line is invisible to
+                    # the trader, so a correctly-refusing live bot looked dead.
+                    asyncio.create_task(self._record_refused_signal(
+                        order_payload,
+                        f"Refused by this deployment's execution limits: {execution_limit_reason}",
+                        price=price, volume=volume, timestamp_ms=timestamp_ms,
+                        live_state=live_state, capital=bal_usdt,
+                    ))
+                    continue
+
+                # ── RISK-05: consecutive-loss & capital-utilization kill switches ──
+                # `RiskSettings.jsx`'s "Consecutive Loss Protection" and "Capital
+                # Utilization Limit" guards have always promised real thresholds; RISK-02
+                # found no runtime code evaluated either. Both read PAPER-only tables
+                # (`paper_fills`, `paper_accounts`, `paper_positions`) -- the identical
+                # scope restriction RISK-04 recorded for `current_drawdown_pct`, for the
+                # identical reason: no equivalent persisted history exists for a LIVE
+                # account anywhere in this codebase. Skipped for a reduce-only signal: a
+                # position-REDUCING order lowers both figures, so blocking one here would
+                # trap an account that most needs to be able to close risk.
+                if self.paper_trading and not is_reduce:
+                    try:
+                        from backend_app.backend.paper_trading_service import (
+                            CAPITAL_UTILIZATION_LIMIT_PCT,
+                            CONSECUTIVE_LOSS_LIMIT,
+                            get_paper_trading_service,
+                        )
+
+                        paper_svc = get_paper_trading_service()
+
+                        consecutive_losses = paper_svc.get_consecutive_loss_count(
+                            self.user_id
+                        )
+                        if (
+                            consecutive_losses is not None
+                            and consecutive_losses >= CONSECUTIVE_LOSS_LIMIT
+                        ):
+                            logger.warning(
+                                f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                                f"{consecutive_losses} consecutive losing trades reached "
+                                f"the platform limit of {CONSECUTIVE_LOSS_LIMIT}"
+                            )
+                            continue
+
+                        utilization_pct = paper_svc.get_capital_utilization_pct(
+                            self.user_id
+                        )
+                        if (
+                            utilization_pct is not None
+                            and utilization_pct > CAPITAL_UTILIZATION_LIMIT_PCT
+                        ):
+                            logger.warning(
+                                f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                                f"capital utilization {utilization_pct:.2%} exceeds the "
+                                f"platform limit of {CAPITAL_UTILIZATION_LIMIT_PCT:.2%}"
+                            )
+                            continue
+                    except Exception as exc:  # noqa: BLE001 - never let a measurement
+                        # failure block the loop; fail open, same as every other
+                        # "unmeasurable" case in this engine.
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not evaluate the "
+                            f"consecutive-loss or capital-utilization guards ({exc}); "
+                            f"failing open."
+                        )
 
                 # ── Risk check ────────────────────────────────────────────
                 # Get real-time risk metrics from telemetry
                 account_health = await self.telemetry.get_account_health(self.user_id)
                 current_drawdown_pct = account_health.get("current_drawdown_pct", 0.0)
                 daily_pnl_pct = account_health.get("daily_pnl_pct", 0.0)
-                
+
+                # RISK-04: `telemetry.get_account_health`'s `current_drawdown_pct` is always
+                # `0.0` -- see `dashboard_data_ingester._write_account_health`'s own comment
+                # ("For drawdown, we'd need historical data - for now use 0"), and separately
+                # that ingester is never invoked in this deployment at all. That made the
+                # `REJECT_DRAWDOWN` check below (`risk_manager.validate_trade_request`) real
+                # and enforcing but permanently fed a figure that could never trip it.
+                #
+                # For a PAPER bot a real, durable equity series already exists
+                # (`paper_equity_snapshots`, written on every fill by this same bot through
+                # `BotPaperLedger` -> `PaperTradingService.place_order`), so this overrides the
+                # telemetry figure with the real one wherever it is measurable.
+                # `get_current_drawdown_pct` returns `None` for an account too new to have a
+                # measured peak, and the telemetry fallback (effectively `0.0`, i.e. fail open)
+                # is kept for that case and for LIVE bots, which have no persisted equity
+                # history anywhere in this codebase today -- a remaining gap, tracked in
+                # `docs/launch_readiness/REMEDIATION_LEDGER.json`, not silently claimed fixed
+                # here.
+                if self.paper_trading:
+                    try:
+                        from backend_app.backend.paper_trading_service import (
+                            get_paper_trading_service,
+                        )
+
+                        real_drawdown_pct = get_paper_trading_service().get_current_drawdown_pct(
+                            self.user_id
+                        )
+                        if real_drawdown_pct is not None:
+                            current_drawdown_pct = real_drawdown_pct
+                    except Exception as exc:  # noqa: BLE001 - never let this block the loop
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not compute real "
+                            f"drawdown from paper_equity_snapshots ({exc}); falling back to "
+                            f"telemetry's figure."
+                        )
+
+                # RISK-05 (Black Swan): `validate_trade_request`'s flash-crash check
+                # reads `TradeRequest.recent_prices`, which no caller ever populated --
+                # see `BLACK_SWAN_SMA_WINDOW_BARS`'s own comment above for why this bot
+                # can feed it real, already-buffered closes at no new cost (the buffer is
+                # warmed and ticked identically for PAPER and LIVE bots). Left `None`
+                # (a no-op for that check, same as an empty list) when fewer than
+                # `BLACK_SWAN_SMA_WINDOW_BARS` completed bars are buffered yet, or on any
+                # read failure -- "not enough history to judge" is not "no deviation".
+                #
+                # RESTRICTED TO PAPER HERE, DELIBERATELY, DESPITE THE DATA BEING EQUALLY
+                # REAL FOR A LIVE BOT: `RiskSettings.jsx`'s "Black Swan Protection" guard
+                # still reads "Not enforced yet" for every account, on both paths (see
+                # the file header's own note on why the manual order path could not
+                # safely be given the same feed). Turning this on for LIVE bots only --
+                # silently, while the UI still tells every trader it is inactive -- would
+                # make the UI's claim wrong in the opposite direction RISK-02 fixed, and
+                # would change what a running LIVE bot does with real capital without any
+                # visible change in what the trader was told. That is a bigger, separate
+                # decision than this fix makes on its own; wiring the LIVE bot path too is
+                # recorded as the natural next step once the manual-path gap is closed and
+                # the toggle can honestly go live for everyone it affects.
+                recent_prices = None
+                if self.paper_trading:
+                    try:
+                        bar_matrix = self.data_processor.get_historical_matrix_for_ml(
+                            self.symbol, self.timeframe_sec
+                        )
+                        if len(bar_matrix) >= BLACK_SWAN_SMA_WINDOW_BARS:
+                            recent_prices = (
+                                bar_matrix[-BLACK_SWAN_SMA_WINDOW_BARS:, 4]
+                                .astype(float)
+                                .tolist()
+                            )
+                    except Exception as exc:  # noqa: BLE001 - fail open; a flash-crash
+                        # read failure must not itself become a reason to skip the tick.
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not read recent "
+                            f"bar closes for the flash-crash check ({exc}); leaving it "
+                            f"unmeasured for this tick."
+                        )
+
+                # TRACE-EXP-01: the exposure the risk check judged, kept so the trace records
+                # THAT figure. The audit below runs after the fill, when the position (and so
+                # `recovered_exposure_coins`) already includes this trade: an approved signal
+                # showed post-trade exposure and a refused one pre-trade, so "approved at
+                # $4,993" sat beside "refused at $4,990" under a $5,000 cap.
+                checked_exposure = float(self.recovered_exposure_coins) * price  # Decimal * float is a TypeError
                 verdict, reason = await self.risk_manager.validate_trade_request(
                     TradeRequest(
                         user_id=self.user_id,
@@ -440,21 +1781,22 @@ class BotRunner:
                         side=order_payload["side"],
                         amount=order_payload["qty"],
                         current_price=price,
-                        current_exposure=self.recovered_exposure_coins * price,
+                        current_exposure=checked_exposure,
                         current_drawdown_pct=current_drawdown_pct,
                         daily_pnl_pct=daily_pnl_pct,
                         is_reduce_only=is_reduce,
+                        recent_prices=recent_prices,
                     )
                 )
 
                 # ── Signal Trace Audit Trail Logging (Non-blocking) ───────
                 decision = str(order_payload.get("side", "BUY")).upper()
-                async def record_audit_signal(v_verdict, v_reason, v_exec_id=None, v_status="pending", v_fill=0.0, v_result=None):
+                async def record_audit_signal(v_verdict, v_reason, v_exec_id=None, v_status="pending", v_fill=0.0, v_result=None, v_latency_ms=None):
                     try:
                         from backend_app.backend.signal_service import get_signal_service
                         sig_svc = await get_signal_service()
                         sig = await sig_svc.create_signal(
-                            user={"id": self.user_id},
+                            user={"id": self.user_id, "_server_side": True},
                             strategy_id=str(self.blueprint.get("id") or self.blueprint.get("strategy_id", "default")),
                             strategy_version=str(self.blueprint.get("current_version", "1.0")),
                             deployment_id=str(self.blueprint.get("deployment_id", self.blueprint.get("id", "default"))),
@@ -465,7 +1807,10 @@ class BotRunner:
                             decision=decision,
                             indicators=live_state,
                             market_info={"price": price, "volume": volume, "timestamp": timestamp_ms},
-                            ml_info={"confidence": live_state.get("ML_Prediction")} if "ML_Prediction" in live_state else None
+                            ml_info={"confidence": live_state.get("ML_Prediction")} if "ML_Prediction" in live_state else None,
+                            # BOT-02: name the environment. Unnamed, the column's DEFAULT
+                            # labelled every paper bot's signal LIVE.
+                            environment="PAPER" if self.paper_trading else None,
                         )
                         sig_id = sig.get("id")
                         if not sig_id:
@@ -473,13 +1818,16 @@ class BotRunner:
 
                         # Risk evaluation audit
                         await sig_svc.update_risk_decision(
-                            user={"id": self.user_id},
+                            user={"id": self.user_id, "_server_side": True},
                             signal_id=sig_id,
                             risk_passed=(v_verdict == RiskVerdict.APPROVED),
-                            risk_reason=str(v_reason or "Risk Approved"),
+                            risk_reason=(
+                                str(v_reason or "Risk Approved")
+                                + (f" ({paper_clamp_note})" if paper_clamp_note else "")
+                            ),
                             position_size=float(order_payload["qty"]),
                             capital=bal_usdt,
-                            exposure=float(self.recovered_exposure_coins * Decimal(str(price))),
+                            exposure=checked_exposure,
                             drawdown_check=bool(current_drawdown_pct < 0.2)
                         )
 
@@ -487,32 +1835,88 @@ class BotRunner:
                             return
 
                         # Order & Execution update
-                        order_st = "FILLED" if v_status in ["completed", "skipped_completed"] else "FAILED"
+                        #
+                        # RT-16. This was binary: FILLED for "completed"/"skipped_completed",
+                        # FAILED for everything else. Now that the engine distinguishes a
+                        # venue acceptance from a fill, that mapping would record a LIVE
+                        # resting order as FAILED -- as wrong as the phantom fill it
+                        # replaces, and in the more alarming direction for anyone reading
+                        # the signal trail. A third state is needed because a third thing
+                        # genuinely happens.
+                        #
+                        # "SUBMITTED" is understood downstream: `SignalService.update_order`
+                        # only maps FILLED/PARTIALLY_FILLED -> EXECUTED, CANCELLED and
+                        # FAILED, leaving the signal's own status untouched for anything
+                        # else -- which is right for an order that has neither executed nor
+                        # failed -- and `map_order_state` covers SUBMITTED in the OrderState
+                        # vocabulary that Requirement 16.2's reconciliation reads.
+                        # SIG-DUP-01: `skipped_*` means THIS signal executed nothing - an
+                        # identical execution (same 5-minute bucket, side, qty and price) had
+                        # already run, so the engine refused to send it again. It used to be
+                        # recorded as FILLED with `filled: 0` - a phantom fill on the trail
+                        # (seen live: four "FILLED" signals, no venue order, position 0).
+                        # Recorded as CANCELLED: not executed, and not a failure either.
+                        if v_status == "completed":
+                            order_st = "FILLED"
+                        elif str(v_status).startswith("skipped"):
+                            order_st = "CANCELLED"
+                        elif v_status == FILL_STATE_PARTIAL:
+                            order_st = "PARTIALLY_FILLED"
+                        elif v_status == FILL_STATE_ACCEPTED:
+                            order_st = "SUBMITTED"
+                        else:
+                            order_st = "FAILED"
+
+                        requested_qty = float(order_payload["qty"])
+                        filled_qty_f = float(v_fill)
+                        # Remaining follows the fill, not the label. Previously any
+                        # non-FILLED outcome reported the whole quantity outstanding,
+                        # which is wrong for a partial fill.
+                        if order_st == "FILLED":
+                            remaining_qty = 0.0
+                        elif order_st in ("PARTIALLY_FILLED", "SUBMITTED"):
+                            remaining_qty = max(0.0, requested_qty - filled_qty_f)
+                        else:
+                            remaining_qty = requested_qty
+
+                        fill_price, fill_fee, fill_slippage = fill_report_of(
+                            v_result, price, v_fill, self.symbol
+                        )
                         await sig_svc.update_order(
-                            user={"id": self.user_id},
+                            user={"id": self.user_id, "_server_side": True},
                             signal_id=sig_id,
-                            order_id=v_exec_id,
-                            exchange_order_id=None,
+                            # BOT-03: signals.order_id is a UUID column.
+                            order_id=signal_order_uuid(v_exec_id, v_result),
+                            # SIG-VENUE-01: the venue's own order id (TRADE-12 keeps it at
+                            # result.trade_result.order_id). It was always None, so a live
+                            # order on the exchange could not be traced from its signal.
+                            exchange_order_id=venue_order_id_of(v_result),
                             order_status=order_st,
-                            quantity=float(order_payload["qty"]),
-                            filled=float(v_fill),
-                            remaining=0.0 if order_st == "FILLED" else float(order_payload["qty"]),
-                            average_price=float(price),
-                            fees=float(Decimal(str(v_fill)) * Decimal(str(price)) * Decimal("0.001")),
-                            slippage=0.0005,
-                            latency_ms=10.0
+                            quantity=requested_qty,
+                            filled=filled_qty_f,
+                            remaining=remaining_qty,
+                            # TRACE-FILL-01: what the execution reported, not constants.
+                            # `latency_ms` is not measured on this path, so it says so.
+                            average_price=fill_price,
+                            fees=fill_fee,
+                            slippage=fill_slippage,
+                            # TRACE-LAT-01: submission to the venue's answer, measured.
+                            latency_ms=v_latency_ms,
                         )
 
                         if order_st == "FILLED":
                             await sig_svc.update_execution(
-                                user={"id": self.user_id},
+                                user={"id": self.user_id, "_server_side": True},
                                 signal_id=sig_id,
-                                trade_id=f"tr_{v_exec_id[:12]}",
+                                # BOT-03: signals.trade_id is a UUID column.
+                                trade_id=signal_uuid_for("trade", v_exec_id),
                                 pnl=0.0,
                                 realized_pnl=None
                             )
                     except Exception as sig_err:
-                        logger.debug(f"Signal trace audit logging exception: {sig_err}")
+                        # BOT-03: was DEBUG, which is how a type error on every bot order
+                        # update stayed invisible in production.
+                        logger.warning(f"Signal trace audit logging exception: {sig_err}")
 
                 if verdict != RiskVerdict.APPROVED:
                     logger.warning(f"Risk check failed: {reason}")
@@ -521,8 +1925,22 @@ class BotRunner:
 
                 # ── ATOMIC EXECUTION + EXPOSURE UPDATE ─────────────────────
                 # STEP 1: Generate execution_id for idempotency and locking using the deterministic logic
+                #
+                # `from datetime import datetime` USED TO BE HERE, and it made `datetime` a
+                # LOCAL NAME for the whole of `_inner_loop` -- Python decides that at compile
+                # time, from the presence of the binding, not from where it sits. Line 22
+                # already imports the same name at module level, so the local import was pure
+                # redundancy, but it meant every use of `datetime` EARLIER in this function
+                # raised `UnboundLocalError: cannot access local variable 'datetime' where it
+                # is not associated with a value`.
+                #
+                # Nothing used it earlier until MKT-05 added the authorization-window check at
+                # the top of the tick, which is now the first `datetime.now(timezone.utc)` in
+                # the function -- so a latent defect became four failing tests
+                # (test_deploy01_execution_config_enforcement x3, test_rt02_builder_strategy_*)
+                # and a bot that could not execute a single tick. The new code was correct; the
+                # redundant re-import was not.
                 import uuid
-                from datetime import datetime
 
                 from backend_app.core.models.execution_record import \
                     generate_execution_id
@@ -569,25 +1987,69 @@ class BotRunner:
                     # argument precisely so this is always established, and it was not
                     # being passed on. It is now.
                     #
-                    # WHAT THIS MEANS FOR A PAPER BOT, STATED PLAINLY: the order is
-                    # REFUSED here, and that is Requirement 13.9 working as written -
-                    # "IF the live order path receives an order whose originating
-                    # Execution_Environment is `PAPER`, THEN THE live order path SHALL
-                    # reject the order before issuing any exchange call ... and SHALL
-                    # record the rejection in the Audit_Log." `assert_live_environment`
-                    # audits before it raises, so the record is kept.
+                    # WHAT THIS MEANS FOR A PAPER BOT. This comment used to say the order
+                    # is REFUSED here, and that is NO LONGER TRUE -- it described an
+                    # interim state that has since been fixed, and leaving it would tell
+                    # the next reader that paper trading is broken when it is not.
                     #
-                    # A paper bot therefore stops producing simulated executions through
-                    # this funnel. Per Requirement 13.3 it should never have been doing
-                    # so: "WHEN a Paper_Session emits an order intent, THE Paper_Session
-                    # SHALL route that order intent to the Paper_Simulator, AND SHALL NOT
-                    # enqueue, forward or copy that order intent onto the live order
-                    # path." The Paper_Simulator is `backend/paper/paper_simulator.py`
-                    # and is reached by the Paper_Session runtime, not from here. Routing
-                    # this loop's paper mode there is the remaining work; refusing is the
-                    # correct interim state because the alternative is a mislabelled
-                    # order on the live funnel.
+                    # `execute_with_idempotency` now chooses its guard by what the engine
+                    # IS rather than applying the live-path guard to everything
+                    # (`core/execution_engine.py`, first statement of the method). This
+                    # engine states PAPER and holds no `exchange_executor`, so it is a
+                    # DECLARED SIMULATOR and is guarded by
+                    # `assert_simulation_environment_matches`, which admits exactly one
+                    # value -- its own. PAPER on PAPER passes; a LIVE order on this engine
+                    # is still refused, which the live-path guard could not do for it.
+                    # The order then reaches the paper simulation branch and produces a
+                    # `paper_`-prefixed fill.
+                    # Verified by execution: tests/test_simulated_orders_reach_the_simulator.py
+                    # (129 tests across that file and its two companions).
+                    #
+                    # WHAT IS STILL OUTSTANDING, AND IT IS NOT A REFUSAL. The fill is
+                    # simulated INSIDE `ExecutionEngine`, against the synthetic
+                    # `{"total_equity": 10000.0}` set in `_recover_live_state`. This
+                    # module has NO import edge to `backend_app/backend/paper/` at all --
+                    # no `paper_simulator`, no `paper_repository` -- so the fill is never
+                    # written to `paper_accounts` / `paper_orders` / `paper_fills` /
+                    # `paper_positions`, which is where `PaperTrading.jsx` and the paper
+                    # dashboard read from.
+                    #
+                    # So the platform has two paper engines sharing one word: the
+                    # Paper_Session path (`POST /api/paper/sessions` ->
+                    # `paper_session_service` -> `paper_simulator`, fully persisted) and
+                    # this one (deploy-in-paper -> BotRunner, persisted only to
+                    # execution/telemetry records). A trader who deploys a strategy in
+                    # paper mode gets real simulated executions that their paper account
+                    # does not show. Requirement 13.3 wants this loop's intents routed to
+                    # the Paper_Simulator; the seam is this single call site plus the
+                    # engine construction in `_recover_live_state`, and the missing piece
+                    # is a `session_id`, which a BotRunner bot does not have.
+                    # Recorded as an open item rather than attempted here.
                     # Regression: tests/test_execution_environment_is_stated_not_defaulted.py
+                    # LIVE-ENT-01: the live entitlement, re-read for EVERY live order. It was
+                    # checked once at deploy and only asserted at the live gate after that, so
+                    # a bot restarted by the orphan sweep or un-paused by a row write kept
+                    # trading after the account lost live trading. Fails closed.
+                    if not self.paper_trading:
+                        from backend_app.core.subscription_dependencies import (
+                            live_trading_entitlement_holds,
+                        )
+
+                        if not await live_trading_entitlement_holds(self.user_id):
+                            reason = (
+                                "Live trading is not included in this account's current plan; "
+                                "the order was not sent."
+                            )
+                            logger.warning(
+                                f"LIVE-ENT-01: Bot {self.user_id}/{self.symbol} refused a live "
+                                f"order: entitlement does not hold"
+                            )
+                            asyncio.create_task(record_audit_signal(RiskVerdict.REJECT_TIER_LIMIT, reason))
+                            continue
+
+                    # TRACE-LAT-01: the order's round trip -- submission to the venue's
+                    # (or the paper simulator's) answer -- on a monotonic clock.
+                    _submitted_at = time.monotonic()
                     result = await self.execution_engine.execute_with_idempotency(
                         tenant_id=uuid.UUID(self.user_id),
                         strategy_id=self.blueprint.get("strategy_id", "default"),
@@ -601,39 +2063,101 @@ class BotRunner:
                             if self.paper_trading
                             else ExecutionEnvironment.LIVE
                         ),
+                        # TRADE-05. The risk verdict this loop just obtained, carried to
+                        # the gateway as evidence. The gateway refuses a LIVE order whose
+                        # `risk_approved` is not True, so risk is now enforced AT the
+                        # gateway instead of being a convention this caller happens to
+                        # follow. We only reach this line when `verdict` is APPROVED --
+                        # the non-approved branch `continue`s above -- so passing the
+                        # comparison rather than a literal `True` keeps the evidence tied
+                        # to the actual evaluation.
+                        # DEPLOY-01: the deployment's own order_timeout_seconds, from the
+                        # same `execution_config` the notional and position caps are read
+                        # from a few lines above. `None` for a deployment that never set
+                        # it, which is the no-timeout behaviour this call always had.
+                        order_timeout_seconds=self.execution_config.get(
+                            "order_timeout_seconds"
+                        ),
+                        # DEPLOY-01: and this deployment's slippage band, from the same
+                        # execution_config. `None` leaves the limit price at exactly the
+                        # decision price, which is what this call always sent.
+                        slippage_tolerance_bps=self.execution_config.get(
+                            "slippage_tolerance_bps"
+                        ),
+                        risk_approved=(verdict == RiskVerdict.APPROVED),
+                        risk_reason=str(reason or "risk approved"),
                     )
 
-                    # ── Record execution result ─────────────────────────────
-                    if result and result.get("status") in ["completed", "skipped_completed"]:
-                        trade_result = result.get("result", {})
-                        if trade_result:
-                            self.data_processor.record_execution(trade_result)
-                            filled_qty = Decimal(str(trade_result.get('trade_result', {}).get('size', qty)))
-                        else:
-                            filled_qty = qty
-                    else:
-                        filled_qty = qty
+                    order_latency_ms = round((time.monotonic() - _submitted_at) * 1000.0, 3)
 
-                    # ── Atomic exposure update ───────────────────────────
-                    if side == "buy":
-                        self.recovered_exposure_coins = (previous_exposure + filled_qty).quantize(Decimal("0.00000001"))
+                    # ── Record execution result ─────────────────────────────
+                    # RT-06: see `settle_exposure` - only a `completed` result is a fill.
+                    _status = result.get("status") if result else None
+                    # (This block used to call `self.data_processor.record_execution(_tr)`.
+                    # No such method exists on DataProcessorEngine -- or anywhere -- so every
+                    # COMPLETED order raised AttributeError here, the except below "rolled back"
+                    # the exposure the fill had just created, and the bot believed it held
+                    # nothing after buying: it could never size a sell and would buy again.
+                    # Found by tests/test_rt02_*; the exposure is settled by `settle_exposure`.)
+                    filled_qty, self.recovered_exposure_coins = settle_exposure(
+                        side=side,
+                        qty=qty,
+                        previous_exposure=previous_exposure,
+                        result=result,
+                    )
+                    if filled_qty > 0:
+                        logger.info(f"✅ Executed {side} {filled_qty} {self.symbol} @ {price} (exposure: {self.recovered_exposure_coins})")
+                        # OBS-01: the self-report's position follows fills, not just boot.
+                        self._runtime_report(
+                            position_base=float(self.recovered_exposure_coins),
+                            last_fill=f"{side} {filled_qty} @ {price}",
+                            last_fill_at=datetime.now(timezone.utc).isoformat(),
+                            force=True,
+                        )
                     else:
-                        self.recovered_exposure_coins = max(
-                            Decimal("0"),
-                            (previous_exposure - filled_qty).quantize(Decimal("0.00000001"))
+                        logger.warning(
+                            f"⚠️ Order {side} {qty} {self.symbol} was NOT executed "
+                            f"(status={_status!r}); exposure unchanged at {previous_exposure}"
                         )
 
-                    logger.info(f"✅ Executed {side} {filled_qty} {self.symbol} @ {price} (exposure: {self.recovered_exposure_coins})")
+                    # T10: the customer hears about BOTH outcomes -- a fill and a
+                    # non-execution. Placed after the exposure is settled and reported, so
+                    # a notification cannot sit between the fill and the state recording
+                    # it. `_notify_order_outcome` is total; see its docstring on why an
+                    # exception here would roll a real fill back.
+                    self._notify_order_outcome(
+                        status=_status,
+                        side=side,
+                        requested_qty=qty,
+                        filled_qty=filled_qty,
+                        price=price,
+                        execution_id=execution_id,
+                        message=str(result.get("message") or "") if result else "",
+                    )
 
                     # Record successful trace in background
                     asyncio.create_task(record_audit_signal(
                         verdict,
                         reason,
                         v_exec_id=execution_id,
-                        v_status=result.get("status") if result else "completed",
+                        v_status=_status if _status else "no_result",
                         v_fill=float(filled_qty),
-                        v_result=result
+                        v_result=result,
+                        v_latency_ms=order_latency_ms,
                     ))
+
+                    # TRADE-13. Computed OUTSIDE `safe_log` below (a pure, synchronous read
+                    # of the same `result` `settle_exposure` already read above), so a bad
+                    # value cannot raise inside the fire-and-forget task and is instead just
+                    # absent from the telemetry line — the same "degrade to missing, never
+                    # fabricate" rule `classify_venue_fill` already applies to `filled_qty`.
+                    # ADDITIVE AND READ-ONLY ON THE HOT PATH: `telemetry_fee_and_slippage`
+                    # calls nothing and changes nothing; `safe_log` was already a decoupled
+                    # `asyncio.create_task` fire-and-forget write before this change, and this
+                    # only widens what that one write carries.
+                    _tel_fee, _tel_fee_currency, _tel_slippage = telemetry_fee_and_slippage(
+                        result=result, decision_price=price, filled_qty=filled_qty,
+                    )
 
                     # Fire-and-forget telemetry log with error handling
                     async def safe_log():
@@ -644,11 +2168,15 @@ class BotRunner:
                                 side=side,
                                 amount=float(filled_qty),
                                 price=price,
+                                fee=_tel_fee,
+                                fee_currency=_tel_fee_currency,
+                                slippage=_tel_slippage,
                             )
                         except Exception as e:
                             logger.error(f"Telemetry failed: {e}")
 
-                    asyncio.create_task(safe_log())
+                    if filled_qty > 0:
+                        asyncio.create_task(safe_log())
 
                 except Exception as e:
                     # ── ROLLBACK: Restore previous exposure state ───────────
@@ -660,6 +2188,45 @@ class BotRunner:
                     # ── Release Redis lock ────────────────────────────────
                     await redis_client.delete(lock_key)
                     logger.debug(f"🔓 Released execution lock for {execution_id}")
+
+        # RT-01: `stream_live_ticks` RETURNS (it does not raise) when the venue offers no
+        # watchTrades. Falling off the end used to be reported upstream as a clean exit: the
+        # bot was gone, the deployment row still said running, and nothing was logged. A market
+        # data stream that ends is a failure the reconnect/give-up logic must see.
+        raise RuntimeError(
+            f"market data stream for {self.symbol} on {self.exchange_id} ended unexpectedly"
+        )
+
+    async def _legacy_live_state(self, price: float):
+        """The legacy engine's per-tick indicator state, or ``None`` to skip the tick."""
+        matrix = self.data_processor.get_historical_matrix_for_ml(
+            self.symbol, self.timeframe_sec
+        )
+        if len(matrix) < 30:
+            return None  # not enough history for indicators
+
+        close = matrix[:, 4].astype("float64")
+        high = matrix[:, 2].astype("float64")
+        low = matrix[:, 3].astype("float64")
+        volume_arr = matrix[:, 5].astype("float64")
+
+        # ── FIX ME-1: Compute ALL indicator values ─────────────────
+        live_state = self._build_live_state(price, close, high, low, volume_arr)
+
+        # ── ML inference (FIX ME-6: timeout guard) ───────────────
+        if self.ml_block:
+            try:
+                confidence = await asyncio.wait_for(
+                    asyncio.to_thread(self.ml_block.live_inference, matrix),
+                    timeout=ML_INFERENCE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"ML inference timeout on {self.symbol}. Skipping tick.")
+                return None
+            live_state["ML_Prediction"] = float(confidence)
+        else:
+            live_state["ML_Prediction"] = 1.0  # no ML: trust technicals only
+        return live_state
 
     # ══════════════════════════════════════════════════════════════════════
     #  FIX ME-1: BUILD COMPLETE live_state WITH ALL INDICATORS
@@ -811,6 +2378,144 @@ class BotRunner:
     # ══════════════════════════════════════════════════════════════════════
     #  SHUTDOWN
     # ══════════════════════════════════════════════════════════════════════
+
+    async def _request_authorization_stop(self) -> None:
+        """MKT-05: this deployment's paid period ended -- flatten it and ask it to stop.
+
+        Called at most once per process, latched by ``_authorization_stop_requested``. The
+        ORDER REFUSAL in ``_inner_loop`` is what protects the money and is unconditional;
+        this is what keeps an unauthorized bot from spinning for the rest of the process's
+        life holding an open position nobody is paying for.
+
+        ``close_position`` is called DIRECTLY rather than through
+        ``DeploymentStateStore.request_close``, and that is the whole reason this lives on
+        ``BotRunner`` instead of in the expiry sweep: ``close_position``'s own docstring
+        records that only the process actually running this bot knows
+        ``recovered_exposure_coins``, which exists nowhere else. This IS that process, so
+        the flatten happens now rather than on the next heartbeat of whoever notices.
+
+        NEITHER FAILURE RAISES. The loop must keep refusing orders even if the flatten or
+        the status write fails -- an exception here would kill the tick loop and with it
+        the refusal, which is the one thing that must not stop. Both are logged at ERROR
+        with the deployment named, which is what an operator needs to finish the job by
+        hand.
+        """
+        deployment_id = str(
+            self.blueprint.get("deployment_id", self.blueprint.get("id", "")) or ""
+        )
+
+        try:
+            closed, detail = await self.close_position()
+            logger.warning(
+                "MKT-05: deployment %s past its authorization window -- flatten %s: %s",
+                deployment_id or "<unidentified>",
+                "succeeded" if closed else "did not complete",
+                detail,
+            )
+        except Exception as exc:  # noqa: BLE001 - must not kill the refusing loop
+            logger.error(
+                "MKT-05: deployment %s past its authorization window and the flatten "
+                "RAISED (%s). Orders are still being refused, but this position is open "
+                "and needs closing by hand.",
+                deployment_id or "<unidentified>",
+                exc,
+            )
+
+        if not deployment_id:
+            logger.error(
+                "MKT-05: a deployment past its authorization window carries no "
+                "deployment_id on its blueprint, so no durable stop could be requested. "
+                "Orders are still refused in this process, but nothing records that."
+            )
+            return
+
+        try:
+            from backend_app.backend.deployment_state import DeploymentStateStore
+
+            await DeploymentStateStore().request_stop(deployment_id)
+        except Exception as exc:  # noqa: BLE001 - must not kill the refusing loop
+            logger.error(
+                "MKT-05: could not record the stop of deployment %s after its "
+                "authorization window closed: %s. Orders are still refused in this "
+                "process; the row still reads as running.",
+                deployment_id,
+                exc,
+            )
+
+    async def close_position(self) -> Tuple[bool, str]:
+        """RT-21: flatten this bot's own recorded exposure, through the SAME gateway and
+        SAME ``source="bot_runner"`` call every regular order already uses -- nothing new is
+        exposed to the live-order boundary.
+
+        Called from ``FleetManager``'s heartbeat task (``_honour_close_request``), never
+        from a request handler directly: only the process actually running this bot knows
+        ``recovered_exposure_coins``, which exists nowhere else (no second, externally
+        readable copy -- see migration 038's header). Spot-only, so exposure is never
+        negative (``settle_exposure``); closing is always a SELL of the exact amount held,
+        which cannot open a new or larger position regardless of what submitted it.
+
+        Pausing for the call's duration (restored after, whatever it was) keeps this from
+        racing the tick loop's own order submission, which already checks ``self.paused``
+        before it submits -- the same control the fleet already uses for a user's pause
+        request, reused rather than a second lock introduced beside it. It narrows the race
+        without the full exposure-locking rework a stronger guarantee would need; see the
+        regression test for the one window this does not close.
+        """
+        exposure = self.recovered_exposure_coins
+        if exposure <= 0:
+            return True, "no open position to close"
+        if self._last_price is None:
+            return False, "no measured price yet; refusing to close without one"
+
+        was_paused = self.paused
+        self.paused = True
+        try:
+            import uuid
+
+            price = Decimal(str(self._last_price))
+            previous_exposure = exposure
+            result = await self.execution_engine.execute_with_idempotency(
+                tenant_id=uuid.UUID(self.user_id),
+                strategy_id=self.blueprint.get("strategy_id", "default"),
+                symbol=self.symbol,
+                side="sell",
+                size=exposure,
+                price=price,
+                source="bot_runner",
+                execution_environment=(
+                    ExecutionEnvironment.PAPER if self.paper_trading else ExecutionEnvironment.LIVE
+                ),
+                # DEPLOY-01: applied to the RT-21 close path too. A close is the order
+                # that most needs a bounded wait -- it is how a deployment stops being
+                # exposed -- so leaving it unbounded while bounding the open would be
+                # backwards.
+                order_timeout_seconds=self.execution_config.get("order_timeout_seconds"),
+                # DEPLOY-01. Applied on the CLOSE path too, deliberately: a band that
+                # bounded entries but not exits would leave the position that is already
+                # exposed unbounded, which is backwards -- the same reasoning the
+                # order_timeout_seconds comment above gives for this call site.
+                slippage_tolerance_bps=self.execution_config.get(
+                    "slippage_tolerance_bps"
+                ),
+                risk_approved=True,
+                risk_reason=(
+                    "RT-21 close: selling exactly the recorded long exposure; "
+                    "cannot increase risk"
+                ),
+            )
+            filled_qty, self.recovered_exposure_coins = settle_exposure(
+                side="sell", qty=exposure, previous_exposure=previous_exposure, result=result,
+            )
+            status = result.get("status") if result else None
+            if status == "completed":
+                logger.info(
+                    f"RT-21: closed {filled_qty} {self.symbol} for {self.user_id}; "
+                    f"exposure {previous_exposure} -> {self.recovered_exposure_coins}"
+                )
+                return True, f"closed {filled_qty} {self.symbol}"
+            return False, f"close did not fill: {(result or {}).get('message') or 'no result'}"
+        finally:
+            self.paused = was_paused
 
     async def shutdown(self):
         """Cleanly closes all connections."""

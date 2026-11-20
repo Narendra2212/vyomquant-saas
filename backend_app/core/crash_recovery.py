@@ -7,6 +7,20 @@ Provides:
 - Deployment recovery mechanisms
 - Signal recovery during crashes
 - Portfolio state reconstruction
+
+OPS-03: UNMOUNTED, NOT A REAL IMPLEMENTATION. Every method here that is supposed to
+touch real state is a stub: ``_get_deployment_state`` returns a hardcoded placeholder
+dict for any ``deployment_id``, ``_cancel_open_orders``/``_restart_worker`` are bare
+``pass``, ``_reconcile_portfolio`` always returns the same fixed
+``{"reconciled": True}``, and ``_verify_recovery`` always returns
+``{"success": True, ...}``. ``recover_deployment`` therefore always reports
+``RecoveryStatus.SUCCEEDED`` without cancelling an order, reconciling a position, or
+restarting anything -- a fabricated "recovery succeeded" confirmation on a crash-
+handling endpoint for a live-trading platform. ``routers/strategy_operations.py`` no
+longer mounts the four endpoints that called into this module (see that file's own
+comment at the removal site); this module is kept, unmounted, as a record of the
+intended shape pending a real implementation built on RT-16's reconciliation
+primitives, not deleted.
 """
 
 import asyncio

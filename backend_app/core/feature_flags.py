@@ -8,7 +8,8 @@ Used for gradual rollout and emergency kill switches.
 import os
 from enum import Enum
 from typing import Any, Dict
-from backend_app.core.safety_config import get_vyomquant_mode
+from backend_app.core.safety_config import (get_vyomquant_mode,
+                                            production_router_enabled)
 
 
 class ExecutionContext(Enum):
@@ -29,14 +30,24 @@ class ExecutionFlags:
     Current Status (Phase 1 - Hard Stop):
     - DAG_TRADING_ENABLED: False (unsafe, pending idempotency fixes)
     - EVENT_LOOP_TRADING_ENABLED: False (unsafe, pending handler validation)
-    - PRODUCTION_ROUTER_ENABLED: False (unverified safety)
+    - PRODUCTION_ROUTER_ENABLED: off unless PRODUCTION_ROUTER_ENABLED=true is set
+      explicitly; omission leaves it off in every environment (ENV-04)
     - API_ORDERS_ENABLED: True (verified safe with idempotency)
+
+    ENV-04. This docstring used to say ``PRODUCTION_ROUTER_ENABLED: False (unverified
+    safety)`` while the line below defaulted it to ``"True"`` — the docstring and the code
+    one line apart disagreeing about whether an execution surface is mounted. The code now
+    matches, and both this class and ``safety_config.ExecutionFlags`` read the one
+    definition in ``safety_config.production_router_enabled()`` instead of each carrying a
+    copy of the same ``os.getenv`` line.
     """
     
     # ---------------------------------------------------------
     # SAFETY LOCKS - Phase 1 Refactor (Now Environment Driven)
     # ---------------------------------------------------------
-    PRODUCTION_ROUTER_ENABLED: bool = os.getenv("PRODUCTION_ROUTER_ENABLED", "True").lower() == "true"
+    #: ENV-04: read from the single authoritative definition, fail closed. See
+    #: safety_config.production_router_enabled().
+    PRODUCTION_ROUTER_ENABLED: bool = production_router_enabled()
     TEST_MODE_ENABLED: bool = True
     LIVE_TRADING_ENABLED: bool = get_vyomquant_mode("") == "live"
     

@@ -537,7 +537,22 @@ class DistributedIdempotencyLayer:
                     
         except Exception as e:
             logger.error(f"Atomic check-and-set failed for {key}: {e}")
-            # Fallback to non-atomic behavior if Lua script fails
+            # RED-01: this used to return (None, False) unconditionally -- "no cached
+            # result, lock not acquired" is indistinguishable here from an ordinary
+            # contended lock, so a Redis outage during this FIN-CRITICAL idempotency
+            # check read as "proceed, nothing is cached and nothing is held" rather
+            # than "unknown, and unknown must not be treated as safe to execute". Its
+            # own sibling, start_processing, already raises in production for exactly
+            # this reason; this path silently did not. Mirrored here for the same
+            # reason: a duplicate-execution risk this method exists to prevent is not
+            # something to wave through because the one check that would have caught
+            # it could not run.
+            if _is_production():
+                raise RuntimeError(
+                    f"CRITICAL: Redis unavailable during atomic idempotency check-and-set "
+                    f"for order {client_order_id} (tenant {tenant_id}). Operation blocked "
+                    f"to prevent duplicate execution in production."
+                )
             return None, False
 
     async def start_processing(

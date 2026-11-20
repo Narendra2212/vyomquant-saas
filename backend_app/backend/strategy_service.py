@@ -239,6 +239,74 @@ def _next_version_string(existing_rows: Any) -> str:
     return f"v{highest + 1}.0"
 
 
+class PlanLimitRefused(Exception):
+    """A deploy refused by the PLAN (feature not included, or allowance used up).
+
+    Its own type so the route answers 403 with the stable ``code`` instead of the generic
+    ``ValueError`` mapping, which reported "Quota exceeded" as **404 VERSION_NOT_FOUND** --
+    the UI then told the user their strategy version did not exist.
+    """
+
+    http_status = 403
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class DeploymentConflict(PlanLimitRefused):
+    """DEPLOY-DUP-01: the strategy already has an active deployment (409, not a raw 23505)."""
+
+    http_status = 409
+
+
+#: DEPLOY-DUP-01: the statuses ``uq_strategy_deployments_one_live_per_user`` treats as active
+#: -- (user_id, strategy_id) may hold ONE row in any of them, whatever its mode.
+ACTIVE_DEPLOYMENT_STATUSES = (
+    "deploying", "deployed", "pending", "queued", "starting", "restarting",
+    "running", "active", "paused",
+)
+
+
+def _active_deployment_message(row: Mapping[str, Any]) -> str:
+    mode = str(row.get("mode") or row.get("environment") or "").lower() or "existing"
+    status = str(row.get("status") or "active").lower()
+    action = "Resume or stop it" if status == "paused" else "Pause or stop it"
+    return (
+        f"This strategy already has a {mode} deployment that is {status}. "
+        f"{action} before deploying it again."
+    )
+
+
+#: QUOTA-MODE-01: the stable refusal codes ``subscription_dependencies`` already uses.
+QUOTA_REFUSAL_CODES = {
+    "paper_strategies": "PAPER_STRATEGY_LIMIT_REACHED",
+    "bots": "LIVE_STRATEGY_LIMIT_REACHED",
+}
+
+
+def _allowance_message(plan_key: Any, kind: str, limit: Any, used: Any) -> str:
+    """The refusal sentence for a used-up (or absent) allowance."""
+    if not limit:
+        return (f"Your {plan_key} plan does not include running {kind}. "
+                "Upgrade your plan to continue.")
+    return (f"Your {plan_key} plan allows {limit} running {kind} and {used} are in use. "
+            "Stop one, or upgrade your plan to continue.")
+
+
+def deployment_quota_resource(mode: Any, environment: Any = None) -> str:
+    """The plan allowance a deployment occupies: paper strategies for paper, bots for live.
+
+    ``mode`` is the constrained column; ``environment`` is the legacy fallback. Anything
+    not recognisably paper counts against the live allowance, the stricter of the two.
+    """
+    from backend_app.core.subscription_engine import Resource
+
+    value = str(mode or environment or "").strip().lower()
+    return Resource.PAPER_STRATEGIES.value if value == "paper" else Resource.BOTS.value
+
+
 class DeployPrerequisiteError(Exception):
     """Raised when a version fails the deploy prerequisite gate (Requirement 10.4).
 
@@ -1529,56 +1597,67 @@ class StrategyService:
             raise ValueError(f"Version {version} not found")
         
         restored_version = version_res.data[0]
-        
-        # Mark current version as not current
-        q2 = (sb.table("strategy_versions")
-                      .select("*")
-                      .eq("strategy_id", strategy_id)
-                      .eq("is_current", True)
-                      .execute())
-        current_res = await q2 if inspect.isawaitable(q2) else q2
-        
-        if current_res and current_res.data:
-            q3 = sb.table("strategy_versions").update({"is_current": False}).eq("id", current_res.data[0]["id"]).execute()
-            if inspect.isawaitable(q3):
-                await q3
-        
-        # Get current version number to increment
-        version_parts = version.replace("v", "").split(".")
-        major, minor = int(version_parts[0]), int(version_parts[1]) if len(version_parts) > 1 else 0
-        minor += 1
-        new_version_str = f"v{major}.{minor}"
-        
-        # Create new version with restored blueprint
-        new_version_data = {
-            "id": str(uuid4()),
-            "strategy_id": strategy_id,
-            "version": new_version_str,
-            "blueprint": restored_version["blueprint"],
-            "is_draft": True,
-            "is_current": True,
-            "restored_from": version,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        q4 = sb.table("strategy_versions").insert(new_version_data).execute()
-        version_result = await q4 if inspect.isawaitable(q4) else q4
-        
-        # Update strategy current version. Tenant-scoped, like every other write on this
-        # path: `id` alone would be correct only while RLS is in force.
-        q5 = (
-            sb.table("strategies")
-            .update({"current_version": new_version_str})
-            .eq("id", strategy_id)
-            .eq("user_id", user["id"])
-            .execute()
+
+        # VER-01: this used to INSERT a bare row carrying only the old blueprint - no
+        # compiled_plan, no dag_hash, validation_state left UNVALIDATED, lifecycle_state
+        # unset - and label it v{major}.{minor+1}. That row could never be deployed
+        # ("validation_state is 'UNVALIDATED' (must be 'VALID')"), even though the deploy
+        # refusal for a STOPPED version tells the user to "restore this one", and restoring
+        # the same version twice minted a duplicate label. A restore is a save of an old
+        # graph, so it goes through the one save path every other version takes: compile
+        # first (an invalid graph raises before anything is written), READY when there is
+        # nothing to train, the ML entitlement/quota gates when there is, the next free
+        # version label, and is_current / strategies.current_version moved only after the
+        # INSERT succeeded.
+        from backend_app.backend.strategy_dag.schema import GraphParseError, load_graph
+
+        graph_source = restored_version.get("graph_json") or restored_version.get("blueprint")
+        try:
+            graph = load_graph(graph_source)
+        except GraphParseError as exc:
+            # Not "not found" - the version exists and is this user's. A CompilerError, as
+            # clone_strategy raises for the same case, which the router answers 422.
+            from backend_app.backend.strategy_compiler import CompilerError
+
+            raise CompilerError(
+                f"Version {version} carries no readable graph and cannot be restored: {exc}"
+            ) from exc
+
+        # Same rule as the builder save (routers/strategies._persist_current_version,
+        # VERSION-READY-01): no model block -> READY and not a draft, deployable at once; a
+        # model block -> a VALIDATED draft that only the training worker moves on.
+        compiled = compile_version(graph, None)
+        no_model_block = not getattr(compiled.plan, "ml_nodes", None)
+        saved = await self.create_version(
+            user,
+            strategy_id,
+            graph,
+            compiled=compiled,
+            blueprint=restored_version.get("blueprint"),
+            make_current=True,
+            lifecycle_state=LIFECYCLE_READY if no_model_block else LIFECYCLE_VALIDATED,
+            is_draft=not no_model_block,
         )
-        if inspect.isawaitable(q5):
-            await q5
-        
-        logger.info(f"Restored version {version} as {new_version_str} for strategy {strategy_id}")
-        
-        return version_result.data[0] if version_result and version_result.data else new_version_data
+        new_row = dict(saved.get("version") or {})
+
+        # Provenance. Written after the save, scoped to the row just created.
+        if new_row.get("id"):
+            q_prov = (
+                sb.table("strategy_versions")
+                .update({"restored_from": version})
+                .eq("id", new_row["id"])
+                .execute()
+            )
+            if inspect.isawaitable(q_prov):
+                await q_prov
+            new_row["restored_from"] = version
+
+        logger.info(
+            f"Restored version {version} as {new_row.get('version')} for strategy "
+            f"{strategy_id} (lifecycle_state={saved.get('lifecycle_state')}, "
+            f"validation_state={saved.get('validation_state')})"
+        )
+        return new_row
 
     async def _load_deployable_version(
         self, sb: Any, user: dict, strategy_id: str, version: str
@@ -1746,12 +1825,153 @@ class StrategyService:
             sb, user, version_data, strategy_id, version, request
         )
 
+        entitlement = await self._live_entitlement_condition(sb, user, request, environment)
+        allowance = await self._plan_allowance_condition(sb, user, request, environment)
+        active = await self._no_active_deployment_condition(sb, user, strategy_id)
+        plan_conditions = tuple(c for c in (entitlement, allowance, active) if c is not None)
+
         return db_binding.BindingSummary(
-            conditions=(prerequisite, *summary.conditions),
+            conditions=(prerequisite, *plan_conditions, *summary.conditions),
             # The binding the write path would create is reported only when the write path
             # would in fact create one, so a failed prerequisite cannot travel with a
             # binding that describes a deployment that is not going to happen.
             binding=summary.binding if prerequisite.passed else None,
+        )
+
+    async def _active_deployment_of(self, sb, user: dict, strategy_id: str):
+        """DEPLOY-DUP-01: this strategy's active deployment row, or ``None``."""
+        q = (sb.table("strategy_deployments").select("id, mode, environment, status")
+             .eq("strategy_id", str(strategy_id)).eq("user_id", user["id"]).execute())
+        res = await q if inspect.isawaitable(q) else q
+        for row in getattr(res, "data", None) or []:
+            if str(row.get("status") or "").lower() in ACTIVE_DEPLOYMENT_STATUSES:
+                return row
+        return None
+
+    async def _no_active_deployment_condition(self, sb, user: dict, strategy_id: str):
+        """DEPLOY-DUP-01: report the one-active-deployment rule before submit.
+
+        Found on 2026-11-15: a strategy with a PAUSED paper deployment offered Deploy, and the
+        live deploy failed with the database's raw ``duplicate key value violates unique
+        constraint "uq_strategy_deployments_one_live_per_user"``. The rule is right (it is
+        what prevents a second bot); the preflight now names it so Deploy is disabled with a
+        sentence saying what to do. Unreadable -> pending, never passed.
+        """
+        from backend_app.backend import deployment_binding as db_binding
+
+        try:
+            row = await self._active_deployment_of(sb, user, strategy_id)
+        except Exception as exc:  # noqa: BLE001
+            return db_binding.BindingCondition(
+                name="no_active_deployment",
+                status=db_binding.CONDITION_PENDING,
+                code=db_binding.CONDITION_NOT_EVALUATED,
+                reason=f"existing deployments could not be read: {exc}",
+            )
+        if row is None:
+            return db_binding.BindingCondition(
+                name="no_active_deployment", status=db_binding.CONDITION_PASSED
+            )
+        return db_binding.BindingCondition(
+            name="no_active_deployment",
+            status=db_binding.CONDITION_FAILED,
+            code="STRATEGY_ALREADY_DEPLOYED",
+            message=_active_deployment_message(row),
+            detail={"deployment_id": str(row.get("id")), "status": row.get("status"),
+                    "mode": row.get("mode")},
+            http_status=409,
+        )
+
+    async def _plan_allowance_condition(self, sb, user: dict, request, environment: str):
+        """QUOTA-MODE-01: whether the plan has a free slot for this kind of deployment.
+
+        Read-only, by contract: the preflight is polled every two seconds, so it reads the
+        meter and never reserves. The write path's ``reserve_quota`` stays authoritative
+        (two concurrent deploys can both see the last slot here; only one gets it there).
+        Uses the same resource and the same limit the write path reserves against.
+        """
+        from backend_app.backend import deployment_binding as db_binding
+
+        resource = deployment_quota_resource(getattr(request, "mode", None), environment)
+        try:
+            from backend_app.core.subscription_dependencies import get_user_plan
+            from backend_app.core.subscription_engine import SubscriptionEngine
+
+            plan_key = await get_user_plan(user["id"], sb)
+            limit = SubscriptionEngine.get_quota_limit(plan_key, resource)
+            if SubscriptionEngine.is_unlimited(limit):
+                return db_binding.BindingCondition(
+                    name="plan_allowance", status=db_binding.CONDITION_PASSED,
+                    detail={"plan": plan_key, "resource": resource, "limit": "unlimited"},
+                )
+            used = await SubscriptionEngine.get_quota_usage(user["id"], resource)
+        except Exception as exc:  # noqa: BLE001
+            return db_binding.BindingCondition(
+                name="plan_allowance",
+                status=db_binding.CONDITION_PENDING,
+                code=db_binding.CONDITION_NOT_EVALUATED,
+                reason=f"the plan allowance could not be read: {exc}",
+            )
+        detail = {"plan": plan_key, "resource": resource, "used": used, "limit": limit}
+        if used < limit:
+            return db_binding.BindingCondition(
+                name="plan_allowance", status=db_binding.CONDITION_PASSED, detail=detail
+            )
+        kind = "paper strategies" if resource == "paper_strategies" else "live strategies"
+        return db_binding.BindingCondition(
+            name="plan_allowance",
+            status=db_binding.CONDITION_FAILED,
+            code=QUOTA_REFUSAL_CODES.get(resource, "QUOTA_EXCEEDED"),
+            message=_allowance_message(plan_key, kind, limit, used),
+            detail={**detail, "upgrade_url": "/app/billing"},
+            http_status=403,
+        )
+
+    async def _live_entitlement_condition(self, sb, user: dict, request, environment: str):
+        """LIVE-PLAN-01: the plan gate the write path enforces, reported by the preflight.
+
+        Found during the launch new-user run: a Free user's live preflight said only "bind
+        an exchange account". They would connect keys, open the modal again, and learn at
+        the final Deploy that "Live trading requires a paid subscription plan" -- the
+        write path's check (``deploy_version``), which the preflight never reported. Same
+        check, same plan resolution; ``None`` for a paper deploy, where it does not apply.
+        A plan that cannot be read is ``pending``, never ``passed``.
+        """
+        from backend_app.backend import deployment_binding as db_binding
+
+        mode = str(getattr(request, "mode", None) or environment or "").lower()
+        if mode != db_binding.MODE_LIVE:
+            return None
+        try:
+            from backend_app.core.subscription_dependencies import get_user_plan
+            from backend_app.core.subscription_engine import Feature, SubscriptionEngine
+
+            plan_key = await get_user_plan(user["id"], sb)
+            has_live = await SubscriptionEngine.check_feature_entitlement(
+                user["id"], plan_key, Feature.LIVE_TRADING.value
+            )
+        except Exception as exc:  # noqa: BLE001
+            return db_binding.BindingCondition(
+                name="live_entitlement",
+                status=db_binding.CONDITION_PENDING,
+                code=db_binding.CONDITION_NOT_EVALUATED,
+                reason=f"the plan could not be read, so live access was not checked: {exc}",
+            )
+        if has_live:
+            return db_binding.BindingCondition(
+                name="live_entitlement", status=db_binding.CONDITION_PASSED,
+                detail={"plan": plan_key},
+            )
+        return db_binding.BindingCondition(
+            name="live_entitlement",
+            status=db_binding.CONDITION_FAILED,
+            code="LIVE_TRADING_NOT_INCLUDED",
+            message=(
+                f"Live trading is not included in your {plan_key} plan. Upgrade to Starter "
+                "or above to deploy live, or deploy in paper mode."
+            ),
+            detail={"plan": plan_key, "upgrade_url": "/app/billing"},
+            http_status=403,
         )
 
     async def deploy_version(
@@ -1834,7 +2054,76 @@ class StrategyService:
         # without its account reference (task 8.1's obligation).
         binding_columns = await db_binding.binding_columns_supported(sb)
         db_binding.assert_binding_storable(binding, columns_available=binding_columns)
-        
+
+        # LIVE-DEPLOY-01: a LIVE binding is refused here, before any quota is reserved or
+        # any row written, unless the PLATFORM is live for this tenant - the same check the
+        # order path makes at the venue boundary (RT-15). Without it, a live deployment row
+        # could be created on a paper platform and only fail at its first order.
+        if binding.mode == db_binding.MODE_LIVE:
+            from backend_app.core.live_execution_gate import (
+                LiveExecutionRefused, assert_platform_live_trading_enabled)
+
+            try:
+                assert_platform_live_trading_enabled(user["id"])
+            except LiveExecutionRefused as exc:
+                raise db_binding.DeployRejected(
+                    exc.code,
+                    f"Live deployment refused: {exc.detail}",
+                    {"mode": binding.mode},
+                    http_status=403,
+                ) from exc
+
+        # RT-02: the runtime blueprint the fleet will be started with. Built (and so
+        # validated) BEFORE quota is reserved and before any row is written, so a version the
+        # runtime cannot start is refused with a 422 and leaves nothing behind -- it used to be
+        # discovered by BotRunner AFTER the deployment row existed and the quota was spent.
+        # The id here is a placeholder: only the final one, minted below, is ever started.
+        from backend_app.backend import deployment_runtime as dep_runtime
+
+        def _runtime_blueprint(for_deployment_id: str) -> Dict[str, Any]:
+            raw_blueprint = version_data.get("blueprint")
+            is_graph = (
+                isinstance(raw_blueprint, Mapping)
+                and isinstance(raw_blueprint.get("nodes"), list)
+                and bool(raw_blueprint.get("nodes"))
+            )
+            if not is_graph:
+                # A pre-canonical (version-1) row can legitimately carry the legacy
+                # buy_logic/sell_logic/risk document. It runs on the legacy evaluator exactly as
+                # before -- but only if it is actually startable; anything else is refused now,
+                # not after the row exists.
+                try:
+                    assert_blueprint_startable(raw_blueprint, strategy_id=strategy_id)
+                except DeployBlueprintIncomplete as exc:
+                    raise db_binding.DeployRejected(
+                        "RUNTIME_BLUEPRINT_NOT_STARTABLE", str(exc), http_status=422
+                    ) from exc
+                # DEPLOY-01: the legacy evaluator reaches the SAME BotRunner._inner_loop
+                # execution-config gate the graph evaluator does, so this binding's
+                # execution_config travels with the legacy blueprint too, not only the
+                # graph one.
+                if isinstance(raw_blueprint, dict):
+                    return {**raw_blueprint, "execution_config": dict(binding.execution_config or {})}
+                return raw_blueprint
+            try:
+                return dep_runtime.build_runtime_blueprint(
+                    version_data,
+                    deployment_id=for_deployment_id,
+                    strategy_id=strategy_id,
+                    symbol=binding.symbol,
+                    timeframe=binding.timeframe,
+                    exchange_id=binding.exchange_id,
+                    mode=binding.mode,
+                    market_type=binding.market_type,
+                    execution_config=binding.execution_config,
+                )
+            except dep_runtime.RuntimeBlueprintError as exc:
+                raise db_binding.DeployRejected(
+                    "RUNTIME_BLUEPRINT_NOT_STARTABLE", str(exc), http_status=422
+                ) from exc
+
+        _runtime_blueprint("pending")
+
         # Check quota and entitlements
         from backend_app.core.subscription_engine import SubscriptionEngine, Resource, Feature
         from backend_app.core.subscription_dependencies import get_user_plan
@@ -1847,11 +2136,35 @@ class StrategyService:
         if binding.mode == db_binding.MODE_LIVE or environment == "live":
             has_live = await SubscriptionEngine.check_feature_entitlement(user["id"], plan_key, Feature.LIVE_TRADING.value)
             if not has_live:
-                raise ValueError("Live trading requires a paid subscription plan.")
-        
-        allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BOTS.value)
+                raise PlanLimitRefused(
+                    "LIVE_TRADING_NOT_INCLUDED",
+                    f"Live trading is not included in your {plan_key} plan. Upgrade to "
+                    "Starter or above to deploy live, or deploy in paper mode.",
+                )
+
+        # DEPLOY-DUP-01: one active deployment per strategy (the unique index's own rule),
+        # checked BEFORE any quota is reserved, so a refusal costs nothing and reads as a
+        # sentence instead of the database's raw 23505.
+        try:
+            _existing = await self._active_deployment_of(sb, user, strategy_id)
+        except Exception as _exc:  # noqa: BLE001 - the unique index still guards the insert
+            logger.warning("active-deployment pre-check unreadable for %s: %s", strategy_id, _exc)
+            _existing = None
+        if _existing is not None:
+            raise DeploymentConflict("STRATEGY_ALREADY_DEPLOYED", _active_deployment_message(_existing))
+
+        # QUOTA-MODE-01: a PAPER deployment draws on the plan's paper-strategy allowance and
+        # a LIVE one on its live-bot allowance. Every deploy used to reserve `bots`, which
+        # the Free plan sets to 0 -- so a Free user could not run even the one paper
+        # strategy their plan includes ("Quota exceeded for bots: 0/0").
+        quota_resource = deployment_quota_resource(binding.mode, environment)
+        allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, quota_resource)
         if not allowed:
-            raise ValueError(f"Quota exceeded for bots: {current_usage}/{limit}. Upgrade your plan to continue.")
+            kind = "paper strategies" if quota_resource == Resource.PAPER_STRATEGIES.value else "live strategies"
+            raise PlanLimitRefused(
+                QUOTA_REFUSAL_CODES.get(quota_resource, "QUOTA_EXCEEDED"),
+                _allowance_message(plan_key, kind, limit, current_usage),
+            )
 
         # Create deployment
         deployment_id = str(uuid4())
@@ -1948,7 +2261,7 @@ class StrategyService:
                     strategy_id,
                 )
                 await SubscriptionEngine.decrement_quota_usage(
-                    user["id"], Resource.BOTS.value
+                    user["id"], quota_resource
                 )
                 from backend_app.backend.strategy_archive import \
                     assert_strategy_not_archived
@@ -1959,8 +2272,36 @@ class StrategyService:
                     strategy_id=strategy_id,
                 )
 
+        # LIVE-DEPLOY-01: SEC-16's trigger (migration 034) lets the browser roles insert
+        # PAPER deployments only, so the user-scoped client cannot write a LIVE row - by
+        # design: a live row must be written by a trusted server role, and only AFTER the
+        # server-side gates. Every one of them has run by this point: version ownership,
+        # every binding gate (account ownership included, under the caller's own RLS plus
+        # an explicit user_id filter), the LIVE_TRADING entitlement, the platform live gate
+        # above, and the archival re-check. `user_id` is the authenticated caller's. So the
+        # one INSERT goes through the service-role client for a live binding and nothing
+        # else changes: every later write on this row is a lifecycle column the
+        # user-scoped client may still update.
+        insert_client = sb
+        if binding.mode == db_binding.MODE_LIVE:
+            from backend_app.core.dependencies import get_service_supabase
+
+            try:
+                insert_client = get_service_supabase()
+            except Exception:  # noqa: BLE001 - mapped to a classified 503 below
+                insert_client = None
+            if insert_client is None:
+                await SubscriptionEngine.decrement_quota_usage(user["id"], quota_resource)
+                raise db_binding.DeployRejected(
+                    "LIVE_DEPLOY_WRITER_UNAVAILABLE",
+                    "A live deployment cannot be recorded: the platform's trusted "
+                    "database client is not configured. Nothing was deployed.",
+                    {"mode": binding.mode},
+                    http_status=503,
+                )
+
         try:
-            q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
+            q2 = insert_client.table("strategy_deployments").insert(deployment_data).execute()
             deployment_result = await q2 if inspect.isawaitable(q2) else q2
         except Exception as exc:  # noqa: BLE001 - classified below, never swallowed
             if binding_stored and db_binding.is_missing_binding_column_error(exc):
@@ -1974,12 +2315,12 @@ class StrategyService:
                 for column in db_binding.BINDING_COLUMNS:
                     deployment_data.pop(column, None)
                 binding_stored = False
-                q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
+                q2 = insert_client.table("strategy_deployments").insert(deployment_data).execute()
                 deployment_result = await q2 if inspect.isawaitable(q2) else q2
             else:
                 # A genuine write failure. Release the quota this attempt reserved, then
                 # let it surface: a deployment that was not recorded must not be counted.
-                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
+                await SubscriptionEngine.decrement_quota_usage(user["id"], quota_resource)
                 raise
         
         # Update strategy status
@@ -2057,7 +2398,7 @@ class StrategyService:
             success, message = await app_state.fleet.start_bot(
                 user_id=user["id"],
                 symbol=binding.symbol,
-                blueprint=version_data["blueprint"],
+                blueprint=_runtime_blueprint(deployment_id),
                 paper_trading=(binding.mode != db_binding.MODE_LIVE),
             )
             
@@ -2107,7 +2448,7 @@ class StrategyService:
                     metadata={"action": lifecycle.ACTION_DEPLOY},
                 )
             else:
-                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
+                await SubscriptionEngine.decrement_quota_usage(user["id"], quota_resource)
                 q5 = sb.table("strategy_deployments").update({
                     "status": "failed",
                     "error_message": message
@@ -2293,9 +2634,11 @@ class StrategyService:
             plan.target_state == lifecycle.BINDING_STOPPED
             and plan.current_state == lifecycle.BINDING_RUNNING
         ):
-            from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+            from backend_app.core.subscription_engine import SubscriptionEngine
 
-            await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
+            await SubscriptionEngine.decrement_quota_usage(
+                user["id"], deployment_quota_resource(row.get("mode"), row.get("environment"))
+            )
 
         version_row = await lifecycle.load_version_row(
             sb, user_id=user["id"], version_id=str(row.get("version_id") or "")
@@ -3044,32 +3387,49 @@ class StrategyService:
 
         deployment = deployment_res.data[0]
 
-        # Stop via FleetManager
+        # Stop via FleetManager.
+        #
+        # RT-08. This used to pass `deployment["exchange_id"]` -- the VENUE -- as the symbol the
+        # fleet keys its bots on, so it never matched a bot, and then wrote `stopped` regardless:
+        # a bot kept trading while the row, the quota and the UI said it had stopped. It now
+        # (1) stops by the deployment's real symbol, and (2) when the bot is not in THIS process
+        # writes a durable `stopping` request that the owning process honours on its next
+        # heartbeat and confirms by writing `stopped`. `stopped` is only ever written once a
+        # runtime has actually stopped.
         from backend_app.core.state import app_state
-        if hasattr(app_state, 'fleet'):
-            success, message = await app_state.fleet.stop_bot(
+        stopped_here = False
+        if hasattr(app_state, 'fleet') and deployment.get("exchange_symbol"):
+            stopped_here, _stop_msg = await app_state.fleet.stop_bot(
                 user_id=user["id"],
-                symbol=deployment["exchange_id"]
+                symbol=deployment["exchange_symbol"],
             )
-        
-        # Update deployment status
-        q2 = sb.table("strategy_deployments").update({
+        final_status = "stopped"
+        stop_patch = {
             "status": "stopped",
             "stopped_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", deployment_id).execute()
+        }
+        if not stopped_here and deployment.get("status") in ("running", "deploying"):
+            final_status = "stopping"
+            stop_patch = {"status": "stopping"}
+
+        # Update deployment status
+        q2 = sb.table("strategy_deployments").update(stop_patch).eq("id", deployment_id).execute()
         if inspect.isawaitable(q2):
             await q2
 
         # 1.24/8.5: publish STRATEGY_STATUS immediately after the write above commits.
         await self._publish_strategy_status(
-            user, deployment["strategy_id"], "stopped",
+            user, deployment["strategy_id"], final_status,
             environment=deployment.get("environment"),
         )
 
         # Decrement quota if it was running
         if deployment.get("status") == "running":
-            from backend_app.core.subscription_engine import SubscriptionEngine, Resource
-            await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
+            from backend_app.core.subscription_engine import SubscriptionEngine
+            await SubscriptionEngine.decrement_quota_usage(
+                user["id"],
+                deployment_quota_resource(deployment.get("mode"), deployment.get("environment")),
+            )
         
         # Check if strategy has other running deployments
         q3 = (sb.table("strategy_deployments")
@@ -3101,11 +3461,13 @@ class StrategyService:
         if not sb:
             return 0
 
-        # Get all running deployments
+        # Get every deployment that is still live. PAUSE-01: `paused` too -- a paused
+        # deployment holds its bot slot and its exchange binding, and a Stop that skipped it
+        # left the strategy undeletable (archive refuses while one is active).
         q1 = (sb.table("strategy_deployments")
                         .select("*")
                         .eq("strategy_id", strategy_id)
-                        .eq("status", "running")
+                        .in_("status", ["running", "paused"])
                         .execute())
         running_res = await q1 if inspect.isawaitable(q1) else q1
 
@@ -3116,6 +3478,35 @@ class StrategyService:
 
         return stopped_count
     
+    async def transition_all_deployments(
+        self, user: dict, strategy_id: str, action: str, from_status: str
+    ) -> int:
+        """PAUSE-01: pause or resume every deployment of a strategy in ``from_status``.
+
+        Goes through :meth:`transition_deployment` -- the same gate, audit and lifecycle
+        write the per-deployment routes use -- so a strategy-level Pause is a real pause:
+        the deployment keeps its exchange binding and mode (a LIVE bot stays live), its bot
+        stops placing orders (the fleet heartbeat honours ``paused``), and Resume continues
+        the SAME deployment instead of starting a new paper one. Returns how many moved.
+        """
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if not sb:
+            return 0
+        q = (sb.table("strategy_deployments").select("id")
+             .eq("strategy_id", strategy_id).eq("user_id", user["id"])
+             .eq("status", from_status).execute())
+        res = await q if inspect.isawaitable(q) else q
+        moved = 0
+        for row in (getattr(res, "data", None) or []):
+            try:
+                out = await self.transition_deployment(user, str(row["id"]), action)
+                if not out.get("idempotent"):
+                    moved += 1
+            except Exception as exc:  # noqa: BLE001 - one refusal must not strand the rest
+                logger.warning("%s of deployment %s refused: %s", action, row.get("id"), exc)
+        return moved
+
     async def pause_strategy(self, user: dict, strategy_id: str) -> bool:
         """
         Pause a running Strategy (stops all deployments).
@@ -4561,7 +4952,7 @@ async def fetch_training_bars(symbol: str, timeframe: str, bars: int) -> List[Li
     """
     import os
 
-    from backend_app.backend.connection_engine import ConnectionEngine
+    from backend_app.backend.connection_engine import get_public_exchange
     from backend_app.backend.data_seeking_engine import DataEngine
 
     venue = os.getenv("DEFAULT_EXCHANGE")
@@ -4575,7 +4966,8 @@ async def fetch_training_bars(symbol: str, timeframe: str, bars: int) -> List[Li
         )
 
     try:
-        engine = DataEngine(await ConnectionEngine(exchange_id=venue).connect())
+        # PERF-01: the pooled public client (see connection_engine.get_public_exchange).
+        engine = DataEngine(await get_public_exchange(venue))
         return await engine.fetch_historical_ohlcv(symbol, timeframe, limit=int(bars))
     except TrainingBlocked:
         raise

@@ -44,6 +44,10 @@ import wsClient from '../websocketClient';
 // already returned (design.md §17.2).
 // ═══════════════════════════════════════════════════════════════════════════
 import { token } from '../design/tokens';
+import { alpha } from '../design/alpha';
+// PROFILE-REORG-01 / Task 10: preferences live with the notifications they govern, not on
+// Profile. Self-contained — it reads and writes its own settings, so this page passes nothing.
+import { NotificationPreferences } from './NotificationPreferences';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CATEGORY CONFIGURATION
@@ -254,9 +258,16 @@ function NotificationCenter() {
 
   // ── Render Loading ─────────────────────────────────────────────────────────
   if (loading && notifications.length === 0) {
+    /*
+      LAYOUT-01: `100%`, not `100vh`. `/app/notifications` renders inside the shell's
+      `<main>`, which is the `1fr` row of App.jsx's `min-content 1fr` grid — so the height
+      available here is the viewport MINUS the TopBar and its strip. `100vh` overflowed the
+      document by exactly that chrome height and scrolled a centred spinner out of view.
+    */
     return (
       <div style={{ 
-        height: '100vh', 
+        height: '100%', 
+        minHeight: 0,
         display: 'flex', 
         alignItems: 'center', 
         justifyContent: 'center',
@@ -268,19 +279,26 @@ function NotificationCenter() {
     );
   }
 
+  /*
+    LAYOUT-01: `minHeight: '100%'`, not `'100vh'`. Same reason as the loading branch above —
+    this is an ordinary scrolling page, so it asks to be at least as tall as the `<main>` it
+    sits in (which is what makes the canvas background cover) and lets `<main>`'s own
+    `overflowY: 'auto'` do the scrolling when there are more notifications than fit. `100vh`
+    guaranteed a document scrollbar even with a single notification.
+  */
   return (
     <div style={{ 
       padding: '24px', 
       maxWidth: '1200px', 
       margin: '0 auto',
       background: token.surface.canvas,
-      minHeight: '100vh'
+      minHeight: '100%'
     }}>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ background: `${token.brand.base}15`, border: `1px solid ${token.brand.base}40`, borderRadius: 10, padding: 8 }}>
+            <div style={{ background: `${alpha(token.brand.base, 8)}`, border: `1px solid ${alpha(token.brand.base, 25)}`, borderRadius: 10, padding: 8 }}>
               <Bell size={24} color={token.brand.base} />
             </div>
             <div>
@@ -315,8 +333,8 @@ function NotificationCenter() {
               display: 'flex', 
               alignItems: 'center', 
               gap: 6,
-              background: wsConnected ? `${token.status.profit.fg}15` : `${token.status.loss.fg}15`,
-              border: `1px solid ${wsConnected ? token.status.profit.fg : token.status.loss.fg}40`,
+              background: wsConnected ? `${alpha(token.status.profit.fg, 8)}` : `${alpha(token.status.loss.fg, 8)}`,
+              border: `1px solid ${alpha(wsConnected ? token.status.profit.fg : token.status.loss.fg, 25)}`,
               borderRadius: 20,
               padding: '4px 12px',
             }}>
@@ -362,8 +380,8 @@ function NotificationCenter() {
               <button
                 onClick={markAllAsRead}
                 style={{
-                  background: `${token.brand.base}15`,
-                  border: `1px solid ${token.brand.base}50`,
+                  background: `${alpha(token.brand.base, 8)}`,
+                  border: `1px solid ${alpha(token.brand.base, 31)}`,
                   borderRadius: 8,
                   padding: '8px 14px',
                   color: token.brand.base,
@@ -447,7 +465,7 @@ function NotificationCenter() {
           <button
             onClick={() => setUnreadOnly(!unreadOnly)}
             style={{
-              background: unreadOnly ? `${token.brand.base}20` : token.surface.raised,
+              background: unreadOnly ? `${alpha(token.brand.base, 13)}` : token.surface.raised,
               border: `1px solid ${unreadOnly ? token.brand.base : token.line.default}`,
               borderRadius: 8,
               padding: '6px 14px',
@@ -480,7 +498,7 @@ function NotificationCenter() {
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
                 style={{
-                  background: active ? `${token.brand.base}18` : token.surface.raised,
+                  background: active ? `${alpha(token.brand.base, 9)}` : token.surface.raised,
                   border: `1px solid ${active ? token.brand.base : token.line.default}`,
                   borderRadius: 6,
                   padding: '6px 12px',
@@ -506,8 +524,8 @@ function NotificationCenter() {
       {/* Error Banner */}
       {error && (
         <div style={{
-          background: `${token.status.loss.fg}15`,
-          border: `1px solid ${token.status.loss.fg}40`,
+          background: `${alpha(token.status.loss.fg, 8)}`,
+          border: `1px solid ${alpha(token.status.loss.fg, 25)}`,
           borderRadius: 8,
           padding: '12px 16px',
           marginBottom: 20,
@@ -578,7 +596,7 @@ function NotificationCenter() {
                 style={{
                   padding: '16px 20px',
                   borderBottom: idx < filteredNotifications.length - 1 ? `1px solid ${token.line.default}` : 'none',
-                  background: isUnread ? `${token.brand.base}07` : 'transparent',
+                  background: isUnread ? `${alpha(token.brand.base, 3)}` : 'transparent',
                   borderLeft: `3px solid ${isUnread ? token.brand.base : 'transparent'}`,
                   cursor: 'pointer',
                   transition: 'background 0.15s',
@@ -590,8 +608,8 @@ function NotificationCenter() {
                     width: 32,
                     height: 32,
                     borderRadius: 8,
-                    background: `${SEVERITY_COLORS[notification.severity] || token.brand.base}18`,
-                    border: `1px solid ${SEVERITY_COLORS[notification.severity] || token.brand.base}35`,
+                    background: `${alpha(SEVERITY_COLORS[notification.severity] || token.brand.base, 9)}`,
+                    border: `1px solid ${alpha(SEVERITY_COLORS[notification.severity] || token.brand.base, 21)}`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -619,7 +637,7 @@ function NotificationCenter() {
                           {notification.title}
                         </span>
                         <span style={{
-                          background: `${token.brand.base}15`,
+                          background: `${alpha(token.brand.base, 8)}`,
                           color: token.brand.base,
                           fontSize: 10,
                           padding: '1px 6px',
@@ -727,6 +745,15 @@ function NotificationCenter() {
           })
         )}
       </div>
+
+      {/*
+        PROFILE-REORG-01: the dispatch preferences, now in the module they govern.
+
+        Placed AFTER the notification list, not before it. Someone opening this page has come
+        to read what happened, not to configure what will happen next; eight switches above
+        the feed would make the common case scroll past the rare one.
+      */}
+      <NotificationPreferences className="mt-6" />
 
       <style>{`
         @keyframes spin {

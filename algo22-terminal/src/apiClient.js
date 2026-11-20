@@ -21,6 +21,7 @@ import axios from 'axios';
 import * as Sentry from "@sentry/react";
 import { CONFIG } from './config.js';
 import { supabase } from './supabase.js';
+import { carriesLiveSession } from './auth/sessionEvents.js';
 import { resetGlobalDedupCache } from './utils/eventDedupCache.js';
 
 /**
@@ -130,7 +131,10 @@ const API_BASE = CONFIG.apiBaseUrl;
 const REQUEST_TIMEOUT = CONFIG.REQUEST_TIMEOUT;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE = 1000; // 1 second base delay
-const CACHE_TTL = 60000; // 60 second cache TTL
+// Short on purpose: pages poll every 10-60 s (hooks/useAutoRefresh.js), and a longer TTL
+// would turn those polls into cache hits that show stale trading state. 5 s still merges
+// the duplicate reads several panels make while one page mounts.
+export const CACHE_TTL = 5000;
 const IDEMPOTENCY_TTL = 300000; // 5 minute idempotency key TTL
 const MAX_CACHE_SIZE = 100; // Max cache entries
 const MAX_PENDING_REQUESTS = 50; // Max concurrent pending requests
@@ -152,18 +156,6 @@ const cache = new Map();
  * Idempotency key storage for retries with expiration
  */
 const idempotencyKeys = new Map();
-
-/**
- * Get stable session identifier from sessionStorage using crypto.randomUUID()
- */
-const getSessionId = () => {
-  let sessionId = sessionStorage.getItem('api_session_id');
-  if (!sessionId) {
-    sessionId = `sess_${crypto.randomUUID()}`;
-    sessionStorage.setItem('api_session_id', sessionId);
-  }
-  return sessionId;
-};
 
 /**
  * Safe get pattern for cache reads - prevents race conditions
@@ -210,27 +202,27 @@ const generateRequestId = () => {
 };
 
 /**
- * Generate stable idempotency key from payload with session scoping
+ * FE-05: a per-request idempotency key, not a hash of request shape.
+ *
+ * This used to hash `${sessionId}_${url}_${payloadStr}` -- deterministic in exactly
+ * the wrong direction: two SEPARATE, deliberately-identical submissions (the same
+ * symbol/side/quantity placed twice in a row on purpose, or any other legitimate
+ * repeat of the same shape) collided onto the SAME key, so the backend's own
+ * idempotency check silently treated the second one as a duplicate retry of the
+ * first and dropped it. An idempotency key is supposed to identify ONE user intent
+ * (one click, one submit), not the shape of the request it produced.
+ *
+ * `crypto.randomUUID()` per call fixes that collision, at the cost of the one thing
+ * the hash incidentally provided for free: a manual retry of a FAILED request (same
+ * `config` re-sent) used to land on the same key by accident of identical content.
+ * That was never reliable (axios-retry or similar middleware isn't wired here, so
+ * nothing re-sends the exact same `config` object today), and the caller-supplied
+ * path below is the real fix for it: a component that wants retries of one intent to
+ * share a key generates its own UUID once and passes it as `options.idempotencyKey`
+ * (see `api/modules/strategies.js::deploy`), which this interceptor now honours
+ * instead of overwriting.
  */
-const generateIdempotencyKey = (url, data = {}) => {
-  const sessionId = getSessionId();
-  const payloadStr = JSON.stringify(data);
-  const hash = simpleHash(`${sessionId}_${url}_${payloadStr}`);
-  return `idemp_${hash}`;
-};
-
-/**
- * Simple hash function for idempotency keys
- */
-const simpleHash = (str) => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return Math.abs(hash).toString(36);
-};
+const generateIdempotencyKey = () => `idemp_${crypto.randomUUID()}`;
 
 /**
  * Normalize query params for consistent cache keys
@@ -590,7 +582,11 @@ export const logout = async () => {
 
 // Listen for Supabase token refreshes and propagate them
 supabase.auth.onAuthStateChange((event, session) => {
-  if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+  // `carriesLiveSession` rather than `'TOKEN_REFRESHED' || 'SIGNED_IN'`: that pair omitted
+  // `INITIAL_SESSION`, which is what supabase-js emits when it restores a persisted
+  // session, so every request this client made for a returning user went out unauthenticated
+  // until the first token refresh happened to fire. See `auth/sessionEvents.js`.
+  if (carriesLiveSession(event)) {
     if (session?.access_token) {
       sessionStorage.setItem("token", session.access_token);
       // Propagate to websocket layer if client is available
@@ -660,10 +656,13 @@ client.interceptors.request.use(
     config.headers['X-Request-ID'] = requestId;
     config.metadata = { requestId, startTime: Date.now() };
 
-    // Add stable idempotency key for mutating operations
+    // Add an idempotency key for mutating operations. FE-05: honour a key the
+    // caller already supplied (one UUID per user intent, e.g.
+    // api/modules/strategies.js::deploy's options.idempotencyKey) rather than
+    // overwriting it -- this interceptor used to clobber every caller-supplied key
+    // unconditionally.
     if (config.method !== 'get' && config.method !== 'GET') {
-      const data = config.data || {};
-      const idempKey = generateIdempotencyKey(config.url, data);
+      const idempKey = config.headers['Idempotency-Key'] || generateIdempotencyKey();
 
       // Enforce size limit
       enforceSizeLimit(idempotencyKeys, MAX_IDEMPOTENCY_KEYS);
@@ -1102,7 +1101,9 @@ export const post = (url, data = {}, config = {}) => {
       logSuccess(url, latency, 'POST');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })
@@ -1181,7 +1182,9 @@ export const put = (url, data = {}, config = {}) => {
       logSuccess(url, latency, 'PUT');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })
@@ -1259,7 +1262,9 @@ export const del = (url, config = {}) => {
       logSuccess(url, latency, 'DELETE');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })
@@ -1338,7 +1343,9 @@ export const patch = (url, data = {}, config = {}) => {
       logSuccess(url, latency, 'PATCH');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })
@@ -1416,6 +1423,33 @@ export const publicGet = async (url, params = {}) => {
 
   const data = await response.json();
   return data;
+};
+
+/**
+ * Public POST request (no auth) -- REF-UI-01: the signup form checks a referral code before
+ * any session exists.
+ * @param {string} url - API endpoint path
+ * @param {Object} [data] - JSON body
+ * @returns {Promise<any>} Response data
+ */
+export const publicPost = async (url, data = {}) => {
+  const fullUrl = `${API_BASE}${url}`;
+  const response = await fetch(fullUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const error = new ApiError(
+      errorData.message ||
+      (typeof errorData.detail === 'string' ? errorData.detail : null) ||
+      `HTTP error! status: ${response.status}`,
+      { url: fullUrl, method: 'POST', status: response.status, statusText: response.statusText, data: errorData }
+    );
+    throw error;
+  }
+  return response.json();
 };
 
 /**

@@ -1,22 +1,26 @@
 """
-routers/billing.py — Subscription management, Stripe + Razorpay webhooks.
+routers/billing.py — Subscription management and the Razorpay webhook.
+
+Razorpay is the ONLY payment gateway. Stripe was removed in full -- its webhook route,
+its customer-portal route, its credential branch, its cancel path and its lifecycle
+layer are all gone, not disabled. Notes below that described Stripe-only behaviour have
+been dropped with the code they described; the ones that remain are history that
+explains why the surviving code is shaped the way it is.
 
 SPRINT 2 SECURITY FIXES:
   F-09: DEV_MODE checkout no longer grants paid tiers. Returns mock URL only.
-  F-19: Stripe webhook returns HTTP 400 if item_key is absent from session
-        metadata instead of silently defaulting to 'elite_1999'.
   F-20: _apply_billing_entitlement writes ONLY to Supabase profiles table.
         SQLite SubscriptionModel / InvoiceModel storage is retired.
         Supabase is the single source of truth for billing state.
 
 PREVIOUS FIXES:
-  N1/N11: Stripe webhook reads the actual tier from session metadata.
   N2:     Razorpay webhook reads raw body FIRST (for signature verification),
           then parses as JSON — body stream cannot be read twice.
   N10:    Payment SDKs initialised lazily inside functions, not at import time.
   N4:     Cache invalidated immediately after successful payment.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -24,6 +28,7 @@ import logging
 import os
 import traceback
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional, List
 from uuid import UUID
 import ipaddress
@@ -32,9 +37,16 @@ import inspect
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request, Query)
 from backend_app.core.rate_limit import limiter
-# F-20: get_db retained ONLY for PaymentMethodModel display endpoints.
+# F-20: Session retained ONLY for PaymentMethodModel display endpoints.
 # Subscription tiers and invoice state are stored exclusively in Supabase.
 from sqlalchemy.orm import Session
+
+# TENANT-01: get_payment_methods / delete_payment_method use this, not core.database's
+# get_db. get_db connects as the table owner (every DSN in this repo does), which is
+# exempt from row security regardless of FORCE -- see
+# backend_app/migrations/047_tenant01_restricted_payment_methods_role.sql for why a
+# second, genuinely restricted connection was needed instead of a flag on this one.
+from backend_app.core.restricted_db import get_payment_methods_db
 
 # MARKETPLACE SETTLEMENT (task 19.2). ``settlement_service`` is the one Settlement_Record writer
 # and the only path that may set ``library_subscriptions.status='active'``; ``money`` owns the
@@ -46,8 +58,13 @@ from backend_app.core.cache import redis_manager
 from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user,
                                            get_request_supabase,
-                                           invalidate_profile_cache)
-from backend_app.core.database import get_db
+                                           invalidate_profile_cache,
+                                           require_aal2)
+from backend_app.core.webhook_idempotency import (
+    acquire_webhook_processing,
+    mark_webhook_completed,
+    release_webhook_processing,
+)
 from backend_app.core.realtime_sync import RealtimeSync
 from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
 from backend_app.core.schemas import CheckoutRequest, RazorpayVerificationRequest
@@ -98,49 +115,53 @@ def _validate_keys(provider: str) -> str:
 
     No credential VALUE is interpolated into any message here. The condition is named, and the
     required prefix is named; the value itself never enters a response body or a log line.
+
+    RAZORPAY IS THE ONLY GATEWAY, and an unrecognised provider now RAISES. This used to be
+    ``if provider == "stripe" / elif provider == "razorpay"`` with no ``else``, so any other
+    name fell off the end and returned ``None`` -- a silent pass in the one function the
+    whole system treats as the credential authority. It was unreachable because both callers
+    iterate :data:`_SUPPORTED_PROVIDERS`, but "unreachable" was a property of those callers,
+    not of this function.
     """
-    if provider == "stripe":
-        key = os.environ.get("STRIPE_SECRET_KEY")
-        if not key:
-            raise HTTPException(500, "Stripe is not configured: STRIPE_SECRET_KEY is not set.")
-        if key == "sk_test_dummy":
-            raise HTTPException(500, "Stripe is configured with the placeholder key 'sk_test_dummy'.")
-        if key.startswith("sk_test_"):
-            raise HTTPException(500, "Stripe is configured with a TEST secret key. Live credentials are required: a test key collects no money.")
-        if not key.startswith("sk_live_"):
-            raise HTTPException(500, "Stripe secret key is invalid: it must begin with 'sk_live_'.")
-        return key
-    elif provider == "razorpay":
-        key = os.environ.get("RAZORPAY_KEY_ID")
-        secret = os.environ.get("RAZORPAY_KEY_SECRET")
-        if not key:
-            raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_ID is not set.")
-        if key == "rzp_test_dummy":
-            raise HTTPException(500, "Razorpay is configured with the placeholder key 'rzp_test_dummy'.")
-        if key.startswith("rzp_test_"):
-            raise HTTPException(500, "Razorpay is configured with a TEST key id. Live credentials are required: a test key collects no money.")
-        if not key.startswith("rzp_live_"):
-            raise HTTPException(500, "Razorpay key ID is invalid: it must begin with 'rzp_live_'.")
-        if not secret:
-            raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_SECRET is not set.")
-        if secret == "dummy_secret":
-            raise HTTPException(500, "Razorpay is configured with the placeholder key secret 'dummy_secret'.")
-        return key
+    if provider != "razorpay":
+        raise HTTPException(
+            500,
+            f"Unsupported payment provider {provider!r}. Razorpay is the only gateway this "
+            f"platform is wired for, so there is no credential to validate.",
+        )
+    key = os.environ.get("RAZORPAY_KEY_ID")
+    secret = os.environ.get("RAZORPAY_KEY_SECRET")
+    if not key:
+        raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_ID is not set.")
+    if key == "rzp_test_dummy":
+        raise HTTPException(500, "Razorpay is configured with the placeholder key 'rzp_test_dummy'.")
+    if key.startswith("rzp_test_"):
+        raise HTTPException(500, "Razorpay is configured with a TEST key id. Live credentials are required: a test key collects no money.")
+    if not key.startswith("rzp_live_"):
+        raise HTTPException(500, "Razorpay key ID is invalid: it must begin with 'rzp_live_'.")
+    if not secret:
+        raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_SECRET is not set.")
+    if secret == "dummy_secret":
+        raise HTTPException(500, "Razorpay is configured with the placeholder key secret 'dummy_secret'.")
+    return key
 
 
-#: The providers this module can route money through, in the order
-#: :func:`_providers_with_live_credentials` probes them. Same two names ``_validate_keys`` and
-#: ``FXService.resolve_checkout_provider_and_currency`` use, spelt once.
-_SUPPORTED_PROVIDERS = ("stripe", "razorpay")
-
-#: The providers that publish a HOSTED, self-serve billing portal a subscriber can be sent to.
+#: The providers this module can route money through. ONE: Razorpay.
 #:
-#: Stripe has one (``stripe.billing_portal.Session``). **Razorpay does not** - it publishes no
-#: equivalent customer-facing portal at all, so for a Razorpay-billed account there is no URL
-#: to hand out and no session to create. That absence is a product fact about the provider, not
-#: a gap in this deployment's configuration, and the two are answered separately below because
-#: they need opposite fixes: one cannot be fixed at all, the other is an environment variable.
-_PROVIDERS_WITH_HOSTED_PORTAL = frozenset({"stripe"})
+#: Stripe was removed in full rather than left configured-but-unused. A dormant second
+#: gateway is worse than no second gateway: it keeps a webhook route, a credential branch,
+#: a cancel path and a lifecycle layer alive that nobody exercises, and at the time of
+#: removal every one of those carried a money defect -- a renewal that silently lost a
+#: calendar-edge period, an upgrade that left the old subscription charging, a refund that
+#: never downgraded the tier, and a cancellation that reported success while the card kept
+#: being charged for an account with no email on record.
+#:
+#: Kept as a tuple rather than collapsed to a bare string so
+#: :func:`_providers_with_live_credentials` keeps something to iterate, and so re-adding a
+#: provider later is an edit here rather than a rewrite. If the one re-added RECURS, the
+#: provider-first cancellation ordering removed from `cancel_subscription` has to come back
+#: with it.
+_SUPPORTED_PROVIDERS = ("razorpay",)
 
 
 def _providers_with_live_credentials() -> List[str]:
@@ -160,10 +181,11 @@ def _providers_with_live_credentials() -> List[str]:
     ``_validate_keys`` means "not configured for live money", which is the question being asked.
     No credential value is returned, logged or interpolated anywhere - only the provider names.
 
-    The checkout path picks its provider from the CURRENCY
-    (``FXService.resolve_checkout_provider_and_currency``: INR -> Razorpay, everything else ->
-    Stripe), because a checkout has an amount and a currency to route. A request with no money
-    attached has neither, so it can only ask what this deployment is wired for, which is this.
+    The checkout path picks its charge CURRENCY rather than its provider, because there is
+    only one provider left to pick (``FXService.resolve_checkout_provider_and_currency``: INR
+    charges INR at Razorpay; every other currency is a DISPLAY currency and charges the INR
+    base). A checkout has an amount and a currency to route. A request with no money attached
+    has neither, so it can only ask what this deployment is wired for, which is this.
     """
     live: List[str] = []
     for provider in _SUPPORTED_PROVIDERS:
@@ -191,6 +213,32 @@ def _background_sb():
     if not supabase_url or not supabase_key:
         raise RuntimeError("Billing webhook Supabase service credentials are not configured.")
     return create_client(supabase_url, supabase_key)
+
+
+def _is_duplicate_invoice(exc: Exception) -> bool:
+    """Is this a unique-constraint violation on the invoice ledger?
+
+    BILL-07. Migration 070 adds ``uq_billing_invoices_provider_payment``, so a
+    redelivered capture collides instead of filing a second invoice for one
+    charge. That collision is the index working: the row is already on file and
+    the desired end state is reached, so the caller treats it as success rather
+    than as a lost ledger row.
+
+    Detection mirrors ``core/webhook_idempotency._is_unique_violation``: the
+    supabase-py client surfaces a PostgREST error whose class varies by version,
+    so the SQLSTATE and the message are both checked rather than the exception
+    type. It is kept deliberately narrow -- anything that is not recognisably a
+    uniqueness conflict is treated as a real failure, because the cost of
+    misreading a genuine write error as "already recorded" is a payment missing
+    from the ledger with nothing logged at CRITICAL.
+    """
+    code = getattr(exc, "code", None)
+    if code == "23505":
+        return True
+    text = str(exc).lower()
+    return "23505" in text or "duplicate key" in text or (
+        "already exists" in text and "uq_billing_invoices" in text
+    )
 
 
 from backend_app.core.subscription_engine import PRICE_BASE_CURRENCY, Plan, SubscriptionEngine
@@ -227,18 +275,9 @@ def _plan_display_name(item_key: str) -> str:
 _MARKETPLACE_ITEM_PREFIX = "marketplace_"
 
 
-# BE-CRITICAL-006 FIX: Payment provider IP allowlists
-# These are the official IP ranges for Stripe and Razorpay webhooks
-STRIPE_WEBHOOK_IPS = [
-    # Stripe webhook IPs (can be updated from https://stripe.com/docs/ips)
-    "54.187.174.169",
-    "54.187.205.235",
-    "54.187.216.72",
-    "54.241.31.127",
-    "54.241.31.135",
-    "54.241.34.82",
-]
-
+# BE-CRITICAL-006 FIX: Payment provider IP allowlist.
+# Razorpay is the only gateway, so there is one list. The Stripe list was removed with the
+# provider.
 RAZORPAY_WEBHOOK_IPS = [
     # Razorpay webhook IPs (can be updated from Razorpay documentation)
     "13.232.22.250",
@@ -274,8 +313,9 @@ def _configured_webhook_ips(provider: str, defaults: List[str]) -> List[str]:
     falls out of date.
 
     So the list becomes operational configuration rather than a source literal:
-    ``RAZORPAY_WEBHOOK_IPS`` / ``STRIPE_WEBHOOK_IPS``, comma-separated, accepting individual
-    addresses and CIDR blocks. Unset, the hardcoded defaults above apply unchanged, so no
+    ``RAZORPAY_WEBHOOK_IPS``, comma-separated, accepting individual addresses and CIDR blocks.
+    The lookup below is still built from ``provider`` rather than hardcoding that one name, so
+    it needs no change if a second gateway is ever added. Unset, the hardcoded defaults above apply unchanged, so no
     deployment's behaviour changes until an operator sets one.
     """
     raw = os.environ.get(f"{provider.upper()}_WEBHOOK_IPS", "")
@@ -427,9 +467,7 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
     # `_configured_webhook_ips` so an operator can supply the provider's CURRENT egress list
     # (addresses and/or CIDR blocks) without a code change and a redeploy — see that function
     # for why a stale list here is the most expensive failure in this module.
-    if provider == "stripe":
-        allowed_ips = _configured_webhook_ips("stripe", STRIPE_WEBHOOK_IPS)
-    elif provider == "razorpay":
+    if provider == "razorpay":
         allowed_ips = _configured_webhook_ips("razorpay", RAZORPAY_WEBHOOK_IPS)
     else:
         raise HTTPException(500, f"Unknown payment provider: {provider}")
@@ -441,11 +479,34 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
         # request, and it needs to be visible in whatever surfaces production errors. The
         # allowlist size is included because "0 entries" and "the provider changed its egress
         # range" are the two causes and they are indistinguishable from the address alone.
+        #
+        # BILL-02. The raw ``X-Forwarded-For`` and ``TRUSTED_PROXY_HOPS`` are now logged too.
+        # A THIRD cause this rejection can have is a proxy-hop miscount: if this deployment's
+        # real chain has one more hop than ``TRUSTED_PROXY_HOPS`` accounts for (a CDN in front
+        # of the load balancer that this code was not told about), ``_client_ip_behind_proxies``
+        # resolves to the nearer proxy's OWN address, not the provider's - and that address is
+        # never in ``allowed_ips`` no matter how current the list is, so EVERY genuine webhook
+        # is rejected and the previous message's advice ("update the IP list") sends an operator
+        # the wrong direction. The resolved address and the raw header, read together, are what
+        # distinguish the two: a `client_ip` that is not shaped like a public provider address,
+        # or that recurs across many distinct source requests, points at the hop count rather
+        # than a stale allowlist. Fixing the actual count requires knowing this deployment's real
+        # proxy topology (how many hops sit in front of this process in production), which this
+        # code cannot determine from inside the request it is handling.
+        hops_configured = os.environ.get("TRUSTED_PROXY_HOPS", str(_TRUSTED_PROXY_HOPS_DEFAULT))
         logger.error(
-            "Webhook REJECTED by IP allowlist: provider=%s client_ip=%s allowlist_entries=%d. "
-            "The payment may already be captured; no entitlement will be granted for it. "
-            "Set %s_WEBHOOK_IPS to the provider's current egress list.",
-            provider, client_ip, len(allowed_ips), provider.upper(),
+            "Webhook REJECTED by IP allowlist: provider=%s client_ip=%s allowlist_entries=%d "
+            "x_forwarded_for=%r trusted_proxy_hops=%s. The payment may already be captured; no "
+            "entitlement will be granted for it. If client_ip does not look like one of the "
+            "provider's own published addresses, TRUSTED_PROXY_HOPS likely does not match this "
+            "deployment's real proxy chain (see _client_ip_behind_proxies) - check that before "
+            "assuming %s_WEBHOOK_IPS is merely stale.",
+            provider,
+            client_ip,
+            len(allowed_ips),
+            request.headers.get("X-Forwarded-For"),
+            hops_configured,
+            provider.upper(),
         )
         raise HTTPException(403, "Webhook request from unauthorized IP address")
 
@@ -456,92 +517,124 @@ def _validate_webhook_signature(request: Request, provider: str, body: bytes) ->
     
     Args:
         request: FastAPI request object
-        provider: Payment provider ("stripe" or "razorpay")
+        provider: Payment provider (only ``"razorpay"``)
         body: Raw request body bytes
-    
-    Raises HTTPException if signature is invalid.
-    """
-    if provider == "stripe":
-        # Stripe signature validation
-        signature = request.headers.get("stripe-signature")
-        if not signature:
-            raise HTTPException(403, "Missing Stripe signature")
-        
-        stripe_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
-        if not stripe_secret:
-            raise HTTPException(500, "Stripe webhook secret not configured")
-        
-        try:
-            import stripe
-            event = stripe.Webhook.construct_event(
-                body.decode('utf-8'),
-                signature,
-                stripe_secret
-            )
-            logger.info("Stripe webhook signature validated successfully")
-        except Exception as e:
-            logger.error(f"Stripe signature validation failed: {e}")
-            raise HTTPException(403, "Invalid Stripe signature")
-    
-    elif provider == "razorpay":
-        # Razorpay signature validation
-        signature = request.headers.get("x-razorpay-signature")
-        if not signature:
-            raise HTTPException(403, "Missing Razorpay signature")
-        
-        razorpay_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
-        if not razorpay_secret:
-            raise HTTPException(500, "Razorpay webhook secret not configured")
-        
-        try:
-            # Razorpay uses HMAC SHA256 signature
-            expected_signature = hmac.new(
-                razorpay_secret.encode(),
-                body,
-                hashlib.sha256
-            ).hexdigest()
-            
-            if not hmac.compare_digest(expected_signature, signature):
-                logger.error("Razorpay signature validation failed")
-                raise HTTPException(403, "Invalid Razorpay signature")
-            
-            logger.info("Razorpay webhook signature validated successfully")
-        except Exception as e:
-            logger.error(f"Razorpay signature validation failed: {e}")
-            raise HTTPException(403, "Invalid Razorpay signature")
 
+    Raises HTTPException if the signature is missing, unverifiable or invalid.
 
-def _validate_webhook_timestamp(request: Request, provider: str) -> None:
+    AN HTTPException RAISED IN HERE IS NO LONGER SWALLOWED AND RE-DESCRIBED. The mismatch
+    refusal used to sit inside the ``try``, whose ``except Exception`` caught it and raised
+    its own 403 -- same status, so the behaviour was right by accident, but it also meant a
+    genuine internal fault (a non-ASCII secret, a malformed header) was reported to the
+    operator as "Invalid Razorpay signature", which points at the sender rather than at the
+    deployment. The comparison is now outside the ``try`` and ``HTTPException`` is re-raised
+    untouched.
     """
-    WEBHOOK SECURITY: Validate webhook timestamp to prevent replay attacks.
-    
-    Rejects webhooks older than 5 minutes to prevent replay attacks.
-    """
-    timestamp_header = None
-    if provider == "stripe":
-        timestamp_header = request.headers.get("stripe-signature")  # Stripe includes timestamp in signature
-    elif provider == "razorpay":
-        timestamp_header = request.headers.get("x-razorpay-timestamp")
-    
-    if not timestamp_header:
-        logger.warning(f"Missing timestamp header for {provider} webhook")
-        return  # Allow but log warning
-    
+    if provider != "razorpay":
+        raise HTTPException(500, f"Unknown payment provider: {provider}")
+
+    signature = request.headers.get("x-razorpay-signature")
+    if not signature:
+        raise HTTPException(403, "Missing Razorpay signature")
+
+    razorpay_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
+    if not razorpay_secret:
+        raise HTTPException(500, "Razorpay webhook secret not configured")
+
     try:
-        # Parse timestamp (implementation depends on provider format)
-        from datetime import datetime, timezone
-        webhook_time = datetime.fromtimestamp(int(timestamp_header), tz=timezone.utc)
-        current_time = datetime.now(timezone.utc)
-        
-        # Reject webhooks older than 5 minutes
-        if (current_time - webhook_time).total_seconds() > 300:
-            logger.warning(f"Webhook timestamp too old: {webhook_time}")
-            raise HTTPException(403, "Webhook timestamp too old - possible replay attack")
-        
-        logger.info(f"Webhook timestamp validated for {provider}")
-    except Exception as e:
-        logger.warning(f"Timestamp validation failed for {provider}: {e}")
-        # Don't fail on timestamp issues but log for monitoring
+        expected_signature = hmac.new(
+            razorpay_secret.encode(),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    except Exception as e:  # noqa: BLE001 - a computation fault, not a bad signature
+        logger.error(f"Razorpay signature could not be computed: {e}")
+        raise HTTPException(500, "Razorpay signature could not be computed")
+
+    if not hmac.compare_digest(expected_signature, signature):
+        logger.error("Razorpay signature validation failed")
+        raise HTTPException(403, "Invalid Razorpay signature")
+
+    logger.info("Razorpay webhook signature validated successfully")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  THERE IS NO TIMESTAMP REPLAY WINDOW, AND PRETENDING OTHERWISE WAS WORSE THAN SAYING SO
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# `_validate_webhook_timestamp` was deleted rather than fixed. Its docstring claimed it
+# "rejects webhooks older than 5 minutes to prevent replay attacks" and it could not reject
+# anything, for three independent reasons at once:
+#
+#   1. For Razorpay it read `x-razorpay-timestamp` -- a header Razorpay does not send. A
+#      missing header took the `return  # Allow but log warning` path, so every webhook
+#      passed.
+#   2. For Stripe it read the `stripe-signature` header, a string shaped like
+#      `t=1700000000,v1=abc...`, and called `int()` on the whole thing. That raises
+#      `ValueError` on every single request.
+#   3. Its own `raise HTTPException(403, ...)` sat INSIDE the `try`, so even on a
+#      hypothetical successful parse the blanket `except Exception` caught the refusal and
+#      downgraded it to `logger.warning`.
+#
+# A guard that cannot refuse is not a weak guard, it is a false claim in the code that the
+# next reader will rely on. Razorpay publishes no timestamp on its webhooks, so a
+# timestamp-based window is not available for this gateway at all.
+#
+# WHAT ACTUALLY PROTECTS AGAINST REPLAY HERE, so the removal does not read as a regression:
+# the two-layer idempotency in `razorpay_webhook` -- the Redis `webhook:{provider}:{id}`
+# claim and the durable `public.webhook_events` row with its `UNIQUE (provider, event_id)`
+# -- which rejects a redelivered event by IDENTITY rather than by age, and keeps doing so
+# for days rather than for five minutes. That is the stronger control of the two, and it is
+# the one that was always doing the work. The event-id derivation it depends on is fixed
+# by `_razorpay_event_id` below, because a refund event used to derive `None` and so
+# bypassed both layers.
+
+
+#: Razorpay entity containers an event id can be recovered from, most specific first.
+#:
+#: The old derivation was ``payload.get("event_id") or payload["payload"]["payment"]
+#: ["entity"]["id"]`` -- it knew about exactly one container. A ``refund.processed`` event
+#: carries no ``payment`` entity, so for the one event class whose handler REVERSES money
+#: the lookup produced ``None`` and both idempotency layers were skipped.
+_RAZORPAY_ENTITY_CONTAINERS = ("payment", "refund", "order", "subscription", "invoice")
+
+
+def _razorpay_event_id(request: Request, payload: dict) -> Optional[str]:
+    """The identity a Razorpay delivery is deduplicated on, or ``None`` if there is none.
+
+    Three sources, in order of authority:
+
+    1. ``x-razorpay-event-id``. Razorpay's own per-DELIVERY identifier, sent as a header on
+       every webhook. This is the correct key and the previous implementation never looked
+       at it -- it is stable across the redeliveries of one event, which is exactly the
+       property deduplication needs.
+    2. ``event_id`` in the body, for completeness.
+    3. The id of whichever known entity the payload carries. This is a fallback on the
+       ENTITY rather than the event, so it is weaker: two different events about the same
+       payment (``payment.captured`` then ``refund.processed``) would collide on it. The
+       event name is therefore folded in, so the key distinguishes them.
+
+    Returns ``None`` only when none of the three yields anything, which the caller treats
+    as a refusal rather than as permission to run unguarded.
+    """
+    header_id = request.headers.get("x-razorpay-event-id")
+    if header_id and str(header_id).strip():
+        return str(header_id).strip()
+
+    body_id = payload.get("event_id")
+    if body_id and str(body_id).strip():
+        return str(body_id).strip()
+
+    container = payload.get("payload") or {}
+    event_name = str(payload.get("event") or "unknown").strip()
+    for name in _RAZORPAY_ENTITY_CONTAINERS:
+        entity = (container.get(name) or {}).get("entity") or {}
+        entity_id = entity.get("id")
+        if entity_id and str(entity_id).strip():
+            # Qualified by the event name, because the same entity id legitimately appears
+            # on several different events and they must not deduplicate against each other.
+            return f"{event_name}:{str(entity_id).strip()}"
+    return None
 
 
 def _validate_uuid(value: str, field_name: str) -> str:
@@ -580,6 +673,313 @@ def _exact_minor_units(value: Any) -> Optional[int]:
         return None
 
 
+def _provider_major_amount(value: Any, currency: str) -> Optional[Decimal]:
+    """A provider's minor-unit amount as an exact major-unit ``Decimal``, or ``None``.
+
+    MONEY-02. The three webhook branches below used to do this instead::
+
+        payment_amount = session.get("amount_total", 0) / 100.0   # cents -> USD
+        renewal_amount = invoice_obj.get("amount_paid", 0) / 100.0
+        payment_amount = payment.get("amount", 0) / 100.0         # paise -> INR
+
+    Binary float division on a money amount, feeding ``billing_invoices.amount_usd`` /
+    ``amount_inr`` and — worse — the referral commission base passed to
+    ``process_referral_commission``. For typical cent amounts IEEE-754 division by
+    ``100.0`` usually lands on the right value, so this was not visibly corrupting most
+    invoices; it was nonetheless the wrong type for money and it was inconsistent with
+    the discipline the rest of this codebase already enforces
+    (``marketplace/money.py`` refuses a ``float`` outright, ``paper_accounting.py``
+    raises on one, ``fee_engine.py`` quantizes with ``ROUND_HALF_EVEN``).
+
+    Composed from the two primitives that already exist rather than a fourth
+    representation of money:
+
+    * :func:`_exact_minor_units` reads the provider's integer exactly and returns
+      ``None`` for a ``float`` rather than truncating it — the refusal this module
+      already applies on the settlement path;
+    * :func:`money.to_major` converts Minor_Units to a ``Decimal`` quantized to the
+      currency's own ISO 4217 exponent, which is the repository's single
+      presentation-boundary converter.
+
+    Returns ``None`` — never a guess and never ``0`` — when the amount is inexact, out
+    of range, or denominated in a currency with no persisted exponent. A ``None`` here
+    means "do not record an amount", which the callers treat as "do not credit", because
+    a wrong number in a money column is worse than an absent one.
+    """
+    minor = _exact_minor_units(value)
+    if minor is None:
+        return None
+    try:
+        return marketplace_money.to_major(minor, currency)
+    except (marketplace_money.InvalidAmount, marketplace_money.UnsupportedCurrency) as exc:
+        logger.error(
+            "[BILLING] MONEY-02: refusing an inexact or unsupported provider amount "
+            "(%r %s): %s",
+            value,
+            currency,
+            exc,
+        )
+        return None
+
+
+#: Every currency this platform can denominate a payment in, as a FACT about the
+#: converter rather than a second list that can drift from it.
+#:
+#: MONEY-07. ``marketplace/money.py``'s ``MINOR_UNIT_EXPONENT`` is the only place a
+#: currency's minor-unit exponent is persisted, and ``to_major`` raises
+#: ``UnsupportedCurrency`` for anything absent from it. Deriving this set from that
+#: mapping means a currency can never be accepted by the validation below and then
+#: refused by the conversion two lines later.
+_SUPPORTED_PROVIDER_CURRENCIES = frozenset(marketplace_money.SUPPORTED_CURRENCIES)
+
+
+class ProviderCurrencyMismatch(Exception):
+    """The provider's own currency field is absent, malformed, or not what this handler
+    denominates in.
+
+    MONEY-07. WHAT WAS MEASURED, AND WHY THIS IS NOT A COSMETIC FIX
+    ---------------------------------------------------------------
+    Three call sites convert a provider amount, and every one of them pairs the amount
+    with a HARDCODED currency literal::
+
+        payment_amount = _provider_major_amount(session.get("amount_total"), "USD")
+        renewal_amount = _provider_major_amount(invoice_obj.get("amount_paid"), "USD")
+        payment_amount = _provider_major_amount(payment.get("amount"), "INR")
+
+    The provider sends the denomination in the same object as the amount. Razorpay's
+    payment entity carries ``currency``; Stripe's session and invoice carry ``currency``.
+    Measured: ``payment.get("currency")`` is read exactly ONCE in the whole module, at
+    ``_razorpay_settlement_metadata``, which early-returns for anything that is not a
+    marketplace item -- so on the plan-purchase path the payload's own currency is
+    available and ignored. The amount is therefore treated as INR *because the code path
+    expects INR*, not because the payment was in INR.
+
+    That is benign only while the gateway is single-currency in practice. A Razorpay account
+    CAN be enabled for international currencies, and if this one ever is, the amount would be
+    recorded against the wrong unit and become the base for a 20% referral commission. That
+    is why ``PROVIDER_FOR_CURRENCY`` was narrowed to INR alone rather than repointed at
+    Razorpay for USD: the capability is unmeasured for this account.
+
+    WHY THIS VALIDATES RATHER THAN SUBSTITUTING
+    -------------------------------------------
+    The obvious fix -- ``_provider_major_amount(payment.get("amount"),
+    payment.get("currency"))`` -- is wrong in two ways.
+
+    First, it makes each handler silently accept whatever the payload declares, while
+    ``money.py`` knows only USD and INR: a EUR payment would return ``None`` and become
+    indistinguishable from a malformed amount, so a real payment in an unsupported
+    currency would be filed as "unreadable" rather than as "we cannot denominate this".
+
+    Second, each handler writes a FIXED column (``amount_usd`` or ``amount_inr``) and a
+    fixed ``"currency"`` value into ``billing_invoices``. A variable currency reaching a
+    fixed column is a new defect, not a fix.
+
+    So the denomination each handler accepts stays a visible literal, and the provider's
+    declaration is checked AGAINST it. A mismatch is refused loudly and -- where money is
+    owed -- recorded as an obligation, rather than being converted or assumed.
+    """
+
+    def __init__(self, code: str, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(f"{code}: {detail}")
+
+
+def _require_provider_currency(
+    declared: Any,
+    expected: str,
+    *,
+    provider: str,
+    payment_id: Any,
+) -> str:
+    """The provider's declared currency, normalised, or raise.
+
+    Args:
+        declared: the value read from the provider's own payload field.
+        expected: the single denomination this handler can record.
+
+    Returns:
+        The normalised (upper, stripped) currency code, which always equals ``expected``
+        on success.
+
+    Raises:
+        ProviderCurrencyMismatch: ``CURRENCY_MISSING``, ``CURRENCY_MALFORMED``,
+            ``CURRENCY_UNSUPPORTED`` or ``CURRENCY_MISMATCH``.
+
+    Normalisation is case-insensitive because providers are inconsistent about it --
+    Stripe sends lowercase ISO codes (``"usd"``), Razorpay sends uppercase (``"INR"``) --
+    and ``money.minor_unit_exponent`` is case-SENSITIVE, so an unnormalised Stripe value
+    would be refused as unsupported. Normalising the CASE is not the same as substituting
+    a currency: ``"usd"`` and ``"USD"`` are the same declaration, whereas ``"EUR"`` and
+    ``"USD"`` are not and the mismatch branch below refuses that.
+    """
+    raw = "" if declared is None else str(declared).strip()
+    if not raw:
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_MISSING",
+            f"{provider} payment {payment_id} carries no currency field, so its amount "
+            f"has no declared unit. Refusing to assume {expected}.",
+        )
+
+    normalised = raw.upper()
+    if len(normalised) != 3 or not normalised.isalpha():
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_MALFORMED",
+            f"{provider} payment {payment_id} declares currency {raw!r}, which is not a "
+            f"three-letter ISO code.",
+        )
+
+    if normalised not in _SUPPORTED_PROVIDER_CURRENCIES:
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_UNSUPPORTED",
+            f"{provider} payment {payment_id} is denominated in {normalised}, which this "
+            f"platform has no persisted minor-unit exponent for (supported: "
+            f"{', '.join(sorted(_SUPPORTED_PROVIDER_CURRENCIES))}). Recording an amount "
+            f"whose scale is unknown would be a guess.",
+        )
+
+    if normalised != expected:
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_MISMATCH",
+            f"{provider} payment {payment_id} is denominated in {normalised}, but this "
+            f"handler records {expected} only -- it writes a fixed amount column and a "
+            f"fixed currency value. Converting here would bake an unreviewed FX rule "
+            f"into the ledger.",
+        )
+
+    return normalised
+
+
+def _amount_in_declared_currency(minor: Any, declared: str) -> Optional[Decimal]:
+    """Convert a provider amount using the currency the PROVIDER declared.
+
+    Used only on the mismatch path: the handler could not record the payment because it
+    is denominated in something other than the handler's own currency, but the amount is
+    still owed and must be stated in the unit it was actually charged in.
+
+    WHY THIS IS A SEPARATE FUNCTION AND NOT AN INLINE CALL. The conversion is identical to
+    ``_provider_major_amount``; what differs is that the currency is a VARIABLE. Each
+    webhook handler is single-currency by construction -- it writes a fixed amount column
+    and a fixed ``currency`` value -- and
+    ``tests/test_money02_billing_amount_precision.py::
+    test_each_webhook_converts_amounts_in_its_own_currency`` pins exactly that, reading
+    the literal from the AST of the INNERMOST enclosing function. A variable-currency
+    conversion written inline in ``razorpay_webhook`` would make that handler's
+    conversion set ``{"INR", None}`` and break an invariant that is correct and worth
+    keeping. Putting it here attributes it to this helper instead, which is also the
+    honest description: this is the one place that converts in whatever the provider said.
+    """
+    return _provider_major_amount(minor, declared)
+
+
+async def _record_referral_obligation(
+    *,
+    provider: str,
+    payment_id: Any,
+    user_id: Any,
+    amount: Any,
+    currency: str,
+    subscription_tier: Any,
+    reason_code: str,
+    detail: Optional[dict] = None,
+) -> Optional[str]:
+    """Record that a referral commission is OWED but was not credited. Never raises.
+
+    MONEY-06. Before this, an owed commission that could not be credited left only a log
+    line -- in the Razorpay case a single ``logger.error``, and in two Stripe cases
+    nothing an operator could query at all. The obligation is now a row in
+    ``public.referral_obligations`` with an explicit amount, an explicit currency, the
+    resolved referrer and a machine-readable reason.
+
+    ONE ``.rpc()`` CALL, AND THAT IS STRUCTURAL. Every PostgREST ``.execute()`` is a
+    separate HTTP request that commits in its own server-side transaction before
+    responding, so nothing a handler does can span two of them. Attribution, the
+    commission decision and the insert therefore all live inside
+    ``public.record_referral_obligation``, which is one function body and so one
+    transaction.
+
+    NEVER RAISES, for the same reason the safety-audit writer does not: the entitlement
+    has already been granted by the time this is called, and failing the webhook here
+    would make the provider redeliver an event whose paid-for effect already happened.
+    A failure is logged at CRITICAL with every fact needed to reconstruct the row by
+    hand, so the log line remains a recoverable copy -- which is strictly more than the
+    previous behaviour, where there was no row to lose.
+    """
+    try:
+        sb = _background_sb()
+        resp = sb.rpc("record_referral_obligation", {
+            "p_provider": provider,
+            "p_provider_payment_id": str(payment_id or ""),
+            "p_referred_id": user_id,
+            # A decimal STRING, so the exact value reaches the numeric column. Passing a
+            # Decimal through float at the transport boundary would reintroduce MONEY-02.
+            "p_payment_amount": str(amount),
+            "p_currency": currency,
+            "p_subscription_tier": subscription_tier,
+            "p_reason_code": reason_code,
+            "p_detail": detail or {},
+        }).execute()
+        obligation_id = getattr(resp, "data", None)
+        if obligation_id:
+            logger.warning(
+                "[BILLING] MONEY-06: referral commission NOT credited for %s payment %s "
+                "(%s %s, user %s); recorded as obligation %s with reason %s. This is a "
+                "durable payable, not a dropped commission.",
+                provider, payment_id, amount, currency, user_id, obligation_id,
+                reason_code,
+            )
+        else:
+            # The function returns NULL on replay, which is the idempotent no-op path.
+            logger.info(
+                "[BILLING] MONEY-06: obligation for %s payment %s already recorded; no "
+                "second row created.", provider, payment_id,
+            )
+        return obligation_id
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.critical(
+            "[BILLING] MONEY-06: FAILED to record a referral obligation (%s: %s). The "
+            "commission is still owed and is now recorded NOWHERE but this line. "
+            "Reconstruct from: provider=%s payment_id=%s user=%s amount=%s currency=%s "
+            "tier=%s reason=%s",
+            exc.__class__.__name__, exc,
+            provider, payment_id, user_id, amount, currency, subscription_tier,
+            reason_code,
+        )
+        return None
+
+
+async def _reverse_referral_obligation(
+    *, provider: str, payment_id: Any, reason: str
+) -> None:
+    """Mark a recorded obligation reversed because the payment was refunded.
+
+    Separate from ``reverse_referral_commission``, which operates on
+    ``referral_commissions`` and -- for a Razorpay payment -- finds no row to reverse,
+    the "structurally dead" path the audit recorded. Never raises: a refund that cannot
+    be reflected must not fail the webhook, because the provider would redeliver it.
+    """
+    if not payment_id:
+        return
+    try:
+        sb = _background_sb()
+        resp = sb.rpc("reverse_referral_obligation", {
+            "p_provider": provider,
+            "p_provider_payment_id": str(payment_id),
+            "p_reason": reason,
+        }).execute()
+        if getattr(resp, "data", None):
+            logger.info(
+                "[BILLING] MONEY-06: obligation for %s payment %s marked reversed (%s)",
+                provider, payment_id, reason,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[BILLING] MONEY-06: could not reverse the obligation for %s payment %s "
+            "(%s: %s). It remains outstanding and must be reconciled by hand.",
+            provider, payment_id, exc.__class__.__name__, exc,
+        )
+
+
 def _epoch_instant(value: Any) -> Optional[datetime]:
     """A provider's whole-second epoch timestamp as a UTC datetime, or ``None``.
 
@@ -597,38 +997,11 @@ def _epoch_instant(value: Any) -> Optional[datetime]:
         return None
 
 
-def _stripe_settlement_metadata(metadata: Optional[dict], session: Any) -> dict:
-    """The Stripe session metadata plus the provider facts a Settlement_Record needs.
-
-    MARKETPLACE SETTLEMENT (task 19.2). ``checkout_service`` puts ``item_key``,
-    ``subscription_id``, ``library_id`` and ``currency`` in the session metadata; what it cannot
-    put there is what the provider actually confirmed - the transaction reference, the charged
-    amount and the settlement currency - and those are exactly the three values Requirement 9.14
-    makes the mismatch guard out of. They are read off the event here, beside the branch that owns
-    the event, and travel through the ONE entitlement funnel
-    (``_apply_billing_entitlement`` -> ``_apply_marketplace_entitlement``) rather than through a
-    second webhook path.
-
-    ``payment_intent`` is preferred over the session id because the refund events carry the payment
-    intent, so a payment and its later reversal deduplicate against the same
-    ``uq_settlement_reference_reversal`` reference. Nothing is added for a plan purchase: the
-    metadata is returned unchanged unless the item is a marketplace item.
-    """
-    enriched = dict(metadata or {})
-    if not str(enriched.get("item_key") or "").startswith(_MARKETPLACE_ITEM_PREFIX):
-        return enriched
-    enriched["provider"] = "stripe"
-    enriched["provider_reference"] = session.get("payment_intent") or session.get("id")
-    enriched["amount_minor"] = session.get("amount_total")
-    enriched["currency"] = session.get("currency") or enriched.get("currency")
-    enriched["confirmed_at_epoch"] = session.get("created")
-    return enriched
-
-
 def _razorpay_settlement_metadata(notes: Optional[dict], payment: Any) -> dict:
     """The Razorpay ``notes`` plus the provider facts a Settlement_Record needs.
 
-    The Razorpay half of :func:`_stripe_settlement_metadata`, and the same contract:
+    Once the Razorpay half of a pair (``_stripe_settlement_metadata`` was the other, and went
+    with the provider); now the only one. The contract is unchanged:
     ``notes["item"]`` is this provider's spelling of ``item_key`` (``checkout_service`` writes
     both halves), ``payment["amount"]`` is already in paise - the Minor_Unit - and
     ``payment["id"]`` is the reference the ``refund.processed`` event carries as ``payment_id``.
@@ -659,12 +1032,12 @@ async def _apply_marketplace_entitlement(
     """
     Record a confirmed marketplace payment and activate the Subscription it paid for.
 
-    Called from billing webhooks when item_key format is 'marketplace_{library_id}' — the ONE
-    branch both providers funnel into via ``_apply_billing_entitlement``'s
+    Called from the Razorpay webhook when item_key format is 'marketplace_{library_id}' — the
+    ONE branch it funnels into via ``_apply_billing_entitlement``'s
     ``item_key.startswith("marketplace_")`` test. There is no second webhook route, no second
     signature path and no second entitlement funnel; ``_validate_webhook_signature``,
-    ``_validate_webhook_ip``, ``STRIPE_WEBHOOK_IPS``, ``_validate_webhook_timestamp`` and the
-    two-phase Redis idempotency lock are untouched (Requirements 9.1, 9.9, 22.5, 22.6, 25.2).
+    ``_validate_webhook_ip``, the durable ``webhook_events`` claim and the two-phase Redis
+    idempotency lock are untouched (Requirements 9.1, 9.9, 22.5, 22.6, 25.2).
 
     WHY THE STATUS UPDATE THAT USED TO BE HERE IS GONE (Requirements 9.5, 10.4, 11.6, 11.14)
     ----------------------------------------------------------------------------------------
@@ -795,9 +1168,9 @@ async def _settle_marketplace_reversal(
 ) -> None:
     """Record a refund of a marketplace payment as a reversal Settlement_Record.
 
-    MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8. Called from the refund branches
-    the webhooks already have — Stripe's ``charge.refunded`` and Razorpay's ``refund.processed`` —
-    which already reverse the referral commission. This adds the ledger half: one
+    MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8. Called from the refund branch
+    the webhook already has — Razorpay's ``refund.processed`` — which already reverses the
+    referral commission. This adds the ledger half: one
     ``settle(..., is_reversal=True)`` call, taken **only** when the refunded payment's ``item_key``
     began with ``marketplace_``, so a plan refund passes through untouched.
 
@@ -978,7 +1351,70 @@ async def _settle_marketplace_reversal(
     )
 
 
-async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: Optional[dict] = None) -> None:
+def _record_plan_period(sb: Any, user_id: str, item_key: str, previous_plan: Optional[str],
+                        billing_interval: Optional[str], provider: Optional[str]) -> None:
+    """BILL-01: record WHEN a purchased plan ends, so it can actually end.
+
+    Razorpay plan purchases are one-time orders. The grant wrote only ``subscription_tier``,
+    so a month's payment bought the plan forever. For Razorpay the end of the paid period
+    (now + 1 month/year, extended from the current end when the same plan is renewed early) is
+    stored in ``next_billing_date``; ``get_plan_context`` stops honouring the tier after it
+    and ``core.plan_expiry`` persists the downgrade.
+
+    This used to accept ``provider in ("razorpay", "stripe")`` and, for Stripe, took an
+    ``else`` branch that recorded ONLY ``payment_provider`` and no period, because Stripe
+    subscriptions recurred and the gateway owned the period. Both are gone. The sole caller
+    is ``_apply_billing_entitlement``, reached only from ``_process_razorpay_entitlement``,
+    which passes the literal ``"razorpay"``; nothing in the system can produce any other
+    value. Leaving the pair in would keep alive a branch whose only effect is to write a
+    ``payment_provider`` that ``SUPPORTED_PROVIDERS`` and the cancel/resume paths would then
+    refuse to act on.
+
+    (Narrowing this guard is a different question from the ``chk_settlement_provider`` CHECK
+    constraint, which still admits ``'stripe'`` on purpose: that constraint governs what the
+    COLUMN may hold, including rows written before the removal, whereas this guard governs
+    what the handler may produce now.)
+
+    Best effort by design: the tier is already granted and the customer already charged, so a
+    deploy that has not applied migration 037 must not turn a captured payment into a failed
+    webhook. The gap is logged CRITICAL because without the column the plan does not expire.
+    """
+    if provider != "razorpay" or item_key in ("free", "ml_addon"):
+        return
+    from backend_app.core.billing_lifecycle import BillingLifecycle
+
+    # Literal payloads (not a mutated dict) so tests/test_schema_table_reference_drift.py can
+    # check every column against the declared schema.
+    try:
+        now = datetime.now(timezone.utc)
+        start = now
+        if previous_plan == item_key:
+            try:
+                row = sb.table("profiles").select("next_billing_date").eq("id", user_id).execute().data or []
+                current_end = (row[0].get("next_billing_date") if row else None)
+                if current_end:
+                    parsed = datetime.fromisoformat(str(current_end).replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    start = max(now, parsed)
+            except Exception:  # noqa: BLE001 - extend from now; never grant LESS time than paid for
+                start = now
+        period_end = BillingLifecycle.add_billing_period(start, billing_interval).isoformat()
+        sb.table("profiles").update({
+            "payment_provider": provider,
+            "next_billing_date": period_end,
+            "subscription_status": "active",
+            "cancel_at_period_end": False,
+        }).eq("id", user_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.critical(
+            "[BILLING] BILL-01: plan granted to %s but its period/provider could not be recorded "
+            "(%s). Apply migration 037_profiles_billing_period_columns.sql; until then this "
+            "plan will NOT expire.", user_id, type(exc).__name__,
+        )
+
+
+async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: Optional[dict] = None, provider: Optional[str] = None) -> None:
     """
     F-20: Writes billing state ONLY to Supabase profiles table.
     SQLite SubscriptionModel / InvoiceModel storage is retired.
@@ -992,10 +1428,9 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
         library_id = item_key.replace("marketplace_", "")
         # Extract subscription_id from metadata if available for additional safety
         subscription_id = None
-        # The settlement context both providers put on the metadata via
-        # _stripe_settlement_metadata / _razorpay_settlement_metadata (task 19.2). This is the ONE
-        # marketplace funnel — the provider facts travel through it rather than through a second
-        # webhook path.
+        # The settlement context the webhook puts on the metadata via
+        # _razorpay_settlement_metadata (task 19.2). This is the ONE marketplace funnel — the
+        # provider facts travel through it rather than through a second webhook path.
         provider = None
         provider_reference = None
         amount_minor = None
@@ -1088,10 +1523,32 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
                 f"Subscription tier updated for user {user_id}: tier={item_key} "
                 f"interval={billing_interval or 'unchanged'}"
             )
+            _record_plan_period(sb, user_id, item_key, previous_plan, billing_interval, provider)
 
     except Exception as e:
         logger.error(f"Failed to update Supabase profile for user {user_id}: {e}")
         raise
+
+    # BILL-06. `available_discounts` was read and applied to the charge at checkout but
+    # never decremented anywhere - a one-time discount, once granted, applied to every
+    # future checkout forever. Decremented HERE, on confirmed payment (never at checkout
+    # session creation, where a customer who abandons the session would burn it for
+    # nothing), through the atomic RPC migration 041 added - `UPDATE ... WHERE
+    # available_discounts > 0` in one statement, so two concurrent webhook deliveries for
+    # the same user cannot both decrement past zero. A failure here (including "nothing
+    # was available to decrement") is logged and swallowed rather than raised: the
+    # customer has already paid and the entitlement above is already granted, so refusing
+    # the whole request over an accounting side-effect would be the worse outcome by far.
+    if discount_applied:
+        try:
+            sb.rpc("decrement_available_discount", {"target_user_id": user_id}).execute()
+        except Exception as discount_err:
+            logger.warning(
+                "Could not decrement available_discounts for user %s after a discounted "
+                "checkout (%s); the entitlement was still granted.",
+                user_id,
+                discount_err,
+            )
 
     # Invalidate profile cache so the new tier takes effect immediately (FIX N4)
     await invalidate_profile_cache(user_id)
@@ -1136,13 +1593,108 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
         logger.debug(f"[BILLING] Notification dispatch error: {notif_err}")
 
 
-async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
-    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
-    logger.info(f"Stripe: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
+class RazorpayOrderMismatch(Exception):
+    """The captured payment does not match the server-created order it claims to pay for."""
+
+
+async def _fetch_razorpay_order(order_id: str) -> dict:
+    """Fetch an order from Razorpay with the server's API credentials (patchable seam)."""
+    import asyncio
+
+    import razorpay
+
+    rzp = razorpay.Client(
+        auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"])
+    )
+    return await asyncio.to_thread(rzp.order.fetch, order_id)
+
+
+async def _fetch_razorpay_payment(payment_id: str) -> dict:
+    """Fetch a payment from Razorpay with the server's API credentials (patchable seam)."""
+    import razorpay
+
+    rzp = razorpay.Client(
+        auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"])
+    )
+    return await asyncio.to_thread(rzp.payment.fetch, payment_id)
+
+
+async def _revoke_plan_for_refunded_razorpay_payment(payment_id: str) -> bool:
+    """BILL-01: a FULLY refunded plan purchase no longer entitles the buyer.
+
+    The purchase is found through the invoice row the capture wrote (not through refund-event
+    metadata, which Razorpay does not reliably carry), the refund is confirmed against the
+    gateway (status ``refunded`` / ``amount_refunded >= amount`` - a partial refund keeps the
+    plan), and the downgrade is conditional on the buyer still being on the plan that payment
+    bought, so a later upgrade is never undone by an old refund. Marketplace payments are
+    handled by the settlement ledger and skipped here. Returns True when a plan was revoked.
+    A gateway fetch failure propagates so the webhook is redelivered.
+    """
+    sb = _background_sb()
+    rows = (sb.table("billing_invoices").select("user_id,plan")
+            .eq("provider", "razorpay").eq("provider_payment_id", payment_id)
+            .limit(1).execute().data or [])
+    if not rows:
+        return False
+    user_id, plan = rows[0].get("user_id"), rows[0].get("plan")
+    if not user_id or not plan or str(plan).startswith("marketplace_") or plan in ("free", "ml_addon"):
+        return False
+    payment = await _fetch_razorpay_payment(payment_id)
+    amount, refunded = int(payment.get("amount") or 0), int(payment.get("amount_refunded") or 0)
+    if not (payment.get("status") == "refunded" or (amount > 0 and refunded >= amount)):
+        logger.info("[BILLING] BILL-01: refund of %s is partial (%s of %s); plan kept", payment_id, refunded, amount)
+        return False
+    res = (sb.table("profiles")
+           .update({"subscription_tier": "free", "subscription_status": "expired", "cancel_at_period_end": False})
+           .eq("id", user_id).eq("subscription_tier", plan).execute())
+    if not res.data:
+        return False
+    await invalidate_profile_cache(user_id)
+    try:
+        from backend_app.core.subscription_dependencies import invalidate_plan_cache
+        await invalidate_plan_cache(user_id)
+    except Exception:  # noqa: BLE001
+        pass
+    logger.warning("[BILLING] BILL-01: plan %s revoked for user %s after full refund of %s", plan, user_id, payment_id)
+    return True
+
+
+async def _reconcile_razorpay_payment_with_order(payment: dict, claimed_notes: dict) -> dict:
+    """SEC-02: take authorisation facts from the SERVER-CREATED order, never from payment notes.
+
+    Standard Checkout lets the browser add or override ``notes`` on a payment, so
+    ``payment.notes`` (user, item) is attacker-influenced. The order, by contrast, was created
+    by ``create_checkout_session`` with the server's credentials. This returns the ORDER's notes
+    after checking that the payment is for that order, in the same amount and currency, and that
+    any notes the payment claims agree with the order's. Raises :class:`RazorpayOrderMismatch`
+    when they do not (grant nothing). A failure to FETCH the order propagates so the webhook
+    is retried rather than granting on unverified data.
+    """
+    order_id = payment.get("order_id")
+    if not order_id:
+        raise RazorpayOrderMismatch("payment carries no order_id")
+    order = await _fetch_razorpay_order(str(order_id))
+    if str(order.get("id") or order_id) != str(order_id):
+        raise RazorpayOrderMismatch("fetched order id differs from the payment's order_id")
+    if int(order.get("amount") or -1) != int(payment.get("amount") or -2):
+        raise RazorpayOrderMismatch(
+            f"payment amount {payment.get('amount')} != order amount {order.get('amount')}"
+        )
+    if str(order.get("currency") or "").upper() != str(payment.get("currency") or "").upper():
+        raise RazorpayOrderMismatch("payment currency differs from the order's")
+    order_notes = dict(order.get("notes") or {})
+    order_user = order_notes.get("user_id")
+    order_item = order_notes.get("item") or order_notes.get("item_key")
+    if not order_user or not order_item:
+        raise RazorpayOrderMismatch("order carries no user_id/item to authorise against")
+    claimed_item = (claimed_notes or {}).get("item") or (claimed_notes or {}).get("item_key")
+    if str((claimed_notes or {}).get("user_id")) != str(order_user) or str(claimed_item) != str(order_item):
+        raise RazorpayOrderMismatch("payment notes disagree with the server-created order")
+    return order_notes
 
 
 async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
-    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
+    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {}, provider="razorpay")
     logger.info(f"Razorpay: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
@@ -1171,13 +1723,6 @@ async def get_plans(
     )
     
     return await PricingService.get_localized_plans(pricing_context)
-
-# ── GET /api/billing/test ───────────────────────────────────────────────
-@router.get("/test")
-async def test_endpoint():
-    """Test endpoint to verify billing router is loaded."""
-    return {"status": "ok", "router": "billing"}
-
 
 # ── GET /api/billing/entitlements ───────────────────────────────────────────
 @router.get("/entitlements")
@@ -1483,16 +2028,39 @@ async def get_currency(
     except Exception as e:
         logger.warning(f"Failed to determine currency context for user {user.get('id')}: {e}")
         from datetime import datetime, timezone
+
+        # The checkout half of this fallback is DERIVED, not restated. It used to hardcode
+        # checkout_provider="stripe", checkout_currency="USD", is_direct_checkout=True, and
+        # once Razorpay became the only gateway all three contradicted the live resolver:
+        # resolve_checkout_provider_and_currency("USD") answers ("razorpay", "INR"), so a USD
+        # viewer is charged in INR and the checkout is NOT direct.
+        #
+        # is_direct_checkout is the field Billing.jsx branches on to show the "you will be
+        # charged in <currency>" conversion notice (showsCheckoutConversion tests
+        # `is_direct_checkout === false`). Reporting True here suppressed that notice on the
+        # one path where it was most needed: the buyer saw a USD figure and was never told
+        # the charge lands in a different currency. This fallback fires on any failure in the
+        # geo/FX/Redis context lookup, which is ordinary operation rather than a freak case.
+        #
+        # fx_service imports nothing but the standard library, so this import cannot fail for
+        # any reason that could have produced the exception being handled, and both calls are
+        # pure lookups over module constants.
+        from backend_app.core.fx_service import FXService
+
+        fallback_display_currency = "USD"
+        checkout_provider, checkout_currency = FXService.resolve_checkout_provider_and_currency(
+            fallback_display_currency
+        )
         return {
             "country": "US",
             "country_name": "United States",
-            "currency": "USD",
+            "currency": fallback_display_currency,
             "currency_symbol": "$",
             "currency_source": "fallback",
-            "checkout_currency": "USD",
-            "checkout_currency_symbol": "$",
-            "checkout_provider": "stripe",
-            "is_direct_checkout": True,
+            "checkout_currency": checkout_currency,
+            "checkout_currency_symbol": FXService.get_currency_symbol(checkout_currency),
+            "checkout_provider": checkout_provider,
+            "is_direct_checkout": checkout_currency == fallback_display_currency,
             "fx_rate": 1.0,
             "fx_rate_timestamp": datetime.now(timezone.utc).isoformat(),
             "is_fallback": True,
@@ -1551,9 +2119,27 @@ async def get_invoices(
 
     if not supabase:
         return []
-    
+
     try:
-        res = supabase.table("billing_invoices").select("*").eq("user_id", user["id"]).order("created_at", desc=True).execute()
+        # BILL-HIST-01: `provider` and `provider_payment_id` were already being
+        # SELECTed (via "*") and then dropped on the floor by the projection
+        # below. They are the only provider metadata this schema persists on the
+        # plan path, and they are what lets a user reconcile a charge against
+        # their Razorpay statement or quote it to support. Projecting them costs
+        # nothing -- the rows were already fetched.
+        #
+        # A row limit is applied because there was none: the endpoint returned a
+        # user's entire billing history on every call, and `_revoke_plan_for_
+        # refunded_razorpay_payment` shows these rows accumulate one per
+        # payment. 200 is generous for a billing page and bounds the response.
+        res = (
+            supabase.table("billing_invoices")
+            .select("*")
+            .eq("user_id", user["id"])
+            .order("created_at", desc=True)
+            .limit(200)
+            .execute()
+        )
         resp = await res if inspect.isawaitable(res) else res
         invoices = []
         rows = resp.data if resp and hasattr(resp, "data") and resp.data else []
@@ -1565,6 +2151,12 @@ async def get_invoices(
                 "amtINR": inv.get("amount_inr", 0),
                 "status": inv.get("status", "unknown"),
                 "currency": inv.get("currency", "USD"),
+                # Provider metadata. Nullable on purpose: rows predating the
+                # Razorpay migration carry neither, and a null is honest where
+                # a fabricated "razorpay" would not be.
+                "provider": inv.get("provider"),
+                "providerPaymentId": inv.get("provider_payment_id"),
+                "plan": inv.get("plan"),
             })
         try:
             from backend_app.core.cache.redis_manager import redis_manager
@@ -1574,7 +2166,15 @@ async def get_invoices(
             pass
         return invoices
     except Exception as e:
-        logger.warning(f"Failed to fetch invoices for user {user['id']}: {e}")
+        # Deliberately still not raising: a billing page that renders empty is
+        # less harmful than one that 500s. But the previous version logged at
+        # WARNING and was indistinguishable from "this user has no invoices",
+        # so a read failure could hide indefinitely. ERROR + the exception type
+        # makes it findable in CloudWatch.
+        logger.error(
+            "[BILLING] invoice history read FAILED for user %s: %s: %s",
+            user["id"], type(e).__name__, e,
+        )
         return []
 
 
@@ -1583,7 +2183,7 @@ async def get_invoices(
 async def get_payment_methods(
     request: Request,
     user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_payment_methods_db),
 ):
     cache_key = f"billing:payment_methods:{user['id']}"
     try:
@@ -1625,9 +2225,14 @@ async def create_checkout_session(
   supabase: Any = Depends(get_request_supabase),
 ):
     """
-    Generates a server-authoritative payment link with FX conversion and gateway routing.
+    Generates a server-authoritative payment link with FX conversion.
     Server calculates the exact minor units and validates gateway capability.
-    INR → Razorpay. All other supported currencies (USD, EUR, GBP, JPY, CAD, etc.) → Stripe.
+
+    Razorpay is the only gateway, so there is no routing decision left — only a CHARGE
+    CURRENCY decision. INR is charged directly. Every other supported currency (USD, EUR,
+    GBP, JPY, CAD, …) is a DISPLAY currency: the quote is localised for presentation and the
+    charge is taken in the INR base, which is why the response carries both
+    ``checkout_currency`` and ``is_direct_checkout=False`` for those buyers.
     """
     from backend_app.core.fx_service import FXService
     from backend_app.core.pricing_service import PricingService
@@ -1713,77 +2318,7 @@ async def create_checkout_session(
         raise HTTPException(400, "Calculated checkout amount must be greater than zero.")
 
     try:
-        if provider == "stripe":
-            stripe_key = _validate_keys("stripe")
-            import stripe
-            stripe.api_key = stripe_key
-
-            session_params = {
-                "payment_method_types": ["card"],
-                "line_items": [
-                    {
-                        "price_data": {
-                            "currency": checkout_currency.lower(),
-                            "product_data": {
-                                "name": f"VyomQuant — {_plan_display_name(item_key)}"
-                            },
-                            "unit_amount": amount,
-                            # The recurring interval is the one the request asked for. It used to
-                            # be hardcoded `"month"`, which is why there was no annual plan: an
-                            # annual AMOUNT with a monthly interval would have billed the yearly
-                            # price every month.
-                            **({
-                                "recurring": {"interval": interval}
-                            } if not body.is_addon else {}),
-                        },
-                        "quantity": 1,
-                    }
-                ],
-                "mode": "payment" if body.is_addon else "subscription",
-                "success_url": (
-                    f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}"
-                    "/app/billing?payment=success"
-                ),
-                "cancel_url": (
-                    f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing"
-                ),
-                "client_reference_id": user["id"],
-                "metadata": {
-                    "user_id": user["id"],
-                    "item_key": item_key,
-                    "currency": checkout_currency,
-                    "fx_rate": str(localized.fx_rate),
-                    "price_source": localized.price_source,
-                    "interval": interval,
-                    "discount_applied": "true" if discount_applied else "false",
-                },
-            }
-            # For subscription mode: attach metadata to the Stripe Subscription object
-            # so that customer.subscription.* webhooks can resolve item_key and currency
-            if not body.is_addon:
-                session_params["subscription_data"] = {
-                    "metadata": {
-                        "user_id": user["id"],
-                        "item_key": item_key,
-                        "currency": checkout_currency,
-                        "fx_rate": str(localized.fx_rate),
-                        "price_source": localized.price_source,
-                        "interval": interval,
-                        "discount_applied": "true" if discount_applied else "false",
-                    }
-                }
-            session = stripe.checkout.Session.create(**session_params)
-            return {
-                "checkoutUrl": session.url,
-                "checkout_url": session.url,
-                "provider": "stripe",
-                "currency": checkout_currency,
-                "amount": amount,
-                "interval": interval,
-                "price_source": localized.price_source,
-            }
-
-        elif provider == "razorpay":
+        if provider == "razorpay":
             if amount < RAZORPAY_MIN_AMOUNT_MINOR:
                 # Raised before the client is constructed so the gateway is never asked for an
                 # order it is guaranteed to refuse. Outside the try/except below it would be
@@ -1989,329 +2524,6 @@ async def verify_razorpay_payment(
     }
 
 
-# ── POST /api/billing/webhook/stripe ────────────────────────────────────
-@router.post("/webhook/stripe")
-async def stripe_webhook(
-    background_tasks: BackgroundTasks,
-    request: Request,
-    stripe_signature: str = Header(None, alias="stripe-signature"),
-):
-    # WEBHOOK SECURITY: Validate webhook IP before processing
-    _validate_webhook_ip(request, "stripe")
-    
-    stripe_key = _validate_keys("stripe")
-    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
-    if not webhook_secret or webhook_secret == "whsec_dummy" or not webhook_secret.startswith("whsec_"):
-        raise HTTPException(500, "Stripe production webhook secret is missing, invalid, or test credentials are used in production path.")
-
-    import stripe
-    stripe.api_key = stripe_key
-
-    payload = await request.body()
-    
-    # WEBHOOK SECURITY: Validate webhook signature
-    _validate_webhook_signature(request, "stripe", payload)
-    
-    # WEBHOOK SECURITY: Validate webhook timestamp
-    _validate_webhook_timestamp(request, "stripe")
-    
-    try:
-        secret = webhook_secret or "whsec_dummy"
-        event = stripe.Webhook.construct_event(
-            payload, stripe_signature, secret
-        )
-    except Exception as e:
-        logger.warning(f"Stripe webhook signature failure: {e}")
-        raise HTTPException(400, f"Webhook Error: {e}")
-    
-    # BUG-FIX BILL-01 / BUG-IB-04: Crash-safe two-phase idempotency.
-    # 1. Acquire short-lived processing lock (60s TTL). If crash occurs, key expires in 60s instead of blocking retries for 24h.
-    # 2. On DB commit / successful handling, transition key to "completed" with 86400s TTL.
-    # 3. On failure / exception before DB commit, release key immediately so retries can execute.
-    event_id = event.get("id") or request.headers.get("stripe-event-id")
-    idempotency_key = f"webhook:stripe:{event_id}" if event_id else None
-    if idempotency_key:
-        cached_val = await redis_manager.get(idempotency_key)
-        if cached_val in ("completed", "1", "processing"):
-            logger.info(f"Stripe webhook {event_id} already processed or in-flight, skipping")
-            return {"status": "duplicate"}
-        acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
-        if not acquired:
-            logger.info(f"Stripe webhook {event_id} lock collision, skipping")
-            return {"status": "duplicate"}
-
-    try:
-        # Log webhook event for audit trail
-        logger.info(f"Stripe webhook event: {event['type']}")
-
-        if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
-            user_id = session.get("client_reference_id")
-            metadata = session.get("metadata", {})
-
-            # F-19 FIX: Missing item_key returns HTTP 400 — never default to a paid tier.
-            item_key = metadata.get("item_key")
-            if not item_key:
-                logger.error(
-                    f"Stripe webhook: missing item_key in session metadata "
-                    f"for client_reference_id={user_id}. Metadata received: {metadata}"
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Missing item_key in Stripe session metadata. Cannot process entitlement.",
-                )
-
-            if not user_id:
-                logger.error("Stripe webhook: missing client_reference_id")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Missing client_reference_id in Stripe session"
-                )
-
-            discount_applied = metadata.get("discount_applied") == "true"
-            try:
-                await _process_stripe_entitlement(user_id, item_key, discount_applied, _stripe_settlement_metadata(metadata, session))
-                
-                # Process referral commission on successful payment
-                payment_id = session.get("payment_intent") or session.get("id")
-                payment_amount = session.get("amount_total", 0) / 100.0  # Convert from cents to USD
-                
-                # ── Insert billing_invoices record ──
-                try:
-                    sb_inv = _background_sb()
-                    sb_inv.table("billing_invoices").insert({
-                        "user_id": user_id,
-                        "provider": "stripe",
-                        "provider_payment_id": payment_id or "",
-                        "amount_usd": round(payment_amount, 2),
-                        "amount_inr": 0,
-                        "currency": "USD",
-                        "status": "paid",
-                        "plan": item_key,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }).execute()
-                except Exception as inv_err:
-                    logger.warning(f"[BILLING] Could not insert billing_invoices (Stripe): {inv_err}")
-
-                # ── Dispatch payment_succeeded notification ──
-                try:
-                    from backend_app.core.notification_dispatcher import dispatch_user_notification
-                    await dispatch_user_notification(
-                        user_id=user_id,
-                        event_type="payment_succeeded",
-                        category="billing",
-                        severity="info",
-                        title="Payment Successful",
-                        message=f"Your payment of ${payment_amount:.2f} USD was successful. Plan: {item_key.upper()}.",
-                        metadata={"item_key": item_key, "payment_id": payment_id, "provider": "stripe"},
-                    )
-                except Exception as notif_err:
-                    logger.debug(f"[BILLING] payment_succeeded notification error: {notif_err}")
-
-                if payment_amount > 0:
-                    try:
-                        sb = _background_sb()
-                        sb.rpc("process_referral_commission", {
-                            "p_referred_id": user_id,
-                            "p_payment_id": payment_id,
-                            "p_subscription_tier": item_key,
-                            "p_payment_amount_usd": payment_amount
-                        }).execute()
-                        logger.info(f"Referral commission processed for Stripe payment {payment_id}")
-                    except Exception as ref_err:
-                        logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
-                        # Don't fail the webhook if commission processing fails
-            except Exception as e:
-                logger.error(f"Stripe entitlement processing failed: {e}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Entitlement update failed: {e}"
-                )
-
-        elif event["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
-            sub_obj = event["data"]["object"]
-            user_id = sub_obj.get("metadata", {}).get("user_id")
-
-            if not user_id:
-                cust_id = sub_obj.get("customer")
-                cust = stripe.Customer.retrieve(cust_id)
-                user_id = cust.get("metadata", {}).get("user_id")
-
-            if not user_id:
-                logger.error(f"Stripe subscription event {event['type']} missing user_id reference.")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Missing user_id in Stripe subscription event metadata"
-                )
-
-            if event["type"] == "customer.subscription.deleted":
-                try:
-                    await _process_stripe_entitlement(user_id, "free")
-                    logger.info(f"Stripe: Processed cancellation (free) for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Stripe subscription deletion handler failed: {e}")
-                    raise HTTPException(500, f"Subscription deletion failed: {e}")
-            else:
-                # updated: check updated item_key
-                item_key = sub_obj.get("metadata", {}).get("item_key")
-                if not item_key:
-                    items = sub_obj.get("items", {}).get("data", [])
-                    if items:
-                        price_id = items[0].get("price", {}).get("id")
-                        logger.warning(f"No item_key in subscription update metadata. Resolving by price_id: {price_id}")
-                if item_key:
-                    try:
-                        await _process_stripe_entitlement(user_id, item_key)
-                        logger.info(f"Stripe: Processed update ({item_key}) for user {user_id}")
-                    except Exception as e:
-                        logger.error(f"Stripe subscription update handler failed: {e}")
-                        raise HTTPException(500, f"Subscription update failed: {e}")
-
-        elif event["type"] == "invoice.payment_succeeded":
-            # ── Subscription renewal: mark active and extend billing period ──
-            invoice_obj = event["data"]["object"]
-            sub_id = invoice_obj.get("subscription")
-            if sub_id:
-                renewal_user_id = None
-                try:
-                    sub = stripe.Subscription.retrieve(sub_id)
-                    renewal_user_id = sub.get("metadata", {}).get("user_id")
-                    if not renewal_user_id:
-                        cust_id = invoice_obj.get("customer")
-                        cust = stripe.Customer.retrieve(cust_id)
-                        renewal_user_id = cust.get("metadata", {}).get("user_id")
-                    if renewal_user_id:
-                        renewal_item_key = sub.get("metadata", {}).get("item_key", "")
-                        from backend_app.core.billing_lifecycle import BillingLifecycle
-                        sb_renew = _background_sb()
-                        await BillingLifecycle.renew_subscription(renewal_user_id, sb_renew)
-                        await invalidate_profile_cache(renewal_user_id)
-                        # Insert billing_invoices record for renewal
-                        renewal_amount = invoice_obj.get("amount_paid", 0) / 100.0
-                        renewal_payment_id = invoice_obj.get("payment_intent") or invoice_obj.get("id", "")
-                        try:
-                            sb_inv = _background_sb()
-                            sb_inv.table("billing_invoices").insert({
-                                "user_id": renewal_user_id,
-                                "provider": "stripe",
-                                "provider_payment_id": renewal_payment_id,
-                                "amount_usd": round(renewal_amount, 2),
-                                "amount_inr": 0,
-                                "currency": "USD",
-                                "status": "paid",
-                                "plan": renewal_item_key or "unknown",
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            }).execute()
-                        except Exception as inv_err:
-                            logger.warning(f"[BILLING] Could not insert billing_invoices (Stripe renewal): {inv_err}")
-                        # Dispatch renewal notification
-                        try:
-                            from backend_app.core.notification_dispatcher import dispatch_user_notification
-                            await dispatch_user_notification(
-                                user_id=renewal_user_id,
-                                event_type="subscription_renewed",
-                                category="billing",
-                                severity="info",
-                                title="Subscription Renewed",
-                                message=f"Your subscription has been renewed successfully. Amount: ${renewal_amount:.2f} USD.",
-                                metadata={"item_key": renewal_item_key, "payment_id": renewal_payment_id, "provider": "stripe"},
-                            )
-                        except Exception as notif_err:
-                            logger.debug(f"[BILLING] subscription_renewed notification error: {notif_err}")
-                        logger.info(f"Stripe: Renewal processed for user {renewal_user_id}")
-                except Exception as renew_err:
-                    logger.error(f"Stripe renewal processing error for sub {sub_id}: {renew_err}")
-
-        elif event["type"] == "invoice.payment_failed":
-            invoice_obj = event["data"]["object"]
-            sub_id = invoice_obj.get("subscription")
-            user_id = None
-            if sub_id:
-                sub = stripe.Subscription.retrieve(sub_id)
-                user_id = sub.get("metadata", {}).get("user_id")
-            if not user_id:
-                cust_id = invoice_obj.get("customer")
-                cust = stripe.Customer.retrieve(cust_id)
-                user_id = cust.get("metadata", {}).get("user_id")
-
-            if user_id:
-                try:
-                    sb = _background_sb()
-                    sb.table("profiles").update({
-                        "is_frozen": True,
-                        "subscription_status": "past_due",
-                    }).eq("id", user_id).execute()
-                    await invalidate_profile_cache(user_id)
-                    logger.info(f"User {user_id} account frozen due to invoice payment failure.")
-                    # Dispatch payment_failed notification
-                    try:
-                        from backend_app.core.notification_dispatcher import dispatch_user_notification
-                        await dispatch_user_notification(
-                            user_id=user_id,
-                            event_type="payment_failed",
-                            category="billing",
-                            severity="critical",
-                            title="Payment Failed — Action Required",
-                            message="Your subscription payment failed. Please update your payment method to restore access.",
-                            metadata={"provider": "stripe", "action_url": "/app/billing"},
-                        )
-                    except Exception as notif_err:
-                        logger.debug(f"[BILLING] payment_failed notification error: {notif_err}")
-                    # Broadcast via WebSocket for immediate UI refresh
-                    await RealtimeSync.sync_subscription_change(
-                        user_id, "payment_failed",
-                        {"subscription_status": "past_due", "action": "update_payment_method"}
-                    )
-                except Exception as e:
-                    logger.error(f"Stripe payment failure handler failed to freeze account: {e}")
-                    raise HTTPException(500, f"Payment failure handler failed: {e}")
-
-        elif event["type"] in ("charge.refunded", "charge.refund.updated"):
-            # Handle refunds and chargebacks - reverse referral commission
-            charge_obj = event["data"]["object"]
-            payment_id = charge_obj.get("id")
-            
-            if payment_id:
-                try:
-                    sb = _background_sb()
-                    sb.rpc("reverse_referral_commission", {
-                        "p_payment_id": payment_id,
-                        "p_reversal_reason": event["type"]
-                    }).execute()
-                    logger.info(f"Referral commission reversed for Stripe payment {payment_id} due to {event['type']}")
-                except Exception as ref_err:
-                    logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
-                    # Don't fail the webhook if commission reversal fails
-
-                # MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8: the ledger half of a
-                # refund. Only ``charge.refunded`` means money actually went back — ``charge.
-                # refund.updated`` also fires when a refund FAILS, and recording a reversal for a
-                # refund that never completed would subtract an owner's earning for money that
-                # never left and cancel a live entitlement. The reference is the payment intent, so
-                # the reversal deduplicates against the same reference the payment settled under.
-                if event["type"] == "charge.refunded":
-                    await _settle_marketplace_reversal(
-                        provider="stripe",
-                        payment_reference=charge_obj.get("payment_intent") or payment_id,
-                        event_metadata=charge_obj.get("metadata") or {},
-                        amount_minor=charge_obj.get("amount_refunded"),
-                        currency=charge_obj.get("currency"),
-                        event_name=event["type"],
-                    )
-
-        # Successfully completed — store completed status with 24h TTL
-        if idempotency_key:
-            await redis_manager.set(idempotency_key, "completed", ex=86400)
-
-        return {"status": "success"}
-
-    except Exception:
-        # On failure or rollback, release processing lock so retry can proceed
-        if idempotency_key:
-            await redis_manager.delete(idempotency_key)
-        raise
-
-
 # ── POST /api/billing/webhook/razorpay ──────────────────────────────────
 @router.post("/webhook/razorpay")
 async def razorpay_webhook(
@@ -2332,31 +2544,69 @@ async def razorpay_webhook(
     # WEBHOOK SECURITY: Validate webhook signature
     _validate_webhook_signature(request, "razorpay", raw_body)
     
-    # WEBHOOK SECURITY: Validate webhook timestamp
-    _validate_webhook_timestamp(request, "razorpay")
+    # There is no timestamp window for Razorpay; see the block above _razorpay_event_id for
+    # why the function that claimed to provide one was deleted rather than repaired.
 
-    event_id = None
     try:
         payload = json.loads(raw_body)
-        event_id = payload.get("event_id") or payload.get("payload", {}).get("payment", {}).get("entity", {}).get("id")
     except Exception as e:
-        logger.warning(f"Failed to extract Razorpay event id for idempotency: {e}")
+        logger.error(f"Razorpay webhook body is not JSON: {e}")
+        raise HTTPException(400, "Malformed webhook body")
+
+    event_id = _razorpay_event_id(request, payload)
+    if not event_id:
+        # REFUSE RATHER THAN PROCEED UNGUARDED. This used to fall through with
+        # `idempotency_key = None`, which skipped BOTH idempotency layers and ran the
+        # handler with no deduplication at all. On a refund that means the referral
+        # commission reversal, the obligation reversal, the marketplace settlement reversal
+        # and the plan revocation ALL re-execute on every redelivery -- and Razorpay
+        # redelivers for days. Money damage, invisible.
+        #
+        # A 400 is the safe direction: Razorpay retries, nothing is granted or reversed
+        # twice, and the log line below is what an operator needs to see. An event this
+        # platform cannot identify is an event it cannot safely process exactly once.
+        logger.error(
+            "Razorpay webhook REFUSED: no event id could be derived from the "
+            "x-razorpay-event-id header, the body's event_id, or any known entity "
+            "container (payment/refund/order/subscription). Processing without an id would "
+            "run this handler with no deduplication on either layer. event=%r keys=%r",
+            payload.get("event"), sorted(payload.get("payload", {}).keys()),
+        )
+        raise HTTPException(400, "Webhook carries no identifiable event id")
 
     # BUG-FIX IB-01 / BUG-IB-04: Crash-safe two-phase idempotency.
-    idempotency_key = f"webhook:razorpay:{event_id}" if event_id else None
-    if idempotency_key:
-        cached_val = await redis_manager.get(idempotency_key)
-        if cached_val in ("completed", "1", "processing"):
-            logger.info(f"Razorpay webhook {event_id} already processed or in-flight, skipping")
-            return {"status": "duplicate"}
-        acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
-        if not acquired:
-            logger.info(f"Razorpay webhook {event_id} lock collision, skipping")
-            return {"status": "duplicate"}
+    #
+    # No longer conditional. `event_id` is guaranteed non-empty by the refusal above, so the
+    # `if idempotency_key:` that used to wrap this block could only ever be False on the
+    # path that skipped deduplication entirely -- which is the defect that was fixed. Keeping
+    # the branch would preserve the shape of the hole.
+    idempotency_key = f"webhook:razorpay:{event_id}"
+    cached_val = await redis_manager.get(idempotency_key)
+    if cached_val in ("completed", "1", "processing"):
+        logger.info(f"Razorpay webhook {event_id} already processed or in-flight, skipping")
+        return {"status": "duplicate"}
+    acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
+    if not acquired:
+        logger.info(f"Razorpay webhook {event_id} lock collision, skipping")
+        return {"status": "duplicate"}
 
-    secret = webhook_secret or "dummy_webhook_secret"
+    # SEC-03: a DURABLE claim underneath the Redis fast path above. Redis alone was not
+    # enough -- its client fails soft and its keys expire in 24h, while Razorpay redelivers
+    # for days. See core/webhook_idempotency.py's module docstring.
+    if not await acquire_webhook_processing("razorpay", event_id):
+        logger.info(
+            f"Razorpay webhook {event_id} already durably processed "
+            f"(webhook_events), skipping"
+        )
+        await redis_manager.delete(idempotency_key)
+        return {"status": "duplicate"}
+
+    # `webhook_secret` is already proven present and not the placeholder by the guard above,
+    # so there is nothing to fall back to. The previous `or "dummy_webhook_secret"` was dead
+    # for that reason, but it was one relaxed guard away from making every forged webhook
+    # verify against a constant that is published in this repository.
     expected_sig = hmac.new(
-        secret.encode(),
+        webhook_secret.encode(),
         raw_body,
         hashlib.sha256,
     ).hexdigest()
@@ -2364,6 +2614,8 @@ async def razorpay_webhook(
     if not hmac.compare_digest(expected_sig, x_razorpay_signature or ""):
         if idempotency_key:
             await redis_manager.delete(idempotency_key)
+        if event_id:
+            await release_webhook_processing("razorpay", event_id)
         logger.warning("Razorpay webhook: invalid signature")
         raise HTTPException(400, "Invalid Razorpay signature")
 
@@ -2372,6 +2624,8 @@ async def razorpay_webhook(
     except Exception:
         if idempotency_key:
             await redis_manager.delete(idempotency_key)
+        if event_id:
+            await release_webhook_processing("razorpay", event_id)
         raise HTTPException(400, "Invalid JSON body")
     
     try:
@@ -2382,6 +2636,19 @@ async def razorpay_webhook(
         if payload.get("event") == "payment.captured":
             payment = payload["payload"]["payment"]["entity"]
             notes = payment.get("notes", {})
+            try:
+                # SEC-02: authorisation comes from the server-created order, not payment notes.
+                notes = await _reconcile_razorpay_payment_with_order(payment, notes)
+            except RazorpayOrderMismatch as mismatch:
+                logger.critical(
+                    "[BILLING] SEC-02: Razorpay payment %s NOT applied - %s. No entitlement granted.",
+                    payment.get("id"), mismatch,
+                )
+                if idempotency_key:
+                    await redis_manager.set(idempotency_key, "completed", ex=86400)
+                if event_id:
+                    await mark_webhook_completed("razorpay", event_id)
+                return {"status": "ignored", "reason": "order_mismatch"}
             user_id = notes.get("user_id")
             item_key = notes.get("item") or notes.get("item_key")  # Support both keys for compatibility
 
@@ -2397,24 +2664,150 @@ async def razorpay_webhook(
                 await _process_razorpay_entitlement(user_id, item_key, discount_applied, _razorpay_settlement_metadata(notes, payment))
                 
                 payment_id = payment.get("id")
-                payment_amount = payment.get("amount", 0) / 100.0  # Convert from paise to INR
+
+                # ══════════════════════════════════════════════════════════════
+                # MONEY-07: THE PROVIDER DECLARES THE DENOMINATION. CHECK IT.
+                # ══════════════════════════════════════════════════════════════
+                # The amount below is converted as INR. Until this block existed, that
+                # was true *because this code path expects INR* and for no other reason:
+                # Razorpay's payment entity carries its own `currency` field in the same
+                # object as `amount`, and measured across this whole module it was read
+                # exactly once -- inside `_razorpay_settlement_metadata`, which
+                # early-returns for anything that is not a marketplace item. So on the
+                # plan-purchase path the payload's own denomination was available and
+                # ignored.
+                #
+                # The literal "INR" below STAYS, and is now load-bearing in a different
+                # way: it is the single denomination this handler can record, because the
+                # invoice insert writes a fixed `amount_inr` column and a fixed
+                # `"currency": "INR"`. The provider's declaration is checked against it
+                # rather than substituted for it -- see `ProviderCurrencyMismatch` for
+                # why substituting is the wrong fix in two separate ways.
+                _currency_ok = True
+                try:
+                    _require_provider_currency(
+                        payment.get("currency"),
+                        "INR",
+                        provider="razorpay",
+                        payment_id=payment_id,
+                    )
+                except ProviderCurrencyMismatch as mismatch:
+                    _currency_ok = False
+                    logger.critical(
+                        "[BILLING] MONEY-07: Razorpay payment %s was NOT recorded as an "
+                        "invoice because its declared currency is not INR (%s). The "
+                        "entitlement was already granted and STANDS -- the customer paid. "
+                        "No amount is filed, because filing it against amount_inr would "
+                        "record a figure in the wrong unit. %s",
+                        payment_id, mismatch.code, mismatch.detail,
+                    )
+                    # The amount is still owed to a referrer if one exists, so state it
+                    # in the unit it was actually charged in -- but only when that unit
+                    # has a persisted minor-unit exponent. For CURRENCY_MISSING,
+                    # CURRENCY_MALFORMED or CURRENCY_UNSUPPORTED there is no exponent, so
+                    # the amount's SCALE is unknown and any figure would be a guess;
+                    # those cases are logged above and deliberately record nothing. This
+                    # is a real limitation, stated rather than papered over.
+                    if mismatch.code == "CURRENCY_MISMATCH":
+                        _declared = str(payment.get("currency") or "").strip().upper()
+                        _declared_amount = _amount_in_declared_currency(
+                            payment.get("amount"), _declared
+                        )
+                        if _declared_amount is not None and _declared_amount > 0:
+                            await _record_referral_obligation(
+                                provider="razorpay",
+                                payment_id=payment_id,
+                                user_id=user_id,
+                                amount=_declared_amount,
+                                currency=_declared,
+                                subscription_tier=item_key,
+                                reason_code="PROVIDER_CURRENCY_MISMATCH",
+                                detail={
+                                    "handler_currency": "INR",
+                                    "declared_currency": _declared,
+                                    "mismatch_code": mismatch.code,
+                                },
+                            )
+
+                # MONEY-02: exact paise -> Decimal INR, never float division.
+                payment_amount = _provider_major_amount(payment.get("amount"), "INR")
 
                 # ── Insert billing_invoices record ──
-                try:
-                    sb_inv = _background_sb()
-                    sb_inv.table("billing_invoices").insert({
-                        "user_id": user_id,
-                        "provider": "razorpay",
-                        "provider_payment_id": payment_id or "",
-                        "amount_usd": 0,
-                        "amount_inr": round(payment_amount, 2),
-                        "currency": "INR",
-                        "status": "paid",
-                        "plan": item_key,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }).execute()
-                except Exception as inv_err:
-                    logger.warning(f"[BILLING] Could not insert billing_invoices (Razorpay): {inv_err}")
+                # Skipped when the declared currency is not INR: `amount_inr` and
+                # `"currency": "INR"` are fixed, so writing a non-INR payment here would
+                # mislabel it. The refusal is logged at CRITICAL above.
+                if _currency_ok:
+                    # BILL-07: until migration 070 this insert named five columns
+                    # -- provider, provider_payment_id, amount_usd, amount_inr,
+                    # plan -- that the schema did not declare. PostgREST rejects
+                    # the whole statement on an undefined column, so with the
+                    # `except` below downgrading it to a log line, NO INVOICE ROW
+                    # HAD EVER BEEN WRITTEN. 070 declares all five, so the write
+                    # resolves; the handling here is what stops a residual
+                    # failure from being invisible again.
+                    #
+                    # `provider_payment_id` is now None rather than "" when the
+                    # payment carries no id. The empty string is a real value
+                    # that identifies nothing: it would satisfy
+                    # uq_billing_invoices_provider_payment and so let the FIRST
+                    # id-less capture block every later one, and it violates
+                    # chk_billing_invoices_payment_id_not_blank. NULL is the
+                    # honest unknown and is excluded from the partial index.
+                    try:
+                        sb_inv = _background_sb()
+                        sb_inv.table("billing_invoices").insert({
+                            "user_id": user_id,
+                            "provider": "razorpay",
+                            "provider_payment_id": payment_id or None,
+                            # Zero USD is a true statement about an INR capture,
+                            # not a fabricated figure: no dollars were charged.
+                            "amount_usd": 0,
+                            "amount_inr": str(payment_amount) if payment_amount is not None else None,
+                            "currency": "INR",
+                            "status": "paid",
+                            "plan": item_key,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        }).execute()
+                    except Exception as inv_err:
+                        # A unique violation means a previous delivery of this
+                        # same payment already filed the invoice. That is the
+                        # index doing its job -- the desired end state is
+                        # reached, so it is success, not an error. Without this
+                        # branch a redelivery would log CRITICAL on a correctly
+                        # de-duplicated charge.
+                        if _is_duplicate_invoice(inv_err):
+                            logger.info(
+                                "[BILLING] BILL-07: invoice for razorpay payment %s "
+                                "already on file; redelivery de-duplicated.",
+                                payment_id,
+                            )
+                        else:
+                            # CRITICAL, not WARNING. The customer has been
+                            # charged and the entitlement is granted, so this is
+                            # a money fact that exists everywhere except this
+                            # ledger -- it will be missing from the billing page
+                            # and, because the refund path finds a purchase by
+                            # (provider, provider_payment_id), A LATER FULL
+                            # REFUND WILL NOT REVOKE THE PLAN.
+                            #
+                            # It deliberately does NOT raise. Raising would
+                            # return non-2xx, Razorpay would redeliver, and
+                            # `_record_plan_period` extends the paid period from
+                            # its current end when the same plan is repurchased
+                            # -- so a redelivery would hand out a second month
+                            # for one payment. A lost ledger row is recoverable
+                            # from the fields below; a silently doubled
+                            # entitlement is not.
+                            logger.critical(
+                                "[BILLING] BILL-07: invoice NOT recorded for razorpay "
+                                "payment %s (user=%s plan=%s amount_inr=%s currency=INR "
+                                "status=paid): %s: %s. The charge and the entitlement "
+                                "both stand. Reconcile by inserting this row manually; "
+                                "every field needed is in this line.",
+                                payment_id, user_id, item_key,
+                                payment_amount if payment_amount is not None else "unreadable",
+                                type(inv_err).__name__, inv_err,
+                            )
 
                 # ── Dispatch payment_succeeded notification ──
                 try:
@@ -2425,25 +2818,100 @@ async def razorpay_webhook(
                         category="billing",
                         severity="info",
                         title="Payment Successful",
-                        message=f"Your payment of ₹{payment_amount:.2f} INR was successful. Plan: {item_key.upper()}.",
+                        message=(
+                            f"Your payment of \u20b9{payment_amount:.2f} INR was successful. "
+                            f"Plan: {item_key.upper()}."
+                            if payment_amount is not None
+                            else f"Your payment was successful. Plan: {item_key.upper()}."
+                        ),
                         metadata={"item_key": item_key, "payment_id": payment_id, "provider": "razorpay"},
                     )
                 except Exception as notif_err:
                     logger.debug(f"[BILLING] payment_succeeded notification error: {notif_err}")
 
-                if payment_amount > 0:
-                    try:
-                        sb = _background_sb()
-                        sb.rpc("process_referral_commission", {
-                            "p_referred_id": user_id,
-                            "p_payment_id": payment_id,
-                            "p_subscription_tier": item_key,
-                            "p_payment_amount_usd": payment_amount  # Note: This is INR, not USD
-                        }).execute()
-                        logger.info(f"Referral commission processed for Razorpay payment {payment_id}")
-                    except Exception as ref_err:
-                        logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
-                        # Don't fail the webhook if commission processing fails
+                # ══════════════════════════════════════════════════════════════
+                # MONEY-04: A RAZORPAY PAYMENT MUST NOT CREDIT AN "USD" COMMISSION
+                # ══════════════════════════════════════════════════════════════
+                # This branch used to call `process_referral_commission` with the INR
+                # amount in the `p_payment_amount_usd` argument, carrying the comment
+                #
+                #     "p_payment_amount_usd": payment_amount  # Note: This is INR, not USD
+                #
+                # `referral_commissions` has NO currency column — it has
+                # `payment_amount_usd` and `commission_amount_usd`, and the function
+                # computes a flat 20% of whatever it is handed. So an INR payment
+                # credited a commission roughly 83x larger than the real USD value, and
+                # the row recorded it as dollars. The defect was known and annotated;
+                # it was never fixed.
+                #
+                # WHY THIS REFUSES RATHER THAN CONVERTING. Converting would require
+                # choosing an FX policy — which rate, as of when, and who absorbs the
+                # drift between accrual and payout — and that is a product decision
+                # about money owed to a referrer, not something to infer in a webhook
+                # handler. `core/fx_service.py` exists, but reaching for it here would
+                # bake an unreviewed rate-at-time rule into the ledger.
+                #
+                # So the conservative correct action is to record NO commission rather
+                # than a knowingly wrong one. The entitlement is still granted, the
+                # invoice is still written in INR, and the omission is logged loudly
+                # with everything needed to settle it once the model supports a
+                # currency. Recorded in staging/REMEDIATION_REPORT.md as requiring a
+                # product decision before Razorpay referrals can be credited.
+                if payment_amount is None:
+                    logger.error(
+                        "[BILLING] MONEY-02: no referral commission issued for Razorpay "
+                        "payment %s because the charged amount could not be read exactly.",
+                        payment_id,
+                    )
+                elif payment_amount > 0:
+                    logger.error(
+                        "[BILLING] MONEY-04: referral commission SKIPPED for Razorpay "
+                        "payment %s (amount %s INR, user %s, plan %s). "
+                        "referral_commissions stores USD only, so crediting an INR "
+                        "amount there would overstate the commission by the USD/INR "
+                        "rate. The obligation is now recorded durably in "
+                        "referral_obligations instead of only in this log line.",
+                        payment_id,
+                        payment_amount,
+                        user_id,
+                        item_key,
+                    )
+                    # ══════════════════════════════════════════════════════════
+                    # MONEY-06: THE OBLIGATION IS NOW A ROW, NOT ONLY A LOG LINE
+                    # ══════════════════════════════════════════════════════════
+                    # The refusal above is CORRECT and is kept exactly as it was -- an
+                    # INR amount must not be credited to a USD-only ledger, and
+                    # converting it would require choosing an FX rate, an as-of instant
+                    # and who absorbs the accrual-to-payout drift. That is a product
+                    # decision about a customer's money.
+                    #
+                    # What was wrong is that the refusal was the ONLY artefact. The
+                    # commission was genuinely owed, the facts needed to settle it were
+                    # printed once to a log, and nothing could query, age, reconcile or
+                    # pay it. `referral_obligations` records the amount in the currency
+                    # it was actually charged in, with the resolved referrer and a
+                    # machine-readable reason, under a real unique constraint on
+                    # (provider, provider_payment_id) so a redelivery cannot duplicate it.
+                    #
+                    # Note what is NOT done here: no `process_referral_commission` call,
+                    # no wallet credit, no conversion. The obligation and a credited
+                    # commission are mutually exclusive states of one payment, and 029's
+                    # postflight asserts the obligation writer touches neither ledger
+                    # table.
+                    await _record_referral_obligation(
+                        provider="razorpay",
+                        payment_id=payment_id,
+                        user_id=user_id,
+                        amount=payment_amount,
+                        currency="INR",
+                        subscription_tier=item_key,
+                        reason_code="LEDGER_IS_USD_ONLY",
+                        detail={
+                            "handler": "razorpay_webhook",
+                            "event": "payment.captured",
+                            "ledger_currency": "USD",
+                        },
+                    )
             except Exception as e:
                 logger.error(f"Razorpay entitlement processing failed: {e}")
                 raise HTTPException(
@@ -2468,6 +2936,21 @@ async def razorpay_webhook(
                     logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
                     # Don't fail the webhook if commission reversal fails
 
+                # MONEY-06: reverse the recorded obligation. On this provider it is the
+                # ONLY reversal that can do anything -- the commission RPC above looks in
+                # `referral_commissions`, where a Razorpay payment never created a row,
+                # which the audit recorded as "structurally dead".
+                #
+                # Guarded to `refund.processed`: Razorpay's `refund.failed` shares this
+                # branch and means the refund did NOT go through, so reversing on it would
+                # cancel a payable for money that never came back.
+                if payload.get("event") == "refund.processed":
+                    await _reverse_referral_obligation(
+                        provider="razorpay",
+                        payment_id=payment_id,
+                        reason=payload.get("event"),
+                    )
+
                 # MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8: the ledger half of a
                 # refund, on the branch that already exists. ``refund.failed`` shares this branch
                 # but is deliberately NOT settled: Razorpay's refund.failed means the refund did
@@ -2483,10 +2966,15 @@ async def razorpay_webhook(
                         currency=refund.get("currency"),
                         event_name=payload.get("event"),
                     )
+                    # BILL-01: and the plan half - a fully refunded plan purchase stops entitling.
+                    await _revoke_plan_for_refunded_razorpay_payment(payment_id)
 
         # Successfully completed — store completed status with 24h TTL
         if idempotency_key:
             await redis_manager.set(idempotency_key, "completed", ex=86400)
+        if event_id:
+            # SEC-03: durable completion, never expires.
+            await mark_webhook_completed("razorpay", event_id)
 
         return {"status": "success"}
 
@@ -2494,10 +2982,9 @@ async def razorpay_webhook(
         # On failure or rollback, release processing lock so retry can proceed
         if idempotency_key:
             await redis_manager.delete(idempotency_key)
+        if event_id:
+            await release_webhook_processing("razorpay", event_id)
         raise
-
-
-
 
 
 @router.post("/payment-methods")
@@ -2559,10 +3046,23 @@ async def add_payment_method(
 @router.delete("/payment-methods/{method_id}")
 async def delete_payment_method(
     method_id: str,
-    user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    user: dict = Depends(require_aal2),
+    db: Session = Depends(get_payment_methods_db),
 ):
     """Delete a stored instrument. The lookup stays; its miss now names why the table is empty.
+
+    SEC-15: THIS ENDPOINT REQUIRES AAL2 (MFA). It is a destructive mutation of a stored
+    payment instrument, which is squarely inside ``require_aal2``'s "Billing/payment
+    mutations" bullet, and the product owner's Razorpay rationale does not reach it -- no
+    payment page is involved in deleting a saved card.
+
+    Customer impact of gating it is nil today, which is why it is gated without
+    hesitation: ``add_payment_method`` is an explicit refusal (above) and this table has
+    no writer, so the route can only ever answer 404. Gating it now means the dependency
+    is already correct if a writer is ever added, rather than being a step someone has to
+    remember at that point.
+
+    Regression: tests/test_sec15_billing_mutations_require_aal2.py
 
     Kept rather than removed, and kept ROW-DRIVEN: the ``PaymentMethodModel`` query is the only
     thing that decides this outcome, so a row that does exist is still deleted for the account
@@ -2595,107 +3095,88 @@ async def delete_payment_method(
     return {"status": "ok", "deleted": method_id}
 
 
+def _profile_payment_provider(sb: Any, user_id: str) -> Optional[str]:
+    try:
+        rows = sb.table("profiles").select("payment_provider").eq("id", user_id).execute().data or []
+        return (rows[0].get("payment_provider") or None) if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── POST /api/billing/portal ─────────────────────────────────────────────────
 @router.post("/portal")
 @limiter.limit("5/minute")
 async def create_portal_session(
     request: Request,
     user: dict = Depends(get_current_user)
 ):
-    """A hosted provider portal session, or a refusal naming why this provider has none.
+    """Always a refusal naming WHY there is no portal, because no provider here has one.
 
-    WHAT THIS USED TO DO
-    --------------------
-    It opened with ``_validate_keys("stripe")`` unconditionally. On a Razorpay deployment that
-    raises ``HTTPException(500, "Stripe is not configured: STRIPE_SECRET_KEY is not set.")``, so
-    the ONE action the billing page's payment-methods panel offered answered 500 every single
-    time it was pressed - naming a provider this platform does not bill through, from a button
-    labelled "Manage via provider portal".
+    THIS ROUTE IS NOT STRIPE INFRASTRUCTURE, WHICH IS WHY IT SURVIVED THE REMOVAL
+    ----------------------------------------------------------------------------
+    It was deleted in the first pass of the Stripe removal along with the Stripe portal
+    session it used to be able to open, and that was a mistake: ``Billing.jsx`` still
+    presents two controls that call it -- the ``past_due`` alert's *Update payment method*
+    and the current-plan panel's *Manage billing* -- and that page was deliberately built
+    to RENDER THIS HANDLER'S OWN SENTENCE into ``ds/Alert`` verbatim. With the route gone
+    both buttons got a bare 404, which carries no coded ``detail``, so the page fell back
+    to its generic "Failed to open billing portal." and the user lost the explanation of
+    where their card actually gets changed. A 404 is a worse answer than the honest 501 it
+    replaced, for the same reason the 500 this route originally existed to fix was: it
+    fails without saying anything true.
 
-    WHY THE ANSWER FOR RAZORPAY IS A REFUSAL AND NOT A REDIRECT
-    -----------------------------------------------------------
-    Razorpay publishes no hosted self-serve billing portal. There is no Razorpay equivalent of
-    ``stripe.billing_portal.Session`` to call and no customer-facing URL to send a subscriber
-    to, so any URL returned here would be one this handler made up. A fabricated URL is worse
-    than the 500 it replaces: the 500 at least failed visibly. The refusal instead names the
-    provider, says there is no portal, and says where the payment instrument is actually
-    changed - at the next Razorpay Checkout, which is the only place it is ever collected.
+    WHAT IS GONE IS THE SUCCESS PATH, NOT THE ROUTE
+    ----------------------------------------------
+    Previously ``_PROVIDERS_WITH_HOSTED_PORTAL = frozenset({"stripe"})`` and a live Stripe
+    secret reached a real ``stripe.billing_portal.Session.create``. Stripe is removed, and
+    Razorpay publishes no hosted self-serve billing portal -- no equivalent session to
+    create and no customer-facing URL to hand out. So there is no longer any input for
+    which this route can return a URL, and it does not pretend otherwise. The empty
+    ``_PROVIDERS_WITH_HOSTED_PORTAL`` and the comprehension that filtered against it went
+    with the Stripe branch rather than being kept as an always-empty set gating
+    always-unreachable code.
 
-    THE STRIPE BRANCH IS UNTOUCHED AND STILL REACHED
-    ------------------------------------------------
-    This is additive: if ``STRIPE_SECRET_KEY`` genuinely holds a live Stripe secret then Stripe
-    IS a provider this deployment can bill through, its portal exists, and the original
-    customer-lookup-then-``billing_portal.Session.create`` path below runs exactly as it did.
-    The gate is only that Stripe has to be real before a Stripe API call is made in its name.
+    A fabricated URL would be worse than any error: the refusal instead names the provider,
+    says there is no portal, and says where the payment instrument is actually changed --
+    at the next Razorpay Checkout, which is the only place it is ever collected.
 
-    THE TWO REFUSALS ARE SEPARATE, FOR THE REASON ``_validate_keys`` SEPARATES ITS THREE
-    -----------------------------------------------------------------------------------
-    "Razorpay has no portal" is a permanent fact about the provider that no configuration can
-    change. "This deployment has no live credentials for any provider" is an operator fault
-    that an environment variable fixes. One sentence covering both would tell whoever reads it
-    which of those they have - which is to say, neither.
+    THE TWO REFUSALS STAY SEPARATE, FOR THE REASON ``_validate_keys`` SEPARATES ITS THREE
+    ------------------------------------------------------------------------------------
+    "Razorpay has no portal" is a permanent fact about the provider that no configuration
+    can change. "This deployment has no live credentials for any provider" is an operator
+    fault that an environment variable fixes. One sentence covering both would tell whoever
+    reads it which of those they have -- which is to say, neither.
     """
     live_providers = _providers_with_live_credentials()
-    portal_providers = [p for p in live_providers if p in _PROVIDERS_WITH_HOSTED_PORTAL]
-
-    if not portal_providers:
-        if live_providers:
-            # A real provider, which genuinely has no portal. Permanent, and not a fault.
-            raise HTTPException(
-                status_code=501,
-                detail={
-                    "error": "PROVIDER_HAS_NO_BILLING_PORTAL",
-                    "message": (
-                        f"{', '.join(p.capitalize() for p in live_providers)} is the payment "
-                        "provider configured for this platform, and it publishes no hosted "
-                        "self-serve billing portal, so there is no portal session to open. The "
-                        "payment instrument is supplied directly to the provider's checkout "
-                        "each time a subscription is bought or renewed, and is not stored by "
-                        "VyomQuant — so a different instrument is used by choosing it at the "
-                        "next checkout."
-                    ),
-                },
-            )
-        # No provider at all: a deployment fault, and a different sentence for it.
+    if live_providers:
+        # A real provider, which genuinely has no portal. Permanent, and not a fault.
         raise HTTPException(
-            status_code=503,
+            status_code=501,
             detail={
-                "error": "PAYMENT_PROVIDER_NOT_CONFIGURED",
+                "error": "PROVIDER_HAS_NO_BILLING_PORTAL",
                 "message": (
-                    "No payment provider on this deployment holds live credentials, so no "
-                    "billing portal can be opened and none is invented here. This is a server "
-                    "configuration fault, not a problem with your subscription."
+                    f"{', '.join(p.capitalize() for p in live_providers)} is the payment "
+                    "provider configured for this platform, and it publishes no hosted "
+                    "self-serve billing portal, so there is no portal session to open. The "
+                    "payment instrument is supplied directly to the provider's checkout "
+                    "each time a subscription is bought or renewed, and is not stored by "
+                    "VyomQuant — so a different instrument is used by choosing it at the "
+                    "next checkout."
                 ),
             },
         )
-
-    stripe_key = _validate_keys("stripe")
-    import stripe
-    stripe.api_key = stripe_key
-
-    try:
-        # Search Stripe customer by email
-        customers = stripe.Customer.list(email=user["email"])
-        if customers.data:
-            customer = customers.data[0]
-            if not customer.metadata.get("user_id"):
-                stripe.Customer.modify(customer.id, metadata={"user_id": user["id"]})
-            customer_id = customer.id
-        else:
-            customer = stripe.Customer.create(
-                email=user["email"],
-                metadata={"user_id": user["id"]},
-                name=user.get("username", user["email"])
-            )
-            customer_id = customer.id
-
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing"
-        )
-        return {"url": session.url}
-    except Exception as e:
-        logger.error(f"Failed to create Stripe portal session for {user['id']}: {e}")
-        raise HTTPException(500, f"Billing portal error: {str(e)}")
+    # No provider at all: a deployment fault, and a different sentence for it.
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "PAYMENT_PROVIDER_NOT_CONFIGURED",
+            "message": (
+                "No payment provider on this deployment holds live credentials, so no "
+                "billing portal can be opened and none is invented here. This is a server "
+                "configuration fault, not a problem with your subscription."
+            ),
+        },
+    )
 
 
 # ── POST /api/billing/cancel ─────────────────────────────────────────────────
@@ -2710,11 +3191,76 @@ async def cancel_subscription(
     Cancel the user's active subscription at period end.
     Subscription remains active until next_billing_date.
     Server-authoritative: updates profiles.cancel_at_period_end and subscription_status.
+
+    SEC-15: THIS ROUTE IS DELIBERATELY *NOT* GATED ON AAL2, AND THAT IS A DECISION RATHER
+    THAN AN OMISSION.
+    ---------------------------------------------------------------------------------
+    ``require_aal2``'s contract names "Billing/payment mutations", and the other two
+    local-state billing mutations -- :func:`resume_subscription` and
+    :func:`delete_payment_method` -- now carry it. This one does not, because the money
+    moves the other way.
+
+    ``require_aal2`` is a hard 403 for any session at ``aal1``, and MFA enrolment is NOT
+    required to hold an account here (AUTH-01 states that consequence deliberately for
+    exchange-key mutation: "A customer who has not enrolled a [factor]..." must enrol
+    first). Applying it here would mean a paying customer who never enrolled a factor
+    CANNOT STOP THEIR OWN BILLING through the product, and would have to contact support
+    to stop being charged. That is a consumer-protection harm -- and a dark pattern -- of
+    a different kind from the risk it would mitigate, which is an attacker with a stolen
+    password cancelling a subscription the victim wanted. The attack costs the victim
+    nothing directly, because cancellation takes effect only at period end and
+    :func:`resume_subscription` -- which IS gated -- is how it would be reversed.
+
+    So the rule applied across these five routes is the direction of the money, not the
+    word "billing":
+
+        starts or resumes billing  ->  gated (or covered by the Razorpay rationale)
+        stops billing              ->  never gated
+
+    If MFA enrolment ever becomes mandatory before first payment, this reasoning expires
+    and the dependency should be added -- the lockout it avoids cannot happen once every
+    paying account has a factor. Until then,
+    ``tests/test_sec15_billing_mutations_require_aal2.py`` asserts this route stays
+    ungated, so a later well-intentioned "finish wiring SEC-15" cannot silently trap
+    customers in a subscription.
     """
     user_id = user["id"]
+    # BILL-CANCEL-01: there must be something to cancel. Found 2026-11-20 in the final launch
+    # certification: a FREE account's cancel returned 200 "will be cancelled at the end of the
+    # current billing period" and wrote subscription_status='cancelled' onto a profile that
+    # has no subscription and no billing period -- the only free profile of 185 in that state.
+    from backend_app.core.subscription_dependencies import get_plan_context
+
+    context = await get_plan_context(user_id, supabase)
+    if str(context.plan or "free").lower() == "free":
+        raise HTTPException(
+            409,
+            {
+                "error": "NO_ACTIVE_SUBSCRIPTION",
+                "message": "There is no paid subscription on this account to cancel.",
+            },
+        )
     try:
         from backend_app.core.billing_lifecycle import BillingLifecycle
         sb = _background_sb()
+        # BILL-05 USED TO CALL THE PROVIDER HERE, AND NO LONGER NEEDS TO.
+        #
+        # The provider-first ordering existed because Stripe subscriptions RECUR: writing
+        # `cancel_at_period_end` locally without telling Stripe meant the card kept being
+        # charged while the UI said "cancelled", so the remote call had to succeed before
+        # local state moved, and a failure had to surface as 502 PROVIDER_CANCEL_FAILED.
+        #
+        # Razorpay orders do not recur. This platform creates a one-time order per period
+        # (`create_checkout_session`'s razorpay branch) and `core.plan_expiry` lapses the
+        # plan when `next_billing_date` passes. There is no standing instruction at the
+        # gateway to withdraw, so there is nothing to tell Razorpay and no remote failure
+        # mode to guard against -- which is why `_should_cancel_at_stripe` already returned
+        # False for this provider before Stripe was removed. Cancellation is therefore a
+        # local state change by nature here, not by omission.
+        #
+        # If a recurring gateway is ever added back, the provider-first ordering has to come
+        # back WITH it. Do not treat this as licence to cancel locally on a provider that
+        # recurs.
         result = await BillingLifecycle.cancel_subscription(
             user_id=user_id,
             cancel_at_period_end=True,
@@ -2741,6 +3287,8 @@ async def cancel_subscription(
         except Exception as notif_err:
             logger.debug(f"[BILLING] cancellation notification error: {notif_err}")
         return {"status": "ok", "detail": result.get("message", "Cancellation scheduled"), "cancel_at_period_end": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cancel subscription for user {user_id}: {e}")
         raise HTTPException(500, f"Cancellation failed: {str(e)}")
@@ -2751,16 +3299,38 @@ async def cancel_subscription(
 @limiter.limit("5/minute")
 async def resume_subscription(
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_aal2),
     supabase: Any = Depends(get_request_supabase),
 ):
     """
     Reverse a pending cancellation: restore subscription_status to active.
     Server-authoritative: clears cancel_at_period_end and restores active status.
+
+    SEC-15: THIS ENDPOINT REQUIRES AAL2 (MFA).
+    ``require_aal2``'s own security contract names "Billing/payment mutations" as a
+    surface it MUST cover, and this route RESUMES BILLING -- it is the one of the five
+    billing mutations where an attacker holding only a stolen password costs the victim
+    real money, by reversing a cancellation the victim chose.
+
+    The asymmetry with :func:`cancel_subscription` is deliberate and is the whole design;
+    see that function's docstring. Gating this one is safe because being blocked costs a
+    legitimate customer nothing: they cannot un-cancel until they enrol a factor, and
+    their subscription continues to run until period end either way. Checkout remains
+    available to re-subscribe.
+
+    The product owner's recorded hold rationale for this finding was Razorpay's own
+    checkout-time security. That genuinely covers ``create_checkout_session`` and
+    ``verify_razorpay_payment``; it does not reach this route, which mutates local
+    subscription state and never goes near a payment page.
+
+    Regression: tests/test_sec15_billing_mutations_require_aal2.py
     """
     user_id = user["id"]
     try:
         sb = _background_sb()
+        # No provider call on resume, for the reason given in `cancel_subscription`: a
+        # Razorpay order carries no standing instruction to reinstate. Clearing
+        # `cancel_at_period_end` locally is the whole operation.
         sb.table("profiles").update({
             "cancel_at_period_end": False,
             "subscription_status": "active",
@@ -2786,6 +3356,8 @@ async def resume_subscription(
         except Exception as notif_err:
             logger.debug(f"[BILLING] resume notification error: {notif_err}")
         return {"status": "ok", "detail": "Subscription cancellation reversed. Plan is now active.", "cancel_at_period_end": False}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to resume subscription for user {user_id}: {e}")
         raise HTTPException(500, f"Resume failed: {str(e)}")

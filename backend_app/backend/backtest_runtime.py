@@ -24,7 +24,7 @@ use the same DAG Engine execution pipeline.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import numpy as np
@@ -37,7 +37,7 @@ from backend_app.backend.strategy_compiler import (
     plan_to_engine_graph,
 )
 from backend_app.backend.dag_engine import DAGEngine
-from backend_app.backend.backtesting_engine import BacktestEngine
+from backend_app.backend.backtesting_engine import BacktestEngine, annualization_factor
 from backend_app.core.risk_engine import RiskEngine
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.backend.backtest_service import BacktestService
@@ -369,6 +369,70 @@ def _longest_streak(trade_pnls: List[float], winning: bool) -> int:
     return longest
 
 
+def _requested_window_ms(start_date: str, end_date: str) -> Tuple[Optional[int], Optional[int]]:
+    """``(start_date, end_date)`` ISO strings as ``(since_ms, until_ms)``, or ``(None, None)``.
+
+    BT-02's plumbing: an unreadable or blank date answers ``(None, None)`` rather than
+    raising, which falls back to ``fetch_historical_ohlcv``'s existing "most recent N bars"
+    mode - the same behaviour every caller already got, for a date this function cannot
+    make sense of, rather than a new way for a backtest request to fail. A date that DOES
+    parse is always treated as UTC when it carries no offset, matching every other instant
+    this module reads from a request rather than from a clock.
+    """
+    def _epoch_ms(value: str) -> Optional[int]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+
+    return _epoch_ms(start_date), _epoch_ms(end_date)
+
+
+_BACKTEST_BAR_CAP = 10_000
+
+
+def _data_coverage(
+    ohlcv_data: list,
+    start_date: str,
+    end_date: str,
+    timeframe_ms: Optional[int],
+    bar_cap: int,
+) -> Dict[str, Any]:
+    """What dates the simulation actually ran over, against what was asked for (BT-05).
+
+    A request for 2022-2026 on 15-minute bars was silently simulated over ~3.4 months: the
+    exchange listed the pair in Dec 2023, and the fetch stops at ``bar_cap`` bars, so the later
+    bars never loaded. Nothing told the trader. This is the plain statement of the window the
+    numbers describe. ``truncated_by_cap`` means bars exist after ``last_bar`` that were not
+    simulated; ``starts_after_request`` means the exchange holds nothing earlier than
+    ``first_bar``. Both are facts about the data, never guesses.
+    """
+    def _iso(ms: int) -> str:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    since_ms, until_ms = _requested_window_ms(start_date, end_date)
+    first_ms = int(ohlcv_data[0][0])
+    last_ms = int(ohlcv_data[-1][0])
+    bar = timeframe_ms or 0
+    return {
+        "requested_start": _iso(since_ms) if since_ms is not None else None,
+        "requested_end": _iso(until_ms) if until_ms is not None else None,
+        "first_bar": _iso(first_ms),
+        "last_bar": _iso(last_ms),
+        "bars": len(ohlcv_data),
+        "bar_cap": bar_cap,
+        "truncated_by_cap": bool(
+            len(ohlcv_data) >= bar_cap and until_ms is not None and last_ms + 2 * bar < until_ms
+        ),
+        "starts_after_request": bool(since_ms is not None and first_ms - since_ms > 2 * bar),
+    }
+
+
 class BacktestRuntime:
     """
     Integrated backtesting runtime that executes Strategy Packages.
@@ -485,6 +549,7 @@ class BacktestRuntime:
         *,
         strategy_risk: Optional[Dict[str, Any]],
         registry: Any = None,
+        on_record_created: Optional[Callable[[str], None]] = None,
     ) -> Dict:
         """Backtest a stored version from its persisted plan.
 
@@ -584,6 +649,9 @@ class BacktestRuntime:
             start_date=start_date,
             end_date=end_date,
             exchange_instance=exchange_instance,
+            # Forwarded, not consumed: the row this names is created by `run_backtest`, so
+            # the plan-shaped entry point only has to carry the observer through.
+            on_record_created=on_record_created,
         )
     
     async def run_backtest(
@@ -595,7 +663,9 @@ class BacktestRuntime:
         version: str,
         start_date: str,
         end_date: str,
-        exchange_instance
+        exchange_instance,
+        *,
+        on_record_created: Optional[Callable[[str], None]] = None,
     ) -> Dict:
         """
         Execute backtest using Strategy Package.
@@ -609,7 +679,19 @@ class BacktestRuntime:
             start_date: Backtest start date
             end_date: Backtest end date
             exchange_instance: CCXT exchange instance for data fetching
-            
+            on_record_created: Called once with the ``strategy_backtests`` id, the moment
+                that row exists and before the simulation it describes begins.
+
+                KEYWORD-ONLY AND OPTIONAL, because it exists for one caller shape: a route
+                that answers its client with a handle instead of a result
+                (``.../backtests/start``). The row is created with ``status='running'`` and
+                moved to ``completed``/``failed`` by the same ``BacktestService``, so it is
+                already a complete job record — an asynchronous caller needs the id and
+                nothing else, and no second status store has to exist for it.
+
+                The synchronous caller passes nothing and is unaffected: there is no
+                behaviour here to opt out of, only one to opt into.
+
         Returns:
             Complete backtest results with metrics, trades, charts
         """
@@ -634,24 +716,54 @@ class BacktestRuntime:
         )
         
         backtest_id = backtest_record["id"]
-        
+
+        # The row exists from here, carrying `status='running'`, which is what makes it a
+        # usable handle before the simulation it describes has finished.
+        #
+        # Guarded, and the guard is the point: this callback belongs to a caller that is
+        # only OBSERVING the run. If answering its client fails, the run it was watching
+        # must still complete and still record its own result — the alternative is a
+        # backtest abandoned halfway because a response could not be sent.
+        if on_record_created is not None:
+            try:
+                on_record_created(backtest_id)
+            except Exception:  # noqa: BLE001 - an observer must not fail the observed run
+                logger.exception(
+                    "on_record_created failed for backtest %s; the run continues", backtest_id
+                )
+
         try:
             # PHASE B: Fetch historical data
             logger.info(f"[BACKTEST] Fetching historical data from {start_date} to {end_date}")
             symbol = strategy_package.metadata.get("symbols", ["BTC/USDT"])[0]
             timeframe = strategy_package.metadata.get("timeframe", "15m")
-            
+
+            # BT-02: `start_date`/`end_date` used to be logged and recorded on the backtest
+            # row and otherwise ignored - `fetch_historical_ohlcv` with no `since_ms` always
+            # answers "the most recent N bars", so a backtest asked for over 2020 ran on
+            # whatever the most recent bars happened to be when it was called, and a
+            # walk-forward window's train and test periods (different date ranges, same
+            # call shape) ran on the IDENTICAL data. `_requested_window_ms` turns the two
+            # ISO strings this method already receives into the bounds that mode needs.
+            since_ms, until_ms = _requested_window_ms(start_date, end_date)
             ohlcv_data = await self.data_engine.fetch_historical_ohlcv(
                 symbol=symbol,
                 timeframe=timeframe,
-                limit=10_000,  # Fetch up to 10k bars
-                max_retries=3
+                limit=_BACKTEST_BAR_CAP,  # Fetch up to this many bars
+                max_retries=3,
+                since_ms=since_ms,
+                until_ms=until_ms,
             )
             
             if not ohlcv_data or len(ohlcv_data) < 50:
                 raise ValueError(f"Insufficient historical data: {len(ohlcv_data) if ohlcv_data else 0} bars")
             
             logger.info(f"[BACKTEST] Fetched {len(ohlcv_data)} OHLCV bars")
+            try:
+                tf_ms = self.data_engine._timeframe_ms(timeframe)
+            except Exception:  # noqa: BLE001 - coverage is informational, never a reason to fail a run
+                tf_ms = None
+            data_coverage = _data_coverage(ohlcv_data, start_date, end_date, tf_ms, _BACKTEST_BAR_CAP)
             
             # Convert to DataFrame
             df = pd.DataFrame(
@@ -759,7 +871,7 @@ class BacktestRuntime:
 
             # PHASE G: Performance Analytics
             performance_metrics = self._calculate_performance_metrics(
-                stats, equity_curve, df
+                stats, equity_curve, df, timeframe=timeframe
             )
             
             # PHASE H: Generate charts
@@ -824,6 +936,16 @@ class BacktestRuntime:
                 backtest_id=backtest_id,
                 results=results,
                 executed_bar_count=len(ohlcv_data),
+                # BT-07: a run that did not cover its request is stored as what it covered.
+                covered_window=(
+                    (data_coverage["first_bar"], data_coverage["last_bar"])
+                    if data_coverage
+                    and (
+                        data_coverage.get("truncated_by_cap")
+                        or data_coverage.get("starts_after_request")
+                    )
+                    else None
+                ),
             )
             
             logger.info(f"[BACKTEST] Completed backtest {backtest_id} in {execution_time:.2f}s")
@@ -832,6 +954,9 @@ class BacktestRuntime:
                 "backtest_id": backtest_id,
                 "status": "completed",
                 "results": results,
+                # The dates the simulation really covered (BT-05); on the envelope, not in
+                # `results`, because `results` is the measured payload with a pinned key set.
+                "data_coverage": data_coverage,
                 # ── What per-trade risk this run actually simulated ────────────
                 # Reported from the same dict the simulator was handed, so it cannot
                 # drift from the run. Carried on the ENVELOPE rather than inside
@@ -852,32 +977,46 @@ class BacktestRuntime:
             
         except Exception as e:
             logger.error(f"[BACKTEST] Failed: {e}")
-            # Update backtest with error status
-            await self.backtest_service.update_backtest_results(
-                user=user,
-                backtest_id=backtest_id,
-                results={
-                    "status": "failed",
-                    "error": str(e),
-                    "execution_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds()
-                }
-            )
+            # Update backtest with error status. BT-03: recording the failure must never replace
+            # the failure -- if this write itself fails (the database is the thing that broke),
+            # the caller still receives the ORIGINAL error below, not a second, unrelated one.
+            try:
+                await self.backtest_service.update_backtest_results(
+                    user=user,
+                    backtest_id=backtest_id,
+                    results={
+                        "status": "failed",
+                        "error": str(e),
+                        "execution_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds()
+                    }
+                )
+            except Exception as record_exc:  # noqa: BLE001 - the original error is what matters
+                logger.error(
+                    f"[BACKTEST] Could not record the failure of {backtest_id}: {record_exc}"
+                )
             raise
     
     def _calculate_performance_metrics(
         self,
         stats: Dict,
         equity_curve: List,
-        price_data: pd.DataFrame
+        price_data: pd.DataFrame,
+        timeframe: str = "5m"
     ) -> Dict:
         """
         PHASE G: Calculate comprehensive performance analytics.
-        
+
         Args:
             stats: the ENGINE'S ``results`` payload, whose keys are snake_case. It is *not*
                 ``portfolio.stats()`` and it does not carry VectorBT's display names.
             equity_curve: Equity curve data
             price_data: Price data DataFrame
+            timeframe: the bar size the run actually executed on (e.g. ``"5m"``, ``"1h"``).
+                Feeds :func:`backtesting_engine.annualization_factor`, the SAME
+                timeframe-derived factor the Sharpe ratio uses, so Sortino and Sharpe are
+                annualized consistently instead of Sortino alone assuming a daily bar
+                regardless of what was actually simulated. Defaults to the platform's own
+                default timeframe, matching the engine's own default.
 
         Returns:
             Dictionary of performance metrics
@@ -943,16 +1082,38 @@ class BacktestRuntime:
         # Calculate additional metrics
         metrics = {}
         
-        # Sortino Ratio (downside risk only)
+        # Sortino Ratio (downside risk only), annualized by the ACTUAL bar size.
+        #
+        # This used to be ``(returns.mean() / downside_returns.std()) * (252 ** 0.5)`` -
+        # the same hardcoded equities trading-day factor that was already found and fixed
+        # on the Sharpe ratio in ``backtesting_engine.py`` (see ``BARS_PER_YEAR`` /
+        # ``annualization_factor`` there). It was never applied here, so Sortino stayed
+        # wrong by the same multiplicative amount Sharpe used to be - about 20x on the
+        # platform's default 5-minute timeframe - even after Sharpe was corrected. This is
+        # the metric that actually wins the merge in ``_merge_contested_metrics``
+        # (``sortino_ratio`` is in ``RUNTIME_OWNED_METRICS``), so this is the value a
+        # trader sees.
+        # Regression: tests/test_sortino_annualization_matches_timeframe.py
         downside_returns = returns[returns < 0]
         if len(downside_returns) > 0 and downside_returns.std() > 0:
-            metrics["sortino_ratio"] = (returns.mean() / downside_returns.std()) * (252 ** 0.5)
+            metrics["sortino_ratio"] = (
+                returns.mean() / downside_returns.std()
+            ) * annualization_factor(timeframe)
         else:
             metrics["sortino_ratio"] = 0.0
-        
-        # Calmar Ratio (annual return / max drawdown)
+
+        # Calmar Ratio (annual return / max drawdown).
+        #
+        # Dead on arrival for the persisted column - ``calmar_ratio`` is in
+        # ``ENGINE_OWNED_METRICS`` and the engine's own (correct) VectorBT figure always
+        # wins the merge - but it had the identical hardcoded-252 defect and is fixed here
+        # too, so a future refactor that ever makes this value live again (e.g. dropping
+        # the merge precedence) does not silently resurrect the bug.
+        bars_per_year = annualization_factor(timeframe) ** 2
         if len(equity_series) > 0 and equity_series.iloc[0] != 0:
-            annual_return = (equity_series.iloc[-1] / equity_series.iloc[0] - 1) * (252 / len(equity_series))
+            annual_return = (equity_series.iloc[-1] / equity_series.iloc[0] - 1) * (
+                bars_per_year / len(equity_series)
+            )
         else:
             annual_return = 0.0
         # ``max_drawdown_pct``, not ``Max Drawdown [%]``.

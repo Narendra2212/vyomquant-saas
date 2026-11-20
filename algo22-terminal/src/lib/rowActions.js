@@ -92,6 +92,12 @@ export const ROW_ACTION = Object.freeze({
   SIGNAL_TRACE: 'signal_trace',
   /** `POST /api/strategies/{id}/pause`. Neither destructive nor a live transition. */
   PAUSE: 'pause',
+  /** PAUSE-01: `POST /api/strategies/{id}/resume` — continues the PAUSED deployments (same
+   *  mode, same exchange account). Offered in place of Pause once the strategy is paused. */
+  RESUME: 'resume',
+  /** PAUSE-01: `POST /api/strategies/{id}/stop` — ends the running/paused deployments, which
+   *  is what makes a strategy deletable again. The safe direction; not separated. */
+  STOP: 'stop',
   /** The Live deployment. Separated. */
   DEPLOY_LIVE: 'deploy_live',
   /** A Paper session. **Not** separated — see {@link SEPARATION}. */
@@ -102,6 +108,16 @@ export const ROW_ACTION = Object.freeze({
   DELETE: 'delete',
   /** The same operation under the name the endpoint actually performs. Separated. */
   ARCHIVE: 'archive',
+  /**
+   * MKT-07 / Task 15 B: open the Marketplace listing workflow for this strategy.
+   *
+   * **Not** separated. It initiates no live transition and destroys nothing — it opens the
+   * strategy's Marketplace tab, where `CreatorMarketplacePanel` holds the listing, the
+   * evidence submission and the price behind their own confirm steps. Publication itself is
+   * decided by `POST /api/library/submissions` and the Eligibility_Gate, so the control
+   * cannot complete a listing by being pressed.
+   */
+  LIST_MARKETPLACE: 'list_marketplace',
 });
 
 /** How a separated action is treated. `ds/ConfirmDialog`'s `CONFIRM_INTENTS` vocabulary. */
@@ -283,15 +299,34 @@ export function renderedActionIds(partition) {
  * @returns {ReadonlyArray<string>} Frozen, in §7.2's inline-then-separated order.
  */
 export function ownerRowActions(row) {
-  const running = (row === null || typeof row !== 'object' ? {} : row).status === 'running';
+  const status = (row === null || typeof row !== 'object' ? {} : row).status;
+  // PAUSE-01: a paused strategy offered Deploy, not Resume, so the trader had no way back to
+  // the deployment they paused; and neither state offered Stop, which is what Delete needs
+  // (it refuses while a deployment is still running or paused).
+  let lifecycle;
+  if (status === 'running') lifecycle = [ROW_ACTION.PAUSE, ROW_ACTION.STOP];
+  else if (status === 'paused') lifecycle = [ROW_ACTION.RESUME, ROW_ACTION.STOP];
+  else lifecycle = [ROW_ACTION.DEPLOY_LIVE];
 
+  // MKT-07 / Task 15 B: offered for every owned strategy and on every plan. The brief is
+  // explicit that the control is *visible but disabled* below the publishing tier rather than
+  // hidden — a hidden control teaches nobody that the capability exists, and a trader who
+  // cannot see it cannot discover what it would cost. Whether it is ENABLED is decided in the
+  // page from `useFeature(FEATURES.MARKETPLACE_PUBLISH)`, and whether a listing is permitted is
+  // decided by the server's `require_marketplace_publish` dependency and the Eligibility_Gate.
+  //
+  // Not conditioned on lifecycle state. A listing can legitimately be prepared for a strategy
+  // that is running, paused or stopped; the live-history criterion needs it to have run, so
+  // suppressing the control for a stopped strategy would hide it from exactly the owners most
+  // likely to qualify.
   return Object.freeze([
     ROW_ACTION.RUN_BACKTEST,
     ROW_ACTION.EDIT,
     ROW_ACTION.CLONE,
     ROW_ACTION.RENAME,
     ROW_ACTION.SIGNAL_TRACE,
-    running ? ROW_ACTION.PAUSE : ROW_ACTION.DEPLOY_LIVE,
+    ROW_ACTION.LIST_MARKETPLACE,
+    ...lifecycle,
     ROW_ACTION.ARCHIVE,
   ]);
 }

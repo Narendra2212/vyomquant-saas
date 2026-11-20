@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backend_app.core.dependencies import get_admin_user, get_current_user, get_request_supabase
+from backend_app.core.dependencies import get_admin_user, get_current_user, get_request_supabase, get_service_supabase
 from backend_app.main import app
 
 client = TestClient(app)
@@ -102,7 +102,7 @@ class TestAdminEndpointsIntegration:
 
         # Override get_current_user and get_request_supabase
         app.dependency_overrides[get_current_user] = lambda: admin_user
-        app.dependency_overrides[get_request_supabase] = lambda: mock_supabase
+        app.dependency_overrides[get_service_supabase] = lambda: mock_supabase
         try:
             res_admin = client.get("/api/admin/users", headers={"Authorization": "Bearer mock_token"})
             assert res_admin.status_code == 200
@@ -111,7 +111,7 @@ class TestAdminEndpointsIntegration:
 
         # Override get_current_user with normal_user
         app.dependency_overrides[get_current_user] = lambda: normal_user
-        app.dependency_overrides[get_request_supabase] = lambda: mock_supabase
+        app.dependency_overrides[get_service_supabase] = lambda: mock_supabase
         try:
             res_user = client.get("/api/admin/users", headers={"Authorization": "Bearer mock_token"})
             assert res_user.status_code == 403

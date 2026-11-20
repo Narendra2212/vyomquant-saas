@@ -672,7 +672,7 @@ describe('SignalTrace page', () => {
     await renderPage();
     await waitFor(() => expect(sockets).toHaveLength(1));
     await openSocket();
-    expect(screen.getByText('pending')).toBeTruthy();
+    expect(screen.getByText('PENDING')).toBeTruthy();
 
     const callsBefore = mockClient.get.mock.calls.length;
     await act(async () => {
@@ -685,8 +685,8 @@ describe('SignalTrace page', () => {
       );
     });
 
-    expect(screen.getByText('executed')).toBeTruthy();
-    expect(screen.queryByText('pending')).toBeNull();
+    expect(screen.getByText('FILLED')).toBeTruthy();
+    expect(screen.queryByText('PENDING')).toBeNull();
     // The row changed because a frame arrived, not because the page re-read the list.
     expect(mockClient.get.mock.calls.length).toBe(callsBefore);
   });

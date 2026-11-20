@@ -37,6 +37,28 @@ from backend_app.core.database import SessionLocal
 from backend_app.backend.order_watchdog import OrderWatchdog
 from backend_app.core.models.execution_record import ExecutionRecordModel, ExecutionStatus
 
+# ─── WHY THE TENANT ID IS A UUID AND NOT 'test_tenant' ───────────────────────
+#
+# `positions.tenant_id` was `varchar(36)`, so the literal 'test_tenant' was a legal
+# value. Alembic revision `a1b2c3d4e5f6` retypes it to `uuid` and adds
+# `fk_positions_tenant_id -> profiles(id)`, closing BUG-033: the column is supposed to
+# reference `profiles.id`, which is `uuid`, and while the types disagreed the constraint
+# could not exist and nothing stopped a position row from naming a tenant that did not.
+#
+# After that change the old literal is refused by the type itself, before any constraint
+# is consulted:
+#
+#     psycopg2.errors.InvalidTextRepresentation:
+#         invalid input syntax for type uuid: TEST_TENANT_ID
+#     LINE 1: SELECT * FROM positions WHERE tenant_id = 'test_tenant' AND ...
+#
+# No profile row is seeded here, and that is deliberate rather than an omission: both
+# tests below only issue `SELECT ... FOR UPDATE`. The property under test is that the
+# statement acquires a row lock and that concurrent workers block rather than fail -- it
+# does not depend on any row being returned, so a tenant with no positions exercises it
+# exactly as well. The foreign key is irrelevant to a read.
+TEST_TENANT_ID = "1f0c4b2a-8d35-4e71-9a6c-5b3e8f2d1c40"
+
 requires_postgres = pytest.mark.skipif(
     not os.getenv("DATABASE_URL", "").startswith(("postgresql", "postgres://")),
     reason=(
@@ -75,7 +97,7 @@ def test_position_update_row_level_locking():
     try:
         session.execute(
             text(_position_lock_sql(_watchdog_session_dialect(session))),
-            {"tenant_id": "test_tenant", "symbol": "BTC/USDT"}
+            {"tenant_id": TEST_TENANT_ID, "symbol": "BTC/USDT"}
         )
 
         # The query must execute without error (even if no rows are found). That is what
@@ -132,7 +154,7 @@ def test_concurrent_position_update_safety():
 
             session.execute(
                 text(_position_lock_sql(_watchdog_session_dialect(session))),
-                {"tenant_id": "test_tenant", "symbol": "BTC/USDT"}
+                {"tenant_id": TEST_TENANT_ID, "symbol": "BTC/USDT"}
             )
             
             # Simulate position update operation

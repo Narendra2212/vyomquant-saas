@@ -397,6 +397,25 @@ async def _deploy(sb, *, payload=None, environment="paper", user=None, fleet_ok=
     patches = _no_quota_limits()
     for p in patches:
         p.start()
+    # LIVE-DEPLOY-01: a live binding now also needs the PLATFORM to be live for this tenant,
+    # and its one INSERT goes through the service-role client. This file is about the
+    # binding, so a live deploy here runs on a live platform whose trusted writer is the
+    # same fake (its `inserted()` record stays the one these tests read).
+    # tests/test_live_deploy01_service_role_insert.py covers the gate and the writer.
+    if (payload or {}).get("mode") == "live":
+        patches = patches + (
+            patch.dict(
+                os.environ,
+                {
+                    "VYOMQUANT_MODE": "live",
+                    "VYOMQUANT_ENABLE_LIVE_TRADING": "true",
+                    "VYOMQUANT_LIVE_TENANT_ALLOWLIST": "*",
+                },
+            ),
+            patch("backend_app.core.dependencies.get_service_supabase", lambda: sb),
+        )
+        for p in patches[-2:]:
+            p.start()
     app_state_patch = patch("backend_app.core.state.app_state")
     mock_state = app_state_patch.start()
     mock_state.fleet = fleet
@@ -537,8 +556,23 @@ class TestLifecycleGate:
     def test_ready_passes(self):
         db.assert_version_ready(_version(), STRATEGY_ID, "v3.0")
 
+    @pytest.mark.parametrize("state", sorted(db.REDEPLOYABLE_LIFECYCLE_STATES))
+    def test_a_previously_deployed_version_can_be_deployed_again(self, state):
+        """VER-REDEPLOY-01: a version is immutable once deployed and passed this gate as
+        READY the first time, so redeploying it must not require saving a new version."""
+        db.assert_version_ready(_version(lifecycle_state=state), STRATEGY_ID, "v3.0")
+
+    def test_an_archived_version_is_still_refused(self):
+        with pytest.raises(db.DeployRejected) as exc:
+            db.assert_version_ready(_version(lifecycle_state="ARCHIVED"), STRATEGY_ID, "v3.0")
+        assert exc.value.code == "VERSION_NOT_READY"
+
     @pytest.mark.parametrize(
-        "state", sorted(s for s in LIFECYCLE_STATES if s != LIFECYCLE_READY)
+        "state",
+        sorted(
+            s for s in LIFECYCLE_STATES
+            if s != LIFECYCLE_READY and s not in db.REDEPLOYABLE_LIFECYCLE_STATES
+        ),
     )
     def test_every_other_state_is_a_409_naming_the_state_and_the_prerequisite(self, state):
         with pytest.raises(db.DeployRejected) as exc:
@@ -702,19 +736,69 @@ class TestGapPolicyIsDelegated:
 
 
 class TestExecutionConfig:
-    def test_the_designs_fields_are_kept(self):
+    def test_the_designs_fields_are_known_but_one_is_still_not_enforced(self):
+        """DEPLOY-01: every one of design.md's five fields is validated and stored into the
+        strategy_deployments row, and four of them are now genuinely in force.
+        ``max_order_notional`` and ``max_open_positions`` are consulted at
+        order-construction time (master_executor.evaluate_deployment_execution_limits,
+        threaded in via deployment_runtime.build_runtime_blueprint).
+        ``order_timeout_seconds`` wraps the ccxt call in ``asyncio.wait_for``.
+
+        ``slippage_tolerance_bps`` has since joined them, and the reason it was refused
+        needs correcting rather than deleting. That reason was "it has nothing to compare
+        synchronously, because the live result substitutes the REQUESTED price when
+        nothing filled". That is a sound objection to a POST-FILL detector and it was
+        measured against the wrong control: ``ExecutionEngine._execute_trade_internal``
+        sends ``CoreOrderType.limit`` whenever the price is positive and
+        ``master_executor._inner_loop`` skips any tick with ``price <= 0``, so the path
+        already bounded every live order at the decision price -- a tolerance of zero.
+        The field widens that existing bound via
+        ``core.execution_engine.bounded_limit_price``; no comparison is needed because the
+        venue enforces the band.
+
+        ONE field is still refused rather than silently stored: ``retry_policy`` would
+        contradict RT-17's implemented anti-resubmit control, and the idempotency hash
+        folds in PRICE, so a re-quoted retry is not recognised as the same order. Same
+        choice strategy_service.assert_deploy_params_applicable already makes for
+        capital/trade_size_pct/stop_loss_pct/max_drawdown_pct.
+        """
         payload = {
-            "max_order_notional": 1000,
-            "max_open_positions": 2,
-            "slippage_tolerance_bps": 15,
-            "order_timeout_seconds": 30,
             "retry_policy": {"attempts": 3},
         }
-        assert db.normalise_execution_config(payload) == payload
-        assert set(payload) == set(db.EXECUTION_CONFIG_FIELDS)
+        assert set(payload) == set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS)
+        assert set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS) < set(db.EXECUTION_CONFIG_FIELDS)
+
+        with pytest.raises(db.DeployRejected) as exc:
+            db.normalise_execution_config(payload)
+        assert exc.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"
+        assert set(exc.value.details["not_enforced_fields"]) == set(payload)
+
+    def test_each_still_unenforced_field_is_refused_on_its_own(self):
+        """Every still-unenforced field individually, not just all of them together, so a
+        caller cannot slip one past by setting the others to None."""
+        for field in db.UNENFORCED_EXECUTION_CONFIG_FIELDS:
+            with pytest.raises(db.DeployRejected) as exc:
+                db.normalise_execution_config({field: "x"})
+            assert exc.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"
+            assert exc.value.details["not_enforced_fields"] == [field]
+
+    def test_each_enforced_field_is_accepted_with_a_valid_value(self):
+        """DEPLOY-01's second fix: these two no longer raise at all with a real, valid
+        value."""
+        assert db.normalise_execution_config({"max_order_notional": 1000}) == {
+            "max_order_notional": 1000
+        }
+        assert db.normalise_execution_config({"max_open_positions": 2}) == {
+            "max_open_positions": 2
+        }
 
     def test_none_is_an_empty_document_not_a_refusal(self):
         assert db.normalise_execution_config(None) == {}
+
+    def test_an_empty_object_is_kept_as_an_empty_document(self):
+        """A caller that sends execution_config={} (no field set at all) is not refused --
+        only a field with a real, non-None value is."""
+        assert db.normalise_execution_config({}) == {}
 
     def test_an_unknown_field_is_refused_rather_than_dropped(self):
         with pytest.raises(db.DeployRejected) as exc:
@@ -954,7 +1038,11 @@ class TestBindingIsWrittenAsOneRow:
                 "mode": "live",
                 "exchange_account_id": ACCOUNT_ID,
                 "risk_config_id": RISK_ID,
-                "execution_config": {"max_open_positions": 2},
+                # DEPLOY-01: a real execution_config value is refused (see TestExecutionConfig)
+                # until something actually enforces it -- {} proves the column is still
+                # carried on the row, without asserting the unenforced-limit behavior this
+                # test isn't about.
+                "execution_config": {},
             },
             environment="live",
         )
@@ -962,7 +1050,7 @@ class TestBindingIsWrittenAsOneRow:
         assert row["version_id"] == _version()["id"]
         assert row["exchange_account_id"] == ACCOUNT_ID
         assert row["risk_config_id"] == RISK_ID
-        assert row["execution_config"] == {"max_open_positions": 2}
+        assert row["execution_config"] == {}
         assert row["mode"] == "live"
         assert row["dag_hash"] == _version()["dag_hash"]
         # ... and it is ONE row.
@@ -1356,22 +1444,16 @@ class TestHttpMapping:
         assert resp.status_code == 422
         service.deploy_version.assert_not_awaited()
 
-    def test_the_legacy_strategy_deploy_maps_a_binding_refusal_too(self):
-        client, ops = _client_and_router()
-        service = MagicMock()
-        service.deploy_strategy = AsyncMock(
-            side_effect=db.DeployRejected(
-                "LIVE_REQUIRES_EXCHANGE_ACCOUNT",
-                "A live deployment must name the exchange account it trades through.",
-                {"mode": "live"},
-                http_status=422,
-            )
-        )
-
-        async def _get():
-            return service
-
-        with patch.object(ops, "get_strategy_service", _get):
-            resp = client.post("/api/strategies/s1/deploy", json={"environment": "live"})
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "LIVE_REQUIRES_EXCHANGE_ACCOUNT"
+    # test_the_legacy_strategy_deploy_maps_a_binding_refusal_too used to live here,
+    # POSTing to /api/strategies/s1/deploy through `_client_and_router()`, which mounts
+    # only `strategy_operations.router`. API-01 (this session) deleted that router's
+    # deploy_strategy handler as confirmed-unreachable dead code: `strategies.router` is
+    # mounted before it in main.py and Starlette matches in registration order, so
+    # `strategies.py`'s own `deploy_bot` answered this path in every environment this has
+    # ever run in, and still does -- this test started answering 404 the moment the dead
+    # handler it exercised was removed, not because the real route broke. The real
+    # route's binding-refusal mapping (`_deploy_current_version_paper` catching
+    # `DeployRejected` and re-raising it as `HTTPException(status_code=e.http_status, ...)`)
+    # is covered where the live handler actually is:
+    # tests/test_rt08_deployment_state_is_durable.py::
+    # test_a_refused_deploy_surfaces_its_own_status_and_a_failed_start_is_a_400.

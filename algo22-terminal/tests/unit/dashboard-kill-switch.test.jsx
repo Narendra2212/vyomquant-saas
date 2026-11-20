@@ -80,8 +80,8 @@ const HALT_DESCRIPTION = Object.freeze({
   LIVE: 'WARNING: Activating the Emergency Kill Switch will IMMEDIATELY halt all live '
     + 'strategy execution loops and block all new order submissions on connected live '
     + 'exchanges.',
-  PAPER: 'Activating the Emergency Kill Switch will freeze all paper simulation bots and '
-    + 'prevent new simulated trades.',
+  PAPER: 'Activating the Emergency Kill Switch will freeze all paper strategy execution '
+    + 'loops and prevent new simulated trades.',
 });
 
 const RECOVER_DESCRIPTION =
@@ -93,8 +93,8 @@ const ACKNOWLEDGEMENT_LABEL = 'I understand this halts all trading on this accou
 const ACKNOWLEDGEMENT_STATEMENT = Object.freeze({
   LIVE: 'Confirming halts every live strategy execution loop on this account and blocks all '
     + 'new order submissions on connected live exchanges.',
-  PAPER: 'Confirming freezes every paper simulation bot on this account and blocks all new '
-    + 'simulated order submissions.',
+  PAPER: 'Confirming freezes every paper strategy execution loop on this account and blocks '
+    + 'all new simulated order submissions.',
 });
 
 /** The `reason` the frozen handler sends, per ledger. The template is not re-derived here. */

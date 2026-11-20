@@ -25,9 +25,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, validator
 
 from backend_app.core.dependencies import (
-    create_request_supabase_async, get_alert, get_current_user, get_vault, get_ws_manager
+    create_request_supabase_async, get_alert, get_current_user,
+    get_service_supabase_async, get_vault, get_ws_manager
 )
 from backend_app.core.background_tasks import fire_and_forget_task
+# Imported as a MODULE, deliberately: `schedule_user_notification` must be resolved as an
+# attribute at call time so a test (and any future decorator) can replace it. A
+# `from ... import schedule_user_notification` would bind the original function object and
+# make the producer untestable without reaching into this module's globals.
+from backend_app.core import notification_dispatcher
 from backend_app.core.cache.redis_manager import redis_manager
 
 router = APIRouter()
@@ -42,7 +48,16 @@ RISK_SETTINGS_CACHE_TTL = 300
 _user_risk_settings: Dict[str, Dict[str, Any]] = {}
 _user_strategy_limits: Dict[str, Dict[str, Dict[str, Any]]] = {} # user_id -> {strategy_id: limit_dict}
 _user_kill_switch_state: Dict[str, bool] = {} # user_id -> is_active
+
+# RISK-01: a per-process MIRROR of the durable trail in
+# `public.risk_violation_audit`, not the trail itself. Kept because
+# `record_risk_violation` is called from synchronous code on the per-bar
+# evaluation path and must not block on a network write, and because it still
+# answers `/violations` when no service-role client is configured. Bounded --
+# the unbounded version grew until a strategy refused on every bar OOM-killed
+# the task.
 _risk_violations_log: Dict[str, List[Dict[str, Any]]] = {} # user_id -> list of violations
+_VIOLATION_MIRROR_MAX_PER_USER = 200  # matches the /violations limit ceiling
 
 
 def get_user_risk_settings_store(user_id: str) -> Dict[str, Any]:
@@ -54,10 +69,18 @@ def get_user_risk_settings_store(user_id: str) -> Dict[str, Any]:
             "max_leverage": 3,
             "circuit_breaker_armed": True,
             "circuit_breaker_breaches": 0,
+            # RISK-05: "streak" defaults to `True` now that it is actually enforced
+            # (`PaperTradingService.get_consecutive_loss_count`, wired into both order
+            # paths) -- consistent with "loss" and "capital", whose real enforcement is
+            # likewise unconditional on this flag. "blackswan" stays `True` here too: the
+            # value is cosmetic for an unenforced guard either way, and changing it would
+            # not change what the frontend renders (`UNENFORCED_GUARDS` forces its
+            # display to "off" regardless of this stored value).
             "kill_switches": {
                 "loss": True,
+                "drawdown": True,
                 "blackswan": True,
-                "streak": False,
+                "streak": True,
                 "capital": True
             },
             "updated_at": datetime.now(timezone.utc).isoformat()
@@ -66,21 +89,235 @@ def get_user_risk_settings_store(user_id: str) -> Dict[str, Any]:
 
 
 def is_user_kill_switched(user_id: str) -> bool:
-    return _user_kill_switch_state.get(str(user_id), False)
+    """Synchronous, in-process view for dashboards and the paper path.
+
+    The execution engine uses the durable, cross-worker ``tenant_halt`` store instead (RT-19);
+    this mirror is only authoritative for the worker that set it.
+    """
+    uid = str(user_id)
+    if _user_kill_switch_state.get(uid, False):
+        return True
+    from backend_app.core.tenant_halt import mirror_is_halted
+
+    return mirror_is_halted(uid)
+
+
+async def _persist_risk_violation(
+    uid: str, rule: str, reason: str, detail: Dict[str, Any]
+) -> bool:
+    """Append one refusal to ``public.risk_violation_audit`` (RISK-01).
+
+    Best effort by design. A risk refusal has already been decided by the time
+    this runs; failing to record it must not un-refuse the order, and must not
+    raise into the caller's path. Every failure is logged at ERROR because a
+    silent gap in a safety audit trail is itself the defect.
+
+    Returns True only when a row was accepted, so the caller's tests can
+    distinguish "wrote" from "degraded to the mirror".
+    """
+    try:
+        from backend_app.core.dependencies import get_service_supabase_async
+
+        sb = await get_service_supabase_async()
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] service client unavailable, refusal recorded in "
+            "memory only: user=%s rule=%s err=%s", uid, rule, exc
+        )
+        return False
+
+    if sb is None:
+        # Ordinary shape of a local/dev/test environment with no
+        # SUPABASE_SERVICE_ROLE_KEY. The mirror and the log line are all there
+        # is, which is the pre-RISK-01 behaviour -- not a regression, but not
+        # evidence either. Debug rather than error so local runs stay quiet.
+        logger.debug(
+            "[RISK_VIOLATION] no service-role client configured; refusal for "
+            "user=%s rule=%s is in-memory only", uid, rule
+        )
+        return False
+
+    try:
+        result = sb.table("risk_violation_audit").insert({
+            "user_id": uid,
+            "rule": rule,
+            "reason": reason,
+            "detail": detail,
+        }).execute()
+        if inspect.isawaitable(result):
+            await result
+        return True
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] durable write FAILED, refusal recorded in memory "
+            "only: user=%s rule=%s err=%s", uid, rule, exc
+        )
+        return False
 
 
 def record_risk_violation(user_id: str, rule: str, reason: str, details: Optional[Dict[str, Any]] = None) -> None:
+    """Record a risk refusal durably, and mirror it in-process for fast reads.
+
+    RISK-01. This used to append to ``_risk_violations_log`` and nothing else,
+    which meant the trail died on restart (all seven services were replaced on
+    2026-11-16 during the credential repair), could only ever answer for the
+    one task that served the refusal, and grew without bound until a strategy
+    refused every bar OOM-killed the task.
+
+    The durable append is SCHEDULED, not awaited: this function is called from
+    synchronous code on the per-bar evaluation path
+    (``backend/paper_trading_service.py``, eight rules) and a refusal must
+    neither wait on an audit write nor fail because one failed.
+    """
     uid = str(user_id)
+    detail = details or {}
     entry = {
         "id": f"violation_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
         "user_id": uid,
         "rule": rule,
         "reason": reason,
-        "details": details or {},
+        "details": detail,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
-    _risk_violations_log.setdefault(uid, []).append(entry)
+
+    # Bounded mirror. The cap is what stops the unbounded growth described
+    # above; the endpoint's own `limit` is capped at 200, so retaining more
+    # than this per user would serve no read.
+    mirror = _risk_violations_log.setdefault(uid, [])
+    mirror.append(entry)
+    if len(mirror) > _VIOLATION_MIRROR_MAX_PER_USER:
+        del mirror[:-_VIOLATION_MIRROR_MAX_PER_USER]
+
     logger.warning(f"[RISK_VIOLATION] user={uid} rule={rule} reason={reason}")
+
+    # No running loop means a synchronous caller outside the server (a CLI or a
+    # sync test). There is nothing to schedule onto, and blocking here would
+    # put a network write on the refusal path, so the mirror and the log line
+    # stand alone. Checked rather than caught from create_task so the failure
+    # mode is explicit.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    try:
+        fire_and_forget_task(
+            _persist_risk_violation(uid, rule, reason, detail),
+            name=f"risk-violation-audit:{rule}",
+        )
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] could not schedule durable write: user=%s "
+            "rule=%s err=%s", uid, rule, exc
+        )
+
+    # ── RISK-08 / T10: tell the CUSTOMER, not only the audit trail ──
+    #
+    # Until this, a refusal produced a durable row and a log line and nothing the account
+    # holder could see. An account whose daily-loss limit had been hit refused every order
+    # for the rest of the day and looked, from the product, like an account that was not
+    # trading. The audit write above is for us; this is for them.
+    #
+    # Scheduled through the same no-loop guard as the audit write (both sit after the
+    # `get_running_loop` check above), so a CLI or sync test still refuses, still mirrors
+    # and still logs -- it just does not notify. Wrapped because a notification must never
+    # propagate into a per-bar evaluation path.
+    try:
+        shape = _risk_breach_notification(rule, reason)
+        if shape is not None:
+            notification_dispatcher.schedule_user_notification(
+                user_id=uid,
+                event_type=shape["event_type"],
+                category=shape["category"],
+                severity=shape["severity"],
+                title=shape["title"],
+                message=shape["message"],
+                metadata={**shape["metadata"], "details": detail},
+            )
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] could not schedule customer notification: user=%s "
+            "rule=%s err=%s", uid, rule, exc
+        )
+
+
+#: The refusals that fire because MONEY WAS LOST, as opposed to because a cap was hit.
+#:
+#: These three are the platform's stop-loss. Each locks new position opens until its
+#: condition clears, which is what a stop-loss does; there is no ORDER-level stop on the
+#: production path (`deployment_runtime.EXECUTABLE_ORDER_TYPES` is `("market",)`, and
+#: nothing evaluates `stop_loss_pct` outside the backtester). So these are the only real
+#: stop-loss events this system can produce, and announcing them as such is not
+#: fabricating a backtest concept into production.
+STOP_LOSS_RULE_CODES: frozenset = frozenset({
+    "MAX_DAILY_LOSS_EXCEEDED",
+    "MAX_DRAWDOWN_EXCEEDED",
+    "CONSECUTIVE_LOSS_LIMIT_EXCEEDED",
+})
+
+#: Rules whose refusal is ALREADY announced by the endpoint that produced it. Announcing
+#: them here as well would send a customer two notifications for one act.
+_SELF_ANNOUNCED_RULE_CODES: frozenset = frozenset({
+    # `activate_kill_switch` dispatches its own `critical` kill_switch_activated and then
+    # calls record_risk_violation for the audit trail. The audit write is the point of
+    # that call, not a second alert.
+    "KILL_SWITCH_MANUAL_ACTIVATION",
+})
+
+
+def _risk_breach_notification(rule: str, reason: str) -> Optional[Dict[str, Any]]:
+    """The notification a risk refusal should produce, or ``None`` for silence.
+
+    RISK-08 / T10. `record_risk_violation` wrote a durable audit row and a log line and
+    told the CUSTOMER nothing -- so an account that refused every order for an hour
+    because its daily-loss limit had been hit looked, from the product, like an account
+    that simply was not trading.
+
+    Returns a dict rather than dispatching, so the classification is testable without a
+    loop, a store or a monkeypatch -- and so the hour-bucketed key below is asserted on
+    its own terms.
+
+    THE KEY CARRIES AN HOUR BUCKET. A breached limit refuses EVERY attempt while it
+    holds, and the paper path evaluates these rules per bar; one notification per refusal
+    is a storm, not coverage. The bucket makes every refusal of one rule inside one hour
+    produce the SAME `idempotency_key`, which `uq_notifications_user_idempotency`
+    collapses to one row. Collapsing is the database's job; this is the input that lets
+    it do it.
+    """
+    rule_code = str(rule)
+    if rule_code in _SELF_ANNOUNCED_RULE_CODES:
+        return None
+
+    is_stop_loss = rule_code in STOP_LOSS_RULE_CODES
+    bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+
+    if is_stop_loss:
+        return {
+            "event_type": "stop_loss_triggered",
+            "category": "risk",
+            # `critical`: the account has stopped taking positions and the customer did
+            # not ask for that. It is also on the mandatory floor, so no preference hides
+            # it -- see core/notification_preferences.MANDATORY_EVENT_TYPES.
+            "severity": "critical",
+            "title": "Trading Halted — Loss Limit Reached",
+            "message": f"{reason} New positions are blocked until this clears.",
+            "metadata": {
+                "rule": rule_code,
+                "idempotency_key": f"risk_breach:{rule_code}:{bucket}",
+            },
+        }
+
+    return {
+        "event_type": "risk_limit_breached",
+        "category": "risk",
+        "severity": "warning",
+        "title": "Order Refused — Risk Limit",
+        "message": reason,
+        "metadata": {
+            "rule": rule_code,
+            "idempotency_key": f"risk_breach:{rule_code}:{bucket}",
+        },
+    }
 
 
 def _safe_uid(uid: str) -> str:
@@ -100,15 +337,134 @@ async def _sb(user: dict):
         return None
 
 
+def _persistence_configured() -> bool:
+    """Whether a configuration store is attached to this deployment at all.
+
+    RISK-06. The discriminator between "deliberately unconfigured" and "broken" is the
+    CONFIG, not whether the caller presented a token. An authenticated request carrying a
+    perfectly good JWT still has nowhere to persist to when `SUPABASE_URL` /
+    `SUPABASE_ANON_KEY` are unset -- which is the normal state in DEV_MODE and in the test
+    suite, and the first version of this fix wrongly answered 503 for it.
+
+    Mirrors `core/dependencies.get_supabase`'s own test on the same two variables. Note
+    that dependencies.py already fails CLOSED on a missing config in production (it raises
+    rather than returning None), so in production this returning False means the
+    deployment genuinely has no store and a 503 is the honest answer either way.
+    """
+    return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_ANON_KEY"))
+
+
+#: Columns `public.strategy_limits` actually declares, measured against production
+#: 2026-11-18. The payload model carries a subset; `max_allocation_usd`, `max_leverage`
+#: and `is_active` exist in the table with defaults and are deliberately NOT written here
+#: -- this endpoint has no field for them and writing a default would silently reset a
+#: value some other path set.
+_STRATEGY_LIMIT_COLUMNS = (
+    "max_position_size",
+    "max_daily_trades",
+    "allowed_symbols",
+    "max_drawdown_pct",
+    "enabled",
+)
+
+
+def _strategy_limit_row(uid: str, strategy_id: str, data: dict) -> dict:
+    """One `strategy_limits` row from an API payload.
+
+    Only keys the caller actually supplied are included, so a partial update does not
+    overwrite unmentioned columns with model defaults. `user_id`/`strategy_id` carry the
+    UNIQUE key (`uq_strategy_limits`) the upsert conflicts on.
+    """
+    row = {"user_id": uid, "strategy_id": str(strategy_id)}
+    for col in _STRATEGY_LIMIT_COLUMNS:
+        if col in data and data[col] is not None:
+            row[col] = data[col]
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return row
+
+
+async def _persist_strategy_limits(user: dict, uid: str, rows: list[dict]) -> bool:
+    """Upsert per-strategy limits, refusing rather than reporting a save that failed.
+
+    WHY THIS WRITE USES THE SERVICE-ROLE CLIENT
+    -------------------------------------------
+    `public.strategy_limits` grants `authenticated` **SELECT only** -- measured against
+    production 2026-11-18. The first version of this function wrote through the caller's
+    own request-scoped client, which would have failed with 42501 on every save in
+    production; the 503 below would have fired every time and the save still would not
+    have worked. `scripts/sec22_authenticated_write_inventory.py` caught it in CI by
+    noticing the inventory of browser-role writes had grown.
+
+    Keeping it on the service-role client is also the right answer on the merits, and the
+    same one MKT-10 reached for `strategy_backtests`: this table holds risk caps that
+    `paper_trading_service` ENFORCES, so making the application depend on a browser-role
+    write grant here would mean the grant could never be revoked, and a customer able to
+    PostgREST-write their own caps could loosen what is enforced against them.
+
+    The service-role client is not subject to RLS, so ownership is enforced here instead:
+    `user_id` comes from `_strategy_limit_row`, which takes it from the verified JWT, and
+    the upsert conflicts on `uq_strategy_limits (user_id, strategy_id)` so a row can only
+    ever be created or updated for the authenticated caller. Reads are deliberately NOT
+    moved -- `GET /strategy-limits` keeps the request-scoped client and its RLS layer.
+
+    Returns True when the rows are durable, False only when no store is configured
+    (DEV_MODE and the test suite). Raises 503 when a store should have been reachable and
+    was not: a limit a trader is told was saved must be stored.
+    """
+    if not rows:
+        return False
+    if not user.get("access_token") or not _persistence_configured():
+        return False
+
+    try:
+        res = get_service_supabase_async()
+        sb = await res if inspect.isawaitable(res) else res
+    except Exception as exc:
+        logger.error(
+            "[RISK-07] no service-role client for %s; refusing to report a "
+            "strategy-limit save: %s", uid, exc,
+        )
+        sb = None
+    if sb is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "STRATEGY_LIMITS_PERSISTENCE_UNAVAILABLE",
+                "message": "Strategy limits were not saved: the configuration store is "
+                           "unavailable. Your existing limits remain in force.",
+            },
+        )
+    try:
+        q = sb.table("strategy_limits").upsert(
+            rows, on_conflict="user_id,strategy_id"
+        ).execute()
+        await q if inspect.isawaitable(q) else q
+        return True
+    except Exception as exc:
+        logger.error(
+            "[RISK-07] strategy_limits upsert failed for %s, nothing was saved: %s",
+            uid, exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "STRATEGY_LIMITS_PERSIST_FAILED",
+                "message": "Strategy limits were not saved. Your existing limits remain "
+                           "in force -- please retry.",
+                "reason": str(exc)[:300],
+            },
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SCHEMAS
 # ═══════════════════════════════════════════════════════════════════════════
 
 class RiskSettingsUpdateRequest(BaseModel):
-    max_daily_loss: Optional[float] = Field(500.0, gt=0, le=1_000_000, description="Max daily loss in USD")
-    max_positions: Optional[int] = Field(10, gt=0, le=100, description="Max concurrent open positions")
-    max_leverage: Optional[int] = Field(3, ge=1, le=50, description="Max allowed account leverage")
-    circuit_breaker_armed: Optional[bool] = Field(True, description="Armed state of institutional circuit breaker")
+    max_daily_loss: Optional[float] = Field(None, gt=0, le=1_000_000, description="Max daily loss in USD")
+    max_positions: Optional[int] = Field(None, gt=0, le=100, description="Max concurrent open positions")
+    max_leverage: Optional[int] = Field(None, ge=1, le=50, description="Max allowed account leverage")
+    circuit_breaker_armed: Optional[bool] = Field(None, description="Armed state of institutional circuit breaker")
     kill_switches: Optional[Any] = Field(default=None, description="Kill switch configurations")
 
 
@@ -168,6 +524,103 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
     return settings
 
 
+def platform_risk_ceilings() -> dict:
+    """RISK-03: the server-side ceilings a user's own risk settings cannot exceed.
+
+    Read from ``RiskThresholds`` rather than restated here, so the API boundary and the
+    order path cannot drift apart: if a threshold moves, both move with it.
+
+    WHY THESE AND NOT THE PLAN QUOTA
+    ---------------------------------
+    The finding's suggested action was to clamp against the account's plan tier, the way
+    ``max_leverage`` is already clamped against the drawdown tier. ``TenantQuota.for_plan``
+    does carry per-plan figures -- FREE 5 positions / 1.0x leverage, BASIC 20 / 1.0x,
+    PROFESSIONAL 100 / 3.0x, ENTERPRISE 500 / 10.0x -- but they are the wrong ceiling:
+
+    * They are a FAIR-USE resource table, not a risk policy, and the only thing that ever
+      enforced them (``core/hard_quota_enforcer``) is deprecated and unwired -- it raises
+      a ``DeprecationWarning`` on construction and is carried by no route.
+    * FREE caps leverage at 1.0x, i.e. no margin at all, while this very endpoint offers
+      3x as its DEFAULT. Every account on the platform is on the free tier today, so
+      clamping to the plan quota would have silently withdrawn margin trading from the
+      entire user base and called it a safety fix.
+
+    ``RiskThresholds`` is the ceiling that is ALREADY IN FORCE: it is exactly what the
+    order path applies to any account with no ``risk_settings`` row. Enforcing it here
+    means configuring your settings can tighten what the platform gives you by default
+    but never loosen it -- which is the whole of this finding.
+
+    ``max_daily_loss`` is absent on purpose. It is stored in account currency and compared
+    as a fraction of capital, and capital is not known at this boundary, so the conversion
+    and its clamp belong in the order path. See ``validate_trade_request``.
+    """
+    from backend_app.core.risk_manager import RiskThresholds
+
+    limits = RiskThresholds()
+    return {
+        # Truncated rather than rounded: a fractional ceiling must land BELOW itself, and
+        # both columns are integers in `risk_settings`.
+        "max_positions": int(limits.max_open_trades),
+        "max_leverage": int(limits.base_max_leverage),
+    }
+
+
+def _safe_platform_ceilings() -> dict:
+    """``platform_risk_ceilings()`` for use in a response body, which must not 500.
+
+    An unreadable threshold is reported as an empty mapping rather than an exception: the
+    settings were already saved by the time this is called, so raising here would tell the
+    client the save failed when it did not.
+    """
+    try:
+        return platform_risk_ceilings()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[RISK-03] could not report the platform ceilings: %s", exc)
+        return {}
+
+
+def clamp_to_platform_ceilings(record: dict) -> list:
+    """Hold a settings record to the platform ceilings, reporting what it changed.
+
+    CLAMPED, NOT REFUSED, and the distinction is the point. The defect this closes is that
+    a stored limit was not the limit being enforced: a trader could save
+    ``max_positions = 100``, read it back unchanged, and believe their account permitted a
+    hundred concurrent positions while the order path held them to far fewer. Either half
+    of that gap would do as a fix -- refuse the value, or store the value that is actually
+    in force -- but refusing would reject this endpoint's own default of 10 positions, so
+    the only option that does not break the product is to store the truth.
+
+    The adjustment is RETURNED rather than swallowed, so the response can say a limit was
+    lowered and to what. A clamp the caller cannot see is the same lie in the other
+    direction.
+    """
+    adjustments = []
+    for field, ceiling in platform_risk_ceilings().items():
+        requested = record.get(field)
+        if requested is None:
+            continue
+        try:
+            requested_num = float(requested)
+        except (TypeError, ValueError):
+            continue
+        if requested_num <= ceiling:
+            continue
+        record[field] = ceiling
+        adjustments.append(
+            {
+                "field": field,
+                "requested": requested,
+                "applied": ceiling,
+                "reason": (
+                    f"{field} was lowered to the platform limit of {ceiling}. The order "
+                    f"path enforces that ceiling, so a higher value would have been "
+                    f"stored but never honoured."
+                ),
+            }
+        )
+    return adjustments
+
+
 @router.put("/settings")
 async def update_risk_settings(
     body: RiskSettingsUpdateRequest,
@@ -187,7 +640,19 @@ async def update_risk_settings(
         raise HTTPException(400, "Max leverage must be at least 1")
 
     # Format kill switches
-    current_settings = get_user_risk_settings_store(uid)
+    #
+    # RISK-PUT-02: the baseline an omitted field falls back to is what GET /settings answers
+    # (Redis cache, then the `risk_settings` row), not this worker's process-local store.
+    # Found in production 2026-11-20 after RISK-PUT-01 shipped: Max Daily Loss 250 saved,
+    # then `{"max_leverage": 2}` alone read back 500 -- the save ran on a gunicorn worker
+    # whose memory store had never loaded the row and still held the platform defaults.
+    try:
+        current_settings = dict(await get_risk_settings(user))
+    except Exception as exc:  # noqa: BLE001 - fall back to this worker's store
+        logger.warning("[RISK-PUT-02] could not read persisted settings for %s: %s", uid, exc)
+        current_settings = get_user_risk_settings_store(uid)
+    for _key, _default in (("max_daily_loss", 500.0), ("max_positions", 10), ("max_leverage", 3)):
+        current_settings.setdefault(_key, _default)
     ks_dict = current_settings.get("kill_switches", {})
     if isinstance(body.kill_switches, dict):
         ks_dict = body.kill_switches
@@ -208,16 +673,147 @@ async def update_risk_settings(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    _user_risk_settings[uid] = updated_record
+    # ── RISK-03: store the limit that is actually in force, not the one asked for ──
+    #
+    # Applied HERE, to the assembled record, rather than to `body` -- because this record
+    # is the single thing that then goes to the in-memory store, the `risk_settings`
+    # upsert, the WebSocket broadcast, the notification and the response body. Clamping it
+    # at the point it is built is what makes all six agree; clamping `body` would leave the
+    # `current_settings` fall-through unclamped, and a value already stored above the
+    # ceiling would survive a save that did not mention it.
+    #
+    # The order path clamps independently (`validate_trade_request`) and that is the
+    # enforcement guarantee -- this is not a second safety layer, it is the honesty half:
+    # what a trader reads back is what their account will do.
+    try:
+        limit_adjustments = clamp_to_platform_ceilings(updated_record)
+        if limit_adjustments:
+            logger.info(
+                "[RISK-03] held submitted limits to the platform ceilings for %s: %s",
+                uid,
+                ", ".join(
+                    f"{a['field']} {a['requested']}->{a['applied']}"
+                    for a in limit_adjustments
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Fails OPEN deliberately: the order path's own clamp is in force either way, so a
+        # ceiling that cannot be read costs no safety here -- it only costs the trader an
+        # accurate read-back. Logged rather than swallowed, because it means this stopped
+        # checking.
+        limit_adjustments = []
+        logger.warning(
+            "[RISK-03] could not read the platform ceilings, so the submitted limits "
+            "were stored unclamped for %s (the order path still enforces them): %s",
+            uid,
+            exc,
+        )
 
-    # Persist to database if available
-    sb = await _sb(user)
-    if sb:
+    # ── RISK-06: persist FIRST, and refuse rather than report a save that failed ──
+    #
+    # This block used to run AFTER `_user_risk_settings[uid] = updated_record` and to
+    # swallow the failure:
+    #
+    #     except Exception as e:
+    #         logger.warning(f"Database persist for risk_settings skipped: {e}")
+    #
+    # ...after which the handler returned {"status": "ok", "message": "Risk settings
+    # saved successfully"} unconditionally. In production that except branch was taken on
+    # EVERY request: `circuit_breaker_armed` was undeclared, so PostgREST rejected the
+    # whole upsert with 42703 (migration 075 declares it). The trader's limits lived only
+    # in the process-local dict below -- invisible to the other gunicorn workers and to
+    # the five worker services, gone on restart -- and the response said they were saved.
+    #
+    # Two things changed, and the ORDER is the point:
+    #
+    #   1. The upsert runs BEFORE the in-memory store is mutated. On failure this worker
+    #      must not start serving a value the database does not hold; that divergence is
+    #      what made the defect invisible from inside the app.
+    #   2. A failure refuses with 503. Following the SUP-02 precedent in
+    #      routers/support.py: the in-memory store is a substitute for a DELIBERATELY
+    #      UNCONFIGURED backend, never for a broken one.
+    #
+    # Risk configuration is the one thing in this system where "saved" must mean stored.
+    # A trader who lowers their daily-loss limit and is told it saved has been given a
+    # false assurance about money.
+    persisted = False
+    if user.get("access_token") and _persistence_configured():
+        sb = await _sb(user)
+        if sb is None:
+            # A token was presented but no client could be built -- that is a broken
+            # dependency, not an unconfigured one. Do not fall through to memory.
+            logger.error(
+                "[RISK-06] could not build a database client for %s; refusing to report "
+                "a save", uid,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "RISK_SETTINGS_PERSISTENCE_UNAVAILABLE",
+                    "message": "Risk settings were not saved: the configuration store is "
+                               "unavailable. Your existing limits remain in force.",
+                },
+            )
         try:
-            q = sb.table("risk_settings").upsert(updated_record, on_conflict="user_id").execute()
+            # ── RISK-09: the WRITE goes through the service-role client ──
+            #
+            # `public.risk_settings` granted `authenticated` INSERT and UPDATE, so a
+            # customer holding the anon key could PostgREST-write their own risk row
+            # directly and set `max_daily_loss`, `max_positions` or `max_leverage` to
+            # anything. Measured in production 2026-11-18:
+            #
+            #     risk_settings   authenticated   INSERT,SELECT,UPDATE
+            #
+            # NOT an enforcement bypass, and that distinction is worth keeping straight:
+            # `core/risk_manager.validate_trade_request` clamps every limit to the
+            # platform ceiling on the order path independently of this row
+            # (RISK-03), so a forged value buys no extra exposure. What it does buy is a
+            # LIE: the trader reads back a limit the engine will not honour, which is the
+            # exact defect RISK-03's clamp exists to prevent on the honest path. It also
+            # defeats the ceiling-clamp audit trail, since the stored value no longer
+            # records what this endpoint decided.
+            #
+            # Same remedy, same order, as MKT-10 for `strategy_backtests` and RISK-07 for
+            # `strategy_limits`: move the writer, THEN take the privilege away. Migration
+            # 076 performs the revoke and is safe precisely because this is the only
+            # writer -- every other reference to the table in `backend_app` is a SELECT
+            # (`routers/risk.py:511`, `core/risk_manager.py:180`,
+            # `dashboard_aggregation_service.py:1062`), and those keep `authenticated`
+            # SELECT and their RLS layer.
+            #
+            # The service-role client is not subject to RLS, so ownership is enforced in
+            # the row instead: `updated_record["user_id"]` is `uid`, taken from the
+            # verified JWT at the top of this handler, and the upsert conflicts on
+            # `risk_settings_user_id_key` so it can only ever create or update the
+            # authenticated caller's single row.
+            res = get_service_supabase_async()
+            service_sb = await res if inspect.isawaitable(res) else res
+            if service_sb is None:
+                raise RuntimeError(
+                    "no service-role client; refusing to fall back to the caller's "
+                    "client, which no longer holds INSERT/UPDATE on risk_settings"
+                )
+            q = service_sb.table("risk_settings").upsert(
+                updated_record, on_conflict="user_id"
+            ).execute()
             await q if inspect.isawaitable(q) else q
+            persisted = True
         except Exception as e:
-            logger.warning(f"Database persist for risk_settings skipped: {e}")
+            logger.error(
+                "[RISK-06] risk_settings upsert failed for %s, nothing was saved: %s",
+                uid, e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "RISK_SETTINGS_PERSIST_FAILED",
+                    "message": "Risk settings were not saved. Your existing limits remain "
+                               "in force -- please retry.",
+                    "reason": str(e)[:300],
+                },
+            )
+
+    _user_risk_settings[uid] = updated_record
 
     # Invalidate Redis cache
     try:
@@ -226,6 +822,17 @@ async def update_risk_settings(
             await redis_client.delete(f"risk_settings:{uid}")
     except Exception as e:
         logger.debug(f"Redis cache delete skipped: {e}")
+
+    # PERF-01: also invalidate risk_manager.py's own cache (a different key/shape --
+    # see that module's _risk_settings_cache_key), so a tightened or relaxed limit is
+    # visible to the NEXT TRADE immediately rather than staying stale for up to
+    # RISK_SETTINGS_CACHE_TTL seconds.
+    try:
+        from backend_app.core.risk_manager import invalidate_user_risk_settings_cache
+
+        await invalidate_user_risk_settings_cache(uid)
+    except Exception as e:
+        logger.debug(f"risk_manager trade-settings cache invalidation skipped: {e}")
 
     # Emit real-time WebSocket event
     try:
@@ -252,15 +859,49 @@ async def update_risk_settings(
             severity="info",
             title="Risk Parameters Updated",
             message=f"Risk controls updated (Max Loss: ${updated_record['max_daily_loss']:,}, Max Positions: {updated_record['max_positions']}).",
-            metadata={"settings": updated_record, "idempotency_key": f"risk_settings:{uid}"},
+            # NOTIF-RISK-01: the key names THIS save. It was `risk_settings:{uid}`, and the
+            # notifications table de-duplicates (user_id, idempotency_key) durably, so a user
+            # was told about their first risk change ever and never again -- a later change
+            # (including one they did not make) raised no notice, and the one shown was stale.
+            metadata={
+                "settings": updated_record,
+                "idempotency_key": f"risk_settings:{uid}:{updated_record['updated_at']}",
+            },
             ws_manager=ws_mgr,
         )
     except Exception as notif_err:
         logger.debug(f"[RISK] Notification dispatch error: {notif_err}")
 
+    # RISK-06: the message must match what actually happened. `persisted` is False only
+    # on the tokenless path (no access_token at all -- service and test contexts), where
+    # the in-memory store is the deliberate behaviour. Every other outcome either
+    # persisted or already raised 503 above, so "saved" is never printed over a failure.
+    # Durability and clamping are INDEPENDENT facts and the message has to carry both.
+    # The first version of this branch replaced the message wholesale when `persisted` was
+    # False and dropped the clamp reasons with it, which broke RISK-03's guarantee that a
+    # trader is told their limit was lowered and to what. Both halves now compose.
+    if persisted:
+        message_parts = [
+            "Risk settings saved." if limit_adjustments
+            else "Risk settings saved successfully"
+        ]
+    else:
+        message_parts = [
+            "Risk settings applied to this process only -- no configuration store is "
+            "attached to this session. They will not survive a restart."
+        ]
+    message_parts.extend(a["reason"] for a in limit_adjustments)
+    saved_message = " ".join(message_parts)
+
     return {
         "status": "ok",
-        "message": "Risk settings saved successfully",
+        "message": saved_message,
+        # RISK-06: explicit so a client never has to infer durability from prose.
+        "persisted": persisted,
+        # RISK-03: empty on the ordinary path, so a client can treat a non-empty list as
+        # "tell the user their limit was lowered, and to what".
+        "limit_adjustments": limit_adjustments,
+        "platform_ceilings": _safe_platform_ceilings(),
         "data": updated_record,
         **updated_record
     }
@@ -282,9 +923,15 @@ async def validate_risk_configuration(
     if body.max_leverage is not None and (body.max_leverage < 1 or body.max_leverage > 50):
         errors.append("max_leverage must be between 1 and 50")
 
+    # RISK-03: additive, and the reason this endpoint is worth asking. The bounds checked
+    # above are the API's declared range (1..100 positions, 1..50x); the platform ceilings
+    # are what the order path will actually hold the account to, and they are lower. A
+    # value can therefore be `valid` here and still be clamped on save -- which is not a
+    # contradiction, but a caller that cannot see the ceiling has no way to show it.
     return {
         "valid": len(errors) == 0,
         "errors": errors,
+        "platform_ceilings": _safe_platform_ceilings(),
     }
 
 
@@ -337,24 +984,36 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
     # zero is worse than no answer.
     #
     # Current drawdown is peak-to-trough and therefore needs an equity *series*. This endpoint
-    # reads the paper performance summary and the open positions, and neither carries one: the
-    # summary reports ``total_equity``, ``initial_capital`` and ``roi_pct``, all single figures.
-    # A peak cannot be reconstructed from them - an account that peaked at 150k and now sits at
-    # 90k on 100k of capital would report 10% against ``initial_capital`` instead of its real 40%,
-    # which is the same class of error BC-1 exists to remove. No series is fetched here on
-    # purpose: BC-1 is a read projection and adds no query, and this handler's reads are the ones
-    # whose refusals are already catalogued above.
+    # used to read only the paper performance summary and the open positions, neither of which
+    # carries one, and passed an empty series through on purpose so the honest answer was
+    # ``null``.
     #
-    # So the series in hand is empty and the honest answer is ``null``. It is routed through the
+    # RISK-04 gives it a series to read: ``paper_equity_snapshots``, the durable, per-fill
+    # equity history ``place_order`` and ``BotPaperLedger`` both write to, and the same series
+    # the live-order-path kill switch (``core/risk_manager.py``'s ``REJECT_DRAWDOWN``, fed via
+    # ``PaperTradingService.get_current_drawdown_pct``) now enforces against. Routed through the
     # dashboard projection's function rather than hardcoded, so there is one definition of this
-    # figure in the codebase: the day a series does reach this handler, only the argument changes.
-    # ``GET /status`` declares no ``response_model``, so the returned dict is serialised as-is and
-    # ``None`` reaches the client as JSON ``null``.
+    # figure in the codebase, and the number this endpoint SHOWS a trader is the number the
+    # order path actually ENFORCES against - not two independent readings of the same account.
+    # ``GET /status`` declares no ``response_model``, so the returned dict is serialised as-is
+    # and ``None`` still reaches the client as JSON ``null`` on a persistence failure or an
+    # account too new to have a measurable peak (fewer than two snapshots).
     from backend_app.backend.dashboard_aggregation_service import (
         current_drawdown_pct_from_equity_curve,
     )
+    from backend_app.backend.paper import paper_repository as _paper_repo
 
-    equity_curve_in_hand: List[Dict[str, Any]] = []
+    try:
+        equity_curve_in_hand: List[Dict[str, Any]] = [
+            {"equity": snap.get("total_equity")}
+            for snap in _paper_repo.get_equity_snapshots(
+                paper_svc.persistence_client(user.get("access_token")), uid
+            )
+        ]
+    except Exception:  # noqa: BLE001 - an unreadable series means "unmeasurable", the
+        # same honest ``null`` BC-1 already returns for an empty one; it must never turn
+        # a display read into a 500.
+        equity_curve_in_hand = []
     drawdown_pct: Optional[float] = current_drawdown_pct_from_equity_curve(equity_curve_in_hand)
 
     # Status calculation
@@ -389,6 +1048,47 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
         "drawdown_pct": drawdown_pct,
         "circuit_breaker_armed": settings.get("circuit_breaker_armed", True),
         "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.get("/guard-status")
+async def get_guard_status(user: dict = Depends(get_current_user)):
+    """RISK-05: the real figures the "Consecutive Loss Protection" and "Capital
+    Utilization Limit" kill switches evaluate, for display alongside the switches that
+    now actually enforce them (`RiskSettings.jsx`).
+
+    A NEW endpoint rather than new fields on `GET /status` or `GET /settings` on purpose:
+    both of those already have frozen shape baselines
+    (`tests/regression/baseline/risk_utilisation.json`,
+    `tests/regression/baseline/surface_risk_settings.json`) that assert their exact key
+    set, and growing either would mean rewriting a baseline this task has no reason to
+    touch. This endpoint carries no such baseline and is free to grow.
+
+    PAPER accounts only - see `PaperTradingService.get_consecutive_loss_count` and
+    `.get_capital_utilization_pct` for exactly why (no equivalent trade/position history
+    is persisted for a LIVE account anywhere in this codebase; the identical restriction
+    RISK-04 recorded for `drawdown_pct` above). Either figure is `None` - never a
+    fabricated `0` - when it cannot yet be measured (a brand-new account, or a read
+    failure): the same honesty `drawdown_pct` already practises on this same router.
+    """
+    uid = str(user.get("id") or user.get("sub"))
+    from backend_app.backend.paper_trading_service import (
+        CAPITAL_UTILIZATION_LIMIT_PCT,
+        CONSECUTIVE_LOSS_LIMIT,
+        get_paper_trading_service,
+    )
+
+    paper_svc = get_paper_trading_service()
+    token = user.get("access_token")
+    return {
+        "consecutive_losses": paper_svc.get_consecutive_loss_count(
+            uid, access_token=token
+        ),
+        "consecutive_loss_limit": CONSECUTIVE_LOSS_LIMIT,
+        "capital_utilization_pct": paper_svc.get_capital_utilization_pct(
+            uid, access_token=token
+        ),
+        "capital_utilization_limit_pct": CAPITAL_UTILIZATION_LIMIT_PCT,
     }
 
 
@@ -490,6 +1190,9 @@ async def activate_kill_switch(
         body = UserKillSwitchRequest()
     uid = str(user.get("id") or user.get("sub"))
     _user_kill_switch_state[uid] = True
+    from backend_app.core.tenant_halt import set_halt
+
+    persisted = await set_halt(uid, True)
     record_risk_violation(uid, "KILL_SWITCH_MANUAL_ACTIVATION", body.reason or "Emergency kill switch activated by user")
 
     fire_and_forget_task(
@@ -525,6 +1228,7 @@ async def activate_kill_switch(
     return {
         "status": "halted",
         "kill_switch_active": True,
+        "persisted": persisted,
         "message": "Emergency Kill Switch is ACTIVE. All new strategy and order executions are halted."
     }
 
@@ -538,6 +1242,51 @@ async def recover_kill_switch(
     Deactivate emergency kill switch and resume normal trading operations.
     """
     uid = str(user.get("id") or user.get("sub"))
+    from backend_app.core.tenant_halt import HaltWriteOutcome, set_halt_outcome
+
+    # THE RETURN VALUE USED TO BE DISCARDED, AND THIS ROUTE THEN LIED.
+    #
+    # `set_halt` documents that "the caller is told via the return value", and the sibling
+    # activate route binds it and reports it as `persisted`. This one called
+    # `await set_halt(uid, False)` and threw the answer away, then unconditionally answered
+    # {"status": "active", "kill_switch_active": False, "Trading is active."}.
+    #
+    # When the shared write fails the Redis key `tenant_halt:<id>` is STILL SET, so
+    # `is_halted` -- the authoritative check on the execution path -- keeps refusing every
+    # order, on this worker and every other. The direction of the failure was safe; the
+    # REPORT was false. The user was told trading had resumed, and every order they then
+    # placed was rejected, with the one surface that could have explained it insisting
+    # everything was fine.
+    #
+    # It is also why the in-process mirror is no longer cleared optimistically: the old
+    # ordering left this worker's mirror saying "not halted" while the shared store said
+    # "halted", so the dashboards (which read the mirror) and execution (which reads the
+    # store) disagreed about a safety control. `set_halt_outcome` restores the mirror on a
+    # failed write.
+    outcome = await set_halt_outcome(uid, False)
+
+    if outcome is HaltWriteOutcome.WRITE_FAILED:
+        # NOT a 500: nothing is broken about the request, and the halt is intact, which is
+        # the safe state. 503 with a stable code, because the action is to retry once the
+        # shared store is reachable -- and the halt is still protecting the account until
+        # then, which the message says rather than implying a failure to protect.
+        logger.error(
+            "[KILL SWITCH] recovery for %s could not be written to the shared store; the "
+            "halt REMAINS ENGAGED and the caller has been told so.", uid,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "KILL_SWITCH_RECOVERY_UNCONFIRMED",
+                "message": (
+                    "The emergency kill switch could NOT be lifted: the shared safety store "
+                    "did not accept the change, so trading remains halted on every worker. "
+                    "Your account is still protected. Try again shortly."
+                ),
+            },
+        )
+
+    # Only now is the local fast-path view safe to clear.
     _user_kill_switch_state[uid] = False
 
     fire_and_forget_task(
@@ -572,6 +1321,11 @@ async def recover_kill_switch(
     return {
         "status": "active",
         "kill_switch_active": False,
+        # Reported for the same reason the activate route reports it: so a caller can tell
+        # "cleared in the shared store, every worker will see it" from "cleared locally
+        # because this deployment has no shared store at all". NO_SHARED_STORE is the normal
+        # local-dev shape, not a failure -- the mirror is the whole of the state there.
+        "persisted": outcome is HaltWriteOutcome.PERSISTED,
         "message": "Kill switch recovered. Trading is active."
     }
 
@@ -583,12 +1337,64 @@ async def get_risk_violations(
 ):
     """
     Get audit history of risk rejections and policy violations for user.
+
+    RISK-01. Reads the durable trail in ``public.risk_violation_audit``, which
+    survives restarts and is shared across workers. The in-process mirror is
+    the fallback for deployments with no service-role client configured, and
+    for the window before a scheduled write lands.
+
+    ``source`` names which one answered, so a caller can tell "you have no
+    violations" from "this deployment cannot see them".
     """
     uid = str(user.get("id") or user.get("sub"))
+
+    try:
+        from backend_app.core.dependencies import get_service_supabase_async
+
+        sb = await get_service_supabase_async()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[RISK_VIOLATION] read: service client error: %s", exc)
+        sb = None
+
+    if sb is not None:
+        try:
+            result = sb.table("risk_violation_audit").select(
+                "violation_id, user_id, rule, reason, detail, recorded_at"
+            ).eq("user_id", uid).order(
+                "recorded_at", desc=True
+            ).limit(limit).execute()
+            if inspect.isawaitable(result):
+                result = await result
+
+            rows = getattr(result, "data", None) or []
+            return {
+                "violations": [
+                    {
+                        "id": str(r.get("violation_id")),
+                        "user_id": r.get("user_id"),
+                        "rule": r.get("rule"),
+                        "reason": r.get("reason"),
+                        "details": r.get("detail") or {},
+                        "timestamp": r.get("recorded_at"),
+                    }
+                    for r in rows
+                ],
+                "count": len(rows),
+                "source": "durable",
+            }
+        except Exception as exc:  # noqa: BLE001
+            # Falling through to the mirror is deliberate: a reporting endpoint
+            # going dark is worse than serving a partial, labelled answer.
+            logger.warning(
+                "[RISK_VIOLATION] read: durable query failed, serving mirror: %s",
+                exc,
+            )
+
     violations = _risk_violations_log.get(uid, [])
     return {
         "violations": sorted(violations, key=lambda x: x.get("timestamp", ""), reverse=True)[:limit],
-        "count": len(violations)
+        "count": len(violations),
+        "source": "memory",
     }
 
 
@@ -716,18 +1522,35 @@ async def update_strategy_limits(
     uid = str(user.get("id") or user.get("sub"))
     store = _user_strategy_limits.setdefault(uid, {})
     updated = []
+    records = []
     if body.limits:
         for item in body.limits:
             sid = item.strategy_id or f"strat_{len(store)+1}"
             data = item.dict(exclude_none=True)
             data["strategy_id"] = sid
-            store[sid] = data
-            updated.append(sid)
+            records.append(_strategy_limit_row(uid, sid, data))
+            updated.append((sid, data))
+
+    # ── RISK-07: write to the table the GET reads ──
+    #
+    # This endpoint used to write ONLY to `_user_strategy_limits`, a process-local dict,
+    # and return {"status": "ok"}. `GET /strategy-limits` reads `public.strategy_limits`
+    # and merges the dict over it, so a save appeared to work for as long as the request
+    # happened to land on the same worker, then vanished -- on restart, on redeploy, or
+    # on the next request routed elsewhere. Per-strategy allocation was the one T11
+    # control with no persistence at all.
+    persisted = await _persist_strategy_limits(user, uid, records)
+
+    # Only mirror into the process cache once the row is durable, so this worker cannot
+    # serve a limit the database does not hold.
+    for sid, data in updated:
+        store[sid] = data
 
     return {
         "status": "ok",
-        "updated": updated,
-        "count": len(updated)
+        "updated": [sid for sid, _ in updated],
+        "count": len(updated),
+        "persisted": persisted,
     }
 
 
@@ -754,12 +1577,19 @@ async def update_single_strategy_limit(
         limit_data = {}
 
     limit_data["strategy_id"] = str(strategy_id)
+
+    # RISK-07: same defect as the batch endpoint above -- persist, then mirror.
+    persisted = await _persist_strategy_limits(
+        user, uid, [_strategy_limit_row(uid, str(strategy_id), limit_data)]
+    )
     store[str(strategy_id)] = limit_data
+
     return {
         "status": "ok",
         "updated": str(strategy_id),
         "data": limit_data,
-        "count": 1
+        "count": 1,
+        "persisted": persisted,
     }
 
 

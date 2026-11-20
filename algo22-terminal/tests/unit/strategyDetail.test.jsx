@@ -286,7 +286,8 @@ describe('StrategyDetail tabs: the audit placeholder is gone', () => {
     await renderPage();
 
     await user.click(screen.getByRole('button', { name: /^marketplace$/i }));
-    await user.click(await screen.findByRole('button', { name: /publish to library/i }));
+    // MKT-04: the first step of the gated path; its refusal is reported the same way.
+    await user.click(await screen.findByRole('button', { name: /create listing/i }));
 
     const notice = await screen.findByTestId('marketplace-notice');
     expect(notice.textContent).toMatch(/library submission is closed/i);

@@ -169,7 +169,6 @@ const REQUIREMENT_2_1_LABELS = Object.freeze([
   'Backtester',
   'Live Trading',
   'Signal Trace',
-  'Portfolio',
   'Trade History',
   'Marketplace',
   'Paper Trading',
@@ -186,7 +185,6 @@ const REQUIREMENT_2_1_LABELS = Object.freeze([
 const SIDEBAR_IA = Object.freeze([
   Object.freeze({ id: 'dashboard', label: 'Dashboard', path: '/app/dashboard' }),
   Object.freeze({ id: 'live-trading', label: 'Live Trading', path: '/app/live-trading' }),
-  Object.freeze({ id: 'portfolio', label: 'Portfolio', path: '/app/portfolio' }),
   Object.freeze({ id: 'strategies', label: 'Strategies', path: '/app/strategies' }),
   Object.freeze({ id: 'builder', label: 'Strategy Builder', path: '/app/builder' }),
   Object.freeze({ id: 'backtest', label: 'Backtester', path: '/app/backtest' }),
@@ -229,7 +227,8 @@ const SHELL_RENDERERS = Object.freeze([
 const ACCOUNT_MENU = 'components/shell/AccountMenu.jsx';
 
 /** Routes that carry no page: both render `<Navigate>`. Section 4 checks that claim. */
-const REDIRECT_ROUTES = Object.freeze(['/app', '/app/*']);
+// PORTFOLIO-REMOVED-01: `/app/portfolio/*` now only redirects old bookmarks to Trade History.
+const REDIRECT_ROUTES = Object.freeze(['/app', '/app/*', '/app/portfolio/*']);
 
 const readSrc = (relative) => readFileSync(path.join(SRC, relative), 'utf8');
 
@@ -465,12 +464,13 @@ const APP_ROUTES = appRoutes(DECLARED_ROUTES);
 
 describe('nav-contract: the ten entries', () => {
   it('flattens to exactly ten, with no duplicate id, label or path', () => {
-    expect(NAV_ENTRIES).toHaveLength(10);
-    expect(new Set(NAV_ENTRIES.map((e) => e.id)).size).toBe(10);
-    expect(new Set(NAV_ENTRIES.map((e) => e.label)).size).toBe(10);
-    expect(new Set(NAV_ENTRIES.map((e) => e.path)).size).toBe(10);
+    // Nine since PORTFOLIO-REMOVED-01 dropped `portfolio`.
+    expect(NAV_ENTRIES).toHaveLength(9);
+    expect(new Set(NAV_ENTRIES.map((e) => e.id)).size).toBe(9);
+    expect(new Set(NAV_ENTRIES.map((e) => e.label)).size).toBe(9);
+    expect(new Set(NAV_ENTRIES.map((e) => e.path)).size).toBe(9);
     // The flatten is the whole table, not one group of it.
-    expect(NAV_GROUPS.reduce((n, g) => n + g.entries.length, 0)).toBe(10);
+    expect(NAV_GROUPS.reduce((n, g) => n + g.entries.length, 0)).toBe(9);
   });
 
   it('is §6.3 ids, no more and no fewer', () => {
@@ -514,7 +514,7 @@ describe('nav-contract: the ten entries', () => {
     // requirement is still a failure.
     expect(new Set(NAV_ENTRIES.map((e) => e.label))).toEqual(new Set(REQUIREMENT_2_1_LABELS));
     expect(new Set(SIDEBAR_IA.map((e) => e.label))).toEqual(new Set(REQUIREMENT_2_1_LABELS));
-    expect(REQUIREMENT_2_1_LABELS).toHaveLength(10);
+    expect(REQUIREMENT_2_1_LABELS).toHaveLength(9); // less Portfolio (PORTFOLIO-REMOVED-01)
   });
 });
 
@@ -758,11 +758,11 @@ describe('nav-contract: the guard would report the defects it exists for', () =>
     // `portfolio` and `trades` absent while `App.jsx` declares both. This is the
     // shipped defect, run through the real comparison.
     const before = [entry(), entry({ id: 'strategies', label: 'Strategies', path: '/app/strategies', matches: [/^\/app\/strategies(\/|$)/i] })];
-    const routes = ['/app', '/app/dashboard', '/app/strategies', '/app/portfolio', '/app/trades'];
+    const routes = ['/app', '/app/dashboard', '/app/strategies', '/app/live-trading', '/app/trades'];
 
     const orphans = orphanRoutes(routes, before, {});
     expect(orphans).toHaveLength(2);
-    expect(orphans.join('\n')).toContain('/app/portfolio');
+    expect(orphans.join('\n')).toContain('/app/live-trading');
     expect(orphans.join('\n')).toContain('/app/trades');
     // And the real table answers the same routes cleanly.
     expect(orphanRoutes(routes, NAV_ENTRIES, SECONDARY_ROUTE_TITLES)).toEqual([]);

@@ -920,10 +920,35 @@ def _rows(response: Any, what: str) -> List[Dict[str, Any]]:
     if data is None:
         return []
     if isinstance(data, Mapping):
-        return [dict(data)]
+        return [_exact_wire_row(data)]
     if isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
-        return [dict(row) for row in data if isinstance(row, Mapping)]
+        return [_exact_wire_row(row) for row in data if isinstance(row, Mapping)]
     return []
+
+
+def _exact_wire_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """One row as it comes off the wire, with every JSON number that is a float made exact.
+
+    PAPER-08. PostgREST renders a ``numeric`` column as a JSON number, and the HTTP client parses
+    a JSON number with a fractional part into a binary ``float``. The accounting engine refuses
+    a ``float`` outright (Requirement 18.1), so the first read of any paper balance in production
+    failed with ``InvalidQuantity: available_balance must be an exact decimal value, not a float
+    (100000.0)`` - ``GET /api/paper/account``, ``/summary`` and ``/positions`` all answered 500 for
+    every user. The test suites did not see it because they read through a Postgres driver (or a
+    double) that returns ``Decimal`` for ``numeric``, which is not what the deployed client does.
+
+    ``Decimal(repr(value))`` is the exact decimal the float was parsed from: ``repr`` is the
+    shortest string that round-trips, so a value PostgREST rendered with up to 15 significant
+    digits comes back as the same digits it was stored with, not as ``0.1000000000000000055...``.
+    Only top-level scalar floats are converted; an ``int`` is already exact, a ``str`` is already
+    an exact decimal string, and a JSONB payload is left as stored (``_jsonb`` writes its decimals
+    as strings, so it carries no float). A non-finite float becomes a non-finite ``Decimal`` and
+    is refused downstream by ``to_decimal`` exactly as before.
+    """
+    exact: Dict[str, Any] = {}
+    for key, value in row.items():
+        exact[key] = Decimal(repr(value)) if isinstance(value, float) else value
+    return exact
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1652,6 +1677,57 @@ def get_orders(
 
     rows = _execute(query, f"{ORDERS_TABLE} read")
     return [row for row in rows if str(row.get("user_id")) == uid]
+
+
+def get_open_legacy_limit_order_pairs(supabase: Any) -> List[Tuple[str, str]]:
+    """PAPER-07. Every distinct ``(user_id, symbol)`` with an OPEN, default-account (``session_id
+    IS NULL``) resting LIMIT order -- across every tenant.
+
+    THE ONE SANCTIONED CROSS-TENANT READ IN THIS MODULE, AND WHY IT EXISTS
+    ------------------------------------------------------------------------
+    Every other function here takes ``user_id`` and scopes every statement to it
+    (:func:`_scoped`); that is correct for a request handler, which only ever acts for the
+    caller who holds the JWT. ``check_limit_orders`` itself says so in its own docstring: "row-
+    level security is scoped to one identity, and a cross-tenant scan would need an unscoped
+    read... that paper_repository deliberately does not offer."
+
+    That function had NO CALLER anywhere in the application -- a resting legacy limit order
+    could never fill, regardless of price, because nothing ever asked "whose orders need
+    checking?" across the whole book. Answering that question is a SYSTEM operation (a
+    scheduled sweep, never a per-request one), which is exactly the same distinction
+    ``get_service_supabase`` draws for operator actions: this function must be called with a
+    SERVICE-ROLE client, obtained the same way, and never with a request-scoped one -- there is
+    no caller identity here to check it against.
+
+    ``check_limit_orders`` is still called once per ``(user_id, symbol)`` pair this returns,
+    and it is THAT call which is scoped to one identity and does the actual fill -- this
+    function only answers which pairs exist to check.
+    """
+    require_persistence(supabase)
+    rows = _execute(
+        supabase.table(ORDERS_TABLE)
+        .select("user_id,symbol")
+        # Literal "OPEN", not backend.paper_trading_service.PaperOrderStatus.OPEN.value:
+        # that module imports THIS one as `repo`, so importing it back here would cycle.
+        # PaperOrderStatus is a (str, Enum) and .OPEN.value is exactly this literal.
+        .eq("legacy_status", "OPEN")
+        .eq("order_type", "limit")
+        .is_("session_id", "null"),
+        f"{ORDERS_TABLE} open-limit-pairs read",
+    )
+    seen: set = set()
+    pairs: List[Tuple[str, str]] = []
+    for row in rows:
+        uid = row.get("user_id")
+        sym = row.get("symbol")
+        if not uid or not sym:
+            continue
+        key = (str(uid), str(sym))
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(key)
+    return pairs
 
 
 def get_trades(
@@ -2562,6 +2638,242 @@ def insert_equity_snapshot(
         f"{EQUITY_SNAPSHOTS_TABLE} insert",
     )
     return _one(rows, f"{EQUITY_SNAPSHOTS_TABLE} insert")
+
+
+def _rpc_error_code(exc: BaseException) -> str:
+    """The SQLSTATE a failed ``.rpc()`` call raised, or ``""`` when none is readable.
+
+    ``paper_apply_fill_atomic`` (migration ``048_paper05_apply_fill_atomic.sql``) raises
+    ``RAISE EXCEPTION ... USING ERRCODE = 'PAxxx'``. ``postgrest.exceptions.APIError``
+    carries that SQLSTATE on its own ``.code`` attribute (PostgREST relays the Postgres
+    error code verbatim); a double that does not wrap postgrest's exception type is read
+    by falling back to ``str(exc)``, the same two-step reading :func:`_is_unique_violation`
+    already uses for the same reason.
+    """
+    code = str(getattr(exc, "code", "") or "").strip()
+    if code:
+        return code
+    text = str(exc)
+    for candidate in ("PA001", "PA002", "PA003"):
+        if candidate in text:
+            return candidate
+    return ""
+
+
+def apply_fill_atomic(
+    supabase: Any,
+    *,
+    user_id: Any,
+    account_id: Any,
+    order_id: Any,
+    session_id: Any,
+    fill_event_id: Any,
+    expected_account_version: Any,
+    expected_order_state: Any,
+    fill: Mapping[str, Any],
+    account: Mapping[str, Any],
+    balance_event: Mapping[str, Any],
+    order: Mapping[str, Any],
+    position: Mapping[str, Any],
+    equity_snapshot: Mapping[str, Any],
+    resume_fill_id: Any = None,
+    closed_leg: Optional[Mapping[str, Any]] = None,
+    trade: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """PAPER-05. The seven paper-fill writes, committed atomically in ONE ``.rpc()``
+    call to ``public.paper_apply_fill_atomic``
+    (``backend_app/migrations/048_paper05_apply_fill_atomic.sql``), replacing what used
+    to be seven separate statements through :func:`insert_fill`, :func:`bump_version`,
+    :func:`insert_balance_event`, :func:`upsert_position` (up to twice), :func:`update_order`,
+    :func:`insert_trade` and :func:`insert_equity_snapshot`.
+
+    Every guard and every arithmetic computation stays exactly where it was --
+    ``paper_simulator.apply_fill`` and ``paper_accounting`` -- and is already DONE by the
+    time this is called; this function only serialises the already-decided final values
+    into the shapes the migration's jsonb parameters expect, through the SAME
+    :func:`_numeric` / :func:`_minor_units` / :func:`_instant` / :func:`_optional_instant`
+    helpers every other write in this module already routes through, so a value travels
+    through this path exactly as exactly as it would through any of the seven calls it
+    replaces.
+
+    Args:
+        fill: ``{quantity, price, fee_minor, slippage_minor, market_event_id, filled_at}``.
+        account: ``{available_balance, locked_balance, realized_pnl, total_equity}`` --
+            the account's values AFTER this fill, as :func:`paper_accounting.apply_fill`
+            computed them.
+        balance_event: ``{available_delta, locked_delta, realized_delta, occurred_at}``.
+            The ``*_after`` columns are read back from the account row the function
+            itself updates, inside the same transaction, rather than passed in --
+            removing a chance for the ledger and the account to disagree.
+        order: ``{target_state, legacy_status, filled_quantity, avg_fill_price, fee_minor,
+            slippage_minor}``.
+        position: ``{symbol, side, size, entry_price, opened_at, current_price,
+            unrealized_pnl, price_at, closed_at}`` -- the OPEN row's values after this fill.
+        closed_leg: ``None``, or ``{side, entry_price, opened_at}`` when a reversal through
+            zero closes the prior side first (the ``current_price`` / ``price_at`` /
+            ``closed_at`` of that closed row are the fill's own price and instant, written
+            by the function itself).
+        trade: ``None``, or ``{symbol, side, quantity, entry_price, exit_price,
+            realized_pnl, fee_minor, opened_at, closed_at}`` when a position reached size
+            zero.
+        equity_snapshot: ``{series_index, total_equity, available_balance, locked_balance,
+            position_market_value, stale, taken_at}``.
+        resume_fill_id: ``None`` for a fresh fill; the existing ``paper_fills.id`` when
+            resuming a fill row that landed in a previous, now-superseded partial write
+            (pre-migration data; a fill applied entirely through this function cannot
+            reach that state itself -- see the migration file's own header).
+
+    Returns:
+        A dict with keys ``fill``, ``account``, ``balance_event``, ``position``,
+        ``closed_position``, ``order``, ``trade``, ``snapshot`` and ``resumed`` -- the rows
+        the function wrote (``None`` for ``closed_position`` / ``trade`` when neither
+        applied), in the same shape the seven calls this replaces would have returned.
+
+    Raises:
+        PaperConcurrencyConflict: ``PA001`` -- the account version or the order state the
+            caller read no longer matches; the caller's existing retry loop re-reads and
+            recomputes the whole attempt, exactly as it does for the optimistic conflicts
+            the seven separate calls used to raise.
+        PaperDuplicateFill: ``PA002`` -- a concurrent writer inserted this exact
+            ``fill_event_id`` between the caller's own duplicate guard and this call.
+        PaperPersistenceError: ``PA003`` (the account, the order, or the fill being
+            resumed does not exist for this identity) or any other failure the statement
+            did not complete for.
+    """
+    require_persistence(supabase)
+    uid = _require_text(user_id, "user_id")
+    aid = _require_text(account_id, "account_id")
+    oid = _require_text(order_id, "order_id")
+    sid = _optional_text(session_id)
+    event_id = _require_text(fill_event_id, "fill_event_id")
+    resume_id = _optional_text(resume_fill_id)
+
+    fill_payload = {
+        "quantity": _numeric(fill["quantity"], "quantity"),
+        "price": _numeric(fill["price"], "price"),
+        "fee_minor": _minor_units(fill["fee_minor"], "fee_minor"),
+        "slippage_minor": _minor_units(fill["slippage_minor"], "slippage_minor"),
+        "market_event_id": _optional_text(fill.get("market_event_id")),
+        "filled_at": _instant(fill["filled_at"], "filled_at"),
+    }
+    account_payload = {
+        "available_balance": _numeric(account["available_balance"], "available_balance"),
+        "locked_balance": _numeric(account["locked_balance"], "locked_balance"),
+        "realized_pnl": _numeric(account["realized_pnl"], "realized_pnl"),
+        "total_equity": _numeric(account["total_equity"], "total_equity"),
+    }
+    balance_event_payload = {
+        "available_delta": _numeric(balance_event["available_delta"], "available_delta"),
+        "locked_delta": _numeric(balance_event["locked_delta"], "locked_delta"),
+        "realized_delta": _numeric(balance_event["realized_delta"], "realized_delta"),
+        "occurred_at": _instant(balance_event["occurred_at"], "occurred_at"),
+    }
+    order_payload = {
+        "target_state": _require_text(order["target_state"], "target_state"),
+        "legacy_status": _require_text(order["legacy_status"], "legacy_status"),
+        "filled_quantity": _numeric(order["filled_quantity"], "filled_quantity"),
+        "avg_fill_price": _numeric(order["avg_fill_price"], "avg_fill_price"),
+        "fee_minor": _minor_units(order["fee_minor"], "fee_minor"),
+        "slippage_minor": _minor_units(order["slippage_minor"], "slippage_minor"),
+    }
+    position_payload = {
+        "symbol": _require_text(position["symbol"], "symbol"),
+        "side": _one_of(position["side"], POSITION_SIDES, "side"),
+        "size": _numeric(position["size"], "size"),
+        "entry_price": _numeric(position["entry_price"], "entry_price"),
+        "opened_at": _instant(position["opened_at"], "opened_at"),
+        "current_price": _optional_numeric(position.get("current_price"), "current_price"),
+        "unrealized_pnl": _optional_numeric(position.get("unrealized_pnl"), "unrealized_pnl"),
+        "price_at": _optional_instant(position.get("price_at"), "price_at"),
+        "closed_at": _optional_instant(position.get("closed_at"), "closed_at"),
+    }
+    closed_leg_payload: Optional[Dict[str, Any]] = None
+    if closed_leg is not None:
+        closed_leg_payload = {
+            "side": _one_of(closed_leg["side"], POSITION_SIDES, "side"),
+            "entry_price": _numeric(closed_leg["entry_price"], "entry_price"),
+            "opened_at": _instant(closed_leg["opened_at"], "opened_at"),
+        }
+    trade_payload: Optional[Dict[str, Any]] = None
+    if trade is not None:
+        trade_payload = {
+            "symbol": _require_text(trade["symbol"], "symbol"),
+            "side": _require_text(trade["side"], "side"),
+            "quantity": _numeric(trade["quantity"], "quantity"),
+            "entry_price": _numeric(trade["entry_price"], "entry_price"),
+            "exit_price": _numeric(trade["exit_price"], "exit_price"),
+            "realized_pnl": _numeric(trade["realized_pnl"], "realized_pnl"),
+            "fee_minor": _minor_units(trade["fee_minor"], "fee_minor"),
+            "opened_at": _instant(trade["opened_at"], "opened_at"),
+            "closed_at": _instant(trade["closed_at"], "closed_at"),
+        }
+    equity_payload = {
+        "series_index": _exact_int(equity_snapshot.get("series_index", 0), "series_index"),
+        "total_equity": _numeric(equity_snapshot["total_equity"], "total_equity"),
+        "available_balance": _numeric(
+            equity_snapshot["available_balance"], "available_balance"
+        ),
+        "locked_balance": _numeric(equity_snapshot["locked_balance"], "locked_balance"),
+        "position_market_value": _numeric(
+            equity_snapshot["position_market_value"], "position_market_value"
+        ),
+        "stale": bool(equity_snapshot.get("stale", False)),
+        "taken_at": _instant(equity_snapshot["taken_at"], "taken_at"),
+    }
+
+    _measured_from = time.perf_counter()
+    try:
+        response = supabase.rpc("paper_apply_fill_atomic", {
+            "p_user_id": uid,
+            "p_account_id": aid,
+            "p_order_id": oid,
+            "p_session_id": sid,
+            "p_fill_event_id": event_id,
+            "p_expected_account_version": _exact_int(
+                expected_account_version, "expected_account_version"
+            ),
+            "p_expected_order_state": _require_text(
+                expected_order_state, "expected_order_state"
+            ),
+            "p_resume_fill_id": resume_id,
+            "p_fill": fill_payload,
+            "p_account": account_payload,
+            "p_balance_event": balance_event_payload,
+            "p_order": order_payload,
+            "p_position": position_payload,
+            "p_closed_leg": closed_leg_payload,
+            "p_trade": trade_payload,
+            "p_equity_snapshot": equity_payload,
+        }).execute()
+    except Exception as exc:  # noqa: BLE001 - classified below, never swallowed blindly
+        _record_statement("paper_apply_fill_atomic", _measured_from, failed=True)
+        code = _rpc_error_code(exc)
+        if code == "PA001":
+            raise PaperConcurrencyConflict(
+                f"the paper account or order changed under the caller while applying "
+                f"fill {event_id!r} on order {oid!r}; nothing was written ({exc})",
+                table=ACCOUNTS_TABLE,
+                row_id=aid,
+            ) from exc
+        if code == "PA002":
+            raise PaperDuplicateFill(oid, event_id) from exc
+        if is_missing_paper_table_error(exc):
+            remember_persistence_absent()
+            warn_persistence_absent(str(exc))
+            raise paper_persistence_unavailable(PAPER_TRADING_MIGRATION_FILE) from exc
+        raise PaperPersistenceError(
+            f"paper_apply_fill_atomic for order {oid!r} event {event_id!r} did not "
+            f"complete: {exc}"
+        ) from exc
+
+    _record_statement("paper_apply_fill_atomic", _measured_from)
+    data = getattr(response, "data", None)
+    if not isinstance(data, Mapping):
+        raise PaperPersistenceError(
+            f"paper_apply_fill_atomic for order {oid!r} event {event_id!r} completed "
+            f"but returned no usable result"
+        )
+    return dict(data)
 
 
 def insert_metrics(
@@ -3617,10 +3929,44 @@ def insert_session_event(
 # statement, and it refuses to be the place a business rule is spelled a second time.
 
 
-#: ``paper_sessions.session_state`` - ``chk_paper_session_state``, verbatim and in 009's order.
-#: These are also the four states of Requirement 17.7. ``paper_session_service`` imports THIS tuple
-#: rather than re-listing them, so the column vocabulary and the state machine cannot drift.
-SESSION_STATES: Tuple[str, ...] = ("CREATED", "RUNNING", "PAUSED", "STOPPED")
+#: ``paper_sessions.session_state`` - ``chk_paper_session_state``, verbatim and in 009's order,
+#: then 054's addition.
+#:
+#: PAPER-04: ``ABANDONED`` is a FIFTH state, and Requirement 17.7 names four. The deviation is
+#: the fix rather than a drift: none of the four can express "was RUNNING, and the process that
+#: ran its loop is gone" -- RUNNING is false, PAUSED invites a resume that cannot work, STOPPED
+#: makes an unplanned death indistinguishable from an orderly shutdown, and CREATED denies that
+#: it ever ran. See ``migrations/054_paper04_abandoned_session_state.sql`` for the full
+#: reasoning and for why it is ABANDONED rather than FAILED (nothing here is a claim about the
+#: strategy; the session may have been performing perfectly when its host disappeared).
+#:
+#: ``paper_session_service`` imports THIS tuple rather than re-listing them, so the column
+#: vocabulary and the state machine cannot drift.
+#:
+#: STILL THE FOUR. PAPER-04's fifth state (``ABANDONED``) is NOT added here yet, and the
+#: reason is an invariant this module is right to enforce: ``paper_session_service``'s
+#: ``_assert_machine_agrees()`` requires every value of this tuple to be a key of
+#: ``PAPER_SESSION_TRANSITIONS``, every edge there to have an entry in
+#: ``OPERATION_TRANSITIONS``, and that table to hold exactly Requirement 17.7's five
+#: operations. Adding the state here alone fails the first check; adding the edge fails the
+#: second; adding an operation fails the third. The vocabulary, the edge table, the
+#: operation table, the operations vocabulary and ``trg_paper_session_guard``'s permitted
+#: pairs are deliberately one coupled change, and migration 054 is only the first of them.
+#:
+#: PAPER-04 adds ``ABANDONED`` as a FIFTH value where Requirement 17.7 names four. The
+#: deviation IS the fix: none of the four can express "was RUNNING, and the process that
+#: ran its loop is gone". ``migrations/054`` carries the reasoning, including why it is
+#: ABANDONED rather than FAILED.
+#:
+#: Changing this tuple alone is not possible, by design, and it is worth knowing that
+#: before trying: ``paper_session_service._assert_machine_agrees()`` requires every value
+#: here to be a key of ``PAPER_SESSION_TRANSITIONS``, every edge there to appear in
+#: ``OPERATION_TRANSITIONS``, and that table to match ``SESSION_OPERATIONS`` exactly --
+#: while ``trg_paper_session_guard`` independently refuses any pair absent from
+#: ``paper_session_allowed_transitions``. Five places, one change.
+SESSION_STATES: Tuple[str, ...] = (
+    "CREATED", "RUNNING", "PAUSED", "STOPPED", "ABANDONED",
+)
 
 #: ``paper_sessions.session_state`` at creation. 009 declares it as the column DEFAULT; it is
 #: spelled here as well because :func:`insert_session` writes the column explicitly - a payload
@@ -3765,6 +4111,135 @@ def count_running_sessions(supabase: Any, user_id: Any) -> int:
     return len(rows)
 
 
+#: Substrings that identify a schema error -- "no such column/table/value" -- as opposed to
+#: a transient failure. The same three PostgREST/Postgres markers
+#: ``dashboard_aggregation_service._MISSING_COLUMN_MARKERS`` uses, plus ``23514`` for a
+#: CHECK violation, which is how an unapplied 054 rejects the ABANDONED state rather than
+#: the column. A timeout must never be mistaken for an unapplied migration, and an
+#: unapplied migration must never be mistaken for a timeout.
+_MISSING_SCHEMA_MARKERS = (
+    "42703", "23514", "does not exist", "could not find", "undefinedcolumn",
+)
+
+#: Set once per process the first time a heartbeat fails for a SCHEMA reason, so the
+#: deployment defect is reported loudly exactly once instead of once per loop iteration
+#: per session -- which would be thousands of identical lines and read as noise.
+_HEARTBEAT_SCHEMA_REPORTED = False
+
+
+def _looks_like_missing_schema(exc: BaseException) -> bool:
+    """Is this exception "the schema does not have that", rather than a transient failure?"""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _MISSING_SCHEMA_MARKERS)
+
+
+def touch_session_heartbeat(supabase: Any, *, user_id: Any, session_id: Any) -> None:
+    """Record that this session's loop is alive, right now. PAPER-04.
+
+    One column, written by the loop on each iteration. It is what makes
+    :func:`list_stale_running_sessions` able to tell "its runner is gone" from "another
+    worker is running it healthily" -- a distinction the row's state alone cannot make,
+    and which matters because ``startup.sh`` runs ``gunicorn --workers ${WORKERS:-2}``.
+
+    Never raises. A heartbeat that could fail the loop would make the liveness record the
+    thing that kills the session it is reporting on; a missed beat is self-correcting on
+    the next iteration, and the staleness window is far wider than one interval.
+
+    BUT A MISSING COLUMN IS NOT A MISSED BEAT, AND CONFLATING THEM HID THIS ENTIRELY
+    ------------------------------------------------------------------------------
+    This swallowed every exception at ``debug`` level. Migration 054, which adds the
+    column, shipped in PR #92 and was never applied to production -- so this UPDATE failed
+    with ``UndefinedColumn`` on EVERY iteration of EVERY session, logged nothing above
+    debug, and the liveness record silently never existed. Measured against production
+    2026-10-24: the write, the ``list_stale_running_sessions`` read that names the same
+    column, and the five-state CHECK were all refused. The half of PAPER-04 recorded as
+    delivered was decorative, and this handler is why nobody found out.
+
+    So a SCHEMA error is now reported at ``error``, ONCE per process, while a transient
+    failure stays at ``debug``. The distinction is the one
+    ``dashboard_aggregation_service._MISSING_COLUMN_MARKERS`` already draws for the same
+    reason: "no such column" is a deployment defect that will not fix itself on the next
+    iteration, and logging it per-iteration would flood rather than inform.
+    """
+    try:
+        require_persistence(supabase)
+        uid = _require_text(user_id, "user_id")
+        sid = _require_text(session_id, "session_id")
+        (
+            supabase.table("paper_sessions")
+            .update({"last_heartbeat_at": _utc_now()})
+            .eq("user_id", uid)
+            .eq("id", sid)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        if _looks_like_missing_schema(exc):
+            global _HEARTBEAT_SCHEMA_REPORTED
+            if not _HEARTBEAT_SCHEMA_REPORTED:
+                _HEARTBEAT_SCHEMA_REPORTED = True
+                logger.error(
+                    "[paper-session] PAPER-04: paper_sessions.last_heartbeat_at cannot be "
+                    "written (%s). This is a DEPLOYMENT defect, not a missed beat: no "
+                    "session can declare liveness, so reconcile_orphaned_sessions can "
+                    "never see an orphan and an abandoned session will sit at RUNNING "
+                    "forever. Apply backend_app/migrations/"
+                    "054_paper04_abandoned_session_state.sql. Reported once per process.",
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+            return
+        logger.debug(
+            "[paper-session] heartbeat not recorded for %s; the next iteration will retry",
+            session_id,
+            exc_info=True,
+        )
+
+
+def list_stale_running_sessions(supabase: Any, *, stale_before: Any) -> List[Dict[str, Any]]:
+    """Every ``RUNNING`` session whose loop has not beaten since ``stale_before``. PAPER-04.
+
+    The reconciliation population, and the predicate is deliberately conservative in one
+    direction: a row is returned only if its heartbeat is OLDER than the cutoff, or absent
+    AND the row itself was started before the cutoff. The second half is what stops a boot
+    that races a just-started session from abandoning it before it has written its first
+    beat, and what stops a session that predates the column from being abandoned purely
+    for having no heartbeat.
+
+    Unscoped by user, deliberately and unlike every other read here: this is the
+    platform's own maintenance pass, not a caller acting on their own data, and a
+    per-tenant version could only run for tenants something had already enumerated --
+    which is the enumeration gap that kept this unbuilt.
+    """
+    require_persistence(supabase)
+    cutoff = _require_text(stale_before, "stale_before")
+
+    beaten = (
+        supabase.table("paper_sessions")
+        .select("id,user_id,session_state,last_heartbeat_at,started_at,symbol")
+        .eq("session_state", "RUNNING")
+        .lt("last_heartbeat_at", cutoff)
+        .execute()
+    )
+    never_beaten = (
+        supabase.table("paper_sessions")
+        .select("id,user_id,session_state,last_heartbeat_at,started_at,symbol")
+        .eq("session_state", "RUNNING")
+        .is_("last_heartbeat_at", "null")
+        .lt("started_at", cutoff)
+        .execute()
+    )
+
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for result in (beaten, never_beaten):
+        for row in (getattr(result, "data", None) or []):
+            key = str(row.get("id"))
+            if key not in seen:
+                seen.add(key)
+                rows.append(dict(row))
+    return rows
+
+
 def transition_session_state(
     supabase: Any,
     *,
@@ -3775,6 +4250,7 @@ def transition_session_state(
     started_at: Any = None,
     paused_at: Any = None,
     stopped_at: Any = None,
+    abandoned_reason: Any = None,
 ) -> Dict[str, Any]:
     """Move one session from ``from_state`` to ``to_state``, guarded on the state it was read at.
 
@@ -3794,7 +4270,19 @@ def transition_session_state(
 
     The three lifecycle timestamps are written only when named, following
     :func:`update_session_feed`: an operation recording ``stopped_at`` must not blank the
-    ``started_at`` the session has carried since it began.
+    ``started_at`` the session has carried since it began. ``abandoned_reason`` follows the
+    same rule.
+
+    WHY ``abandoned_reason`` IS A PARAMETER HERE
+    --------------------------------------------
+    Migration 054 added the column and commented it "set by the boot-time reconciliation
+    pass", and nothing could set it: this was the only write path to ``session_state`` and
+    it had no way to carry a reason, so ``reconcile_orphaned_sessions`` built the sentence
+    and passed it to a log line. The column was inert and the row was left unable to answer
+    the one question 054 created it for -- whether a human stopped this session or its
+    process died. ``STOPPED`` and ``ABANDONED`` are different states, but a reader looking at
+    an ``ABANDONED`` row still could not tell WHY, and "no heartbeat since 14:02" and "the
+    host was redeployed" are different operational events.
 
     Raises:
         PaperConcurrencyConflict: the statement matched no row. Exactly three causes, and they are
@@ -3815,6 +4303,8 @@ def transition_session_state(
         values["paused_at"] = _instant(paused_at, "paused_at")
     if stopped_at is not None:
         values["stopped_at"] = _instant(stopped_at, "stopped_at")
+    if abandoned_reason is not None:
+        values["abandoned_reason"] = _require_text(abandoned_reason, "abandoned_reason")
 
     rows = _execute(
         supabase.table(SESSIONS_TABLE)

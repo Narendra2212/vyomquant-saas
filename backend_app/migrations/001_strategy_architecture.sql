@@ -47,19 +47,72 @@ CREATE TABLE IF NOT EXISTS strategy_versions (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     
     -- Constraints
-    CONSTRAINT unique_strategy_version UNIQUE(strategy_id, version),
-    CONSTRAINT check_single_current_version CHECK (
-        NOT EXISTS (
-            SELECT 1 FROM strategy_versions s2
-            WHERE s2.strategy_id = strategy_versions.strategy_id
-            AND s2.is_current = TRUE
-            AND s2.id != strategy_versions.id
-        )
-    )
+    CONSTRAINT unique_strategy_version UNIQUE(strategy_id, version)
+
+    -- ══════════════════════════════════════════════════════════════════════
+    -- REMOVED: CONSTRAINT check_single_current_version
+    -- ══════════════════════════════════════════════════════════════════════
+    -- It was written as a table CHECK containing a subquery:
+    --
+    --     CONSTRAINT check_single_current_version CHECK (
+    --         NOT EXISTS (
+    --             SELECT 1 FROM strategy_versions s2
+    --             WHERE s2.strategy_id = strategy_versions.strategy_id
+    --               AND s2.is_current = TRUE
+    --               AND s2.id != strategy_versions.id))
+    --
+    -- PostgreSQL HAS NEVER SUPPORTED A SUBQUERY IN A CHECK CONSTRAINT. Every
+    -- version rejects it with:
+    --
+    --     0A000 FeatureNotSupported: cannot use subquery in check constraint
+    --
+    -- So this statement could not execute on any PostgreSQL, which means THIS
+    -- FILE HAS NEVER BEEN APPLIED AS WRITTEN. Discovered while provisioning a
+    -- staging database from source with scripts/provision_database.py: step 1
+    -- aborted on this file, immediately after 020 succeeded.
+    --
+    -- Two consequences worth stating plainly:
+    --
+    --   1. It was the next obstacle to provisioning after the ones
+    --      PROVISIONING_ORDER.md already documents, and it blocked the whole
+    --      numbered set because 001 is the first file in it.
+    --
+    --   2. The invariant it was meant to express -- at most one current version
+    --      per strategy -- was therefore NEVER ENFORCED by the database. The
+    --      `strategy_versions` table exists in production because it was created
+    --      out of band, and whatever created it cannot have included this
+    --      constraint either. Treat the one-current-version property as
+    --      application-enforced only, and reconcile existing rows before relying
+    --      on the index below.
+    --
+    -- THE CORRECT EXPRESSION of "at most one row with is_current = TRUE per
+    -- strategy_id" in PostgreSQL is a PARTIAL UNIQUE INDEX, which is declared
+    -- immediately below. It enforces exactly the same rule, it is checked by the
+    -- same machinery that enforces any unique constraint, and unlike a CHECK it
+    -- is evaluated against other rows -- which is what the original was reaching
+    -- for and what a CHECK fundamentally cannot do.
 );
 
 -- Indexes for strategy_versions
 CREATE INDEX IF NOT EXISTS idx_strategy_versions_strategy_id ON strategy_versions(strategy_id);
+
+-- THE REPLACEMENT FOR check_single_current_version (see the note above).
+--
+-- A partial UNIQUE index on (strategy_id) WHERE is_current -- so a strategy may
+-- have many versions, any number of them not current, and at most ONE current.
+--
+-- NOT `IF NOT EXISTS`-guarded away silently on an existing database: if a
+-- deployment already holds two current versions for one strategy, this index
+-- creation FAILS, and that failure is the correct outcome. It is the first time
+-- anything has checked, and a silent skip would leave the invariant unenforced
+-- while reporting success. Resolve the duplicates, then re-run.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_versions_one_current
+    ON strategy_versions (strategy_id)
+    WHERE is_current = TRUE;
+
+-- Retained: the lookup index. The unique index above also serves this lookup,
+-- but it is kept under its original name so nothing that references it by name
+-- breaks.
 CREATE INDEX IF NOT EXISTS idx_strategy_versions_is_current ON strategy_versions(is_current) WHERE is_current = TRUE;
 CREATE INDEX IF NOT EXISTS idx_strategy_versions_is_draft ON strategy_versions(is_draft) WHERE is_draft = TRUE;
 CREATE INDEX IF NOT EXISTS idx_strategy_versions_created_at ON strategy_versions(created_at DESC);
@@ -79,7 +132,32 @@ CREATE TABLE IF NOT EXISTS strategy_deployments (
     
     -- Deployment configuration
     environment VARCHAR(20) NOT NULL DEFAULT 'paper',  -- paper, live, cloud, local
-    exchange_id UUID REFERENCES exchanges(id),
+
+    -- exchange_id: a PLAIN UUID, deliberately with NO foreign key.
+    --
+    -- This was `exchange_id UUID REFERENCES exchanges(id)`, and there is no
+    -- `exchanges` table. Nothing in this repository creates one -- not the
+    -- numbered SQL set, not `migrations/`, not any Alembic revision (searched
+    -- for `CREATE TABLE ... exchanges` and `op.create_table("exchanges")`; the
+    -- repository has `exchange_keys` and `exchange_connections`, which are
+    -- different tables with different shapes).
+    --
+    -- Nor does it exist in production: `020_declare_pre_existing_tables.sql`
+    -- established, by differencing the declared set against production's
+    -- `pg_tables`, that the tables declared by nothing are EXACTLY
+    -- `profiles`, `strategies`, `processed_orders` and `alembic_version`.
+    -- `exchanges` is not among them, so the constraint this line asks for does
+    -- not exist in production either and removing it introduces no drift.
+    --
+    -- Found by provisioning staging from source: step 1 aborted here with
+    -- `UndefinedTable: relation "exchanges" does not exist`, immediately after
+    -- the subquery-CHECK defect above was fixed.
+    --
+    -- The COLUMN is kept, because application code reads and writes it. What is
+    -- removed is a reference to a table that has never existed anywhere. If an
+    -- `exchanges` table is introduced later, add the constraint in a new
+    -- migration where its referent is guaranteed to precede it.
+    exchange_id UUID,
     exchange_symbol VARCHAR(50),
     
     -- Worker configuration

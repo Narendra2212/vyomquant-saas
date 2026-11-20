@@ -119,9 +119,21 @@ class DistributedRateLimiterIntegration:
             return True
         
         except Exception as e:
-            logger.error(f"STEP 6: Distributed rate limit check failed: {e}")
-            # Fail-safe: allow on error
-            return True
+            # RL-01: a blanket fail-open meant any failure in this layer (not just a
+            # Redis error inside check_rate_limit, which already returns a status
+            # object rather than raising -- this catches wiring/import failures above
+            # it too) silently dropped the limit regardless of what it was protecting.
+            # "orders" is venue-rate-limit-relevant: exceeding it risks the exchange
+            # banning the account, which is worse than refusing an order this check
+            # could not verify. The other operations stay fail-open -- internal,
+            # UI-facing limits where refusing a legitimate request on a transient
+            # failure is the worse outcome.
+            fail_closed = operation == "orders"
+            logger.error(
+                f"STEP 6: Distributed rate limit check failed for {operation}: {e}. "
+                f"{'Failing CLOSED (venue-rate-limit-relevant).' if fail_closed else 'Failing open (cosmetic limit).'}"
+            )
+            return not fail_closed
     
     @staticmethod
     async def acquire_user_quota(

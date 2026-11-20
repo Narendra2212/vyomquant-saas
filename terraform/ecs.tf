@@ -25,7 +25,7 @@ resource "aws_ecs_task_definition" "api" {
   container_definitions = jsonencode([
     {
       name      = "api"
-      image     = "vyomquant-api:latest" # ECR URL goes here
+      image     = local.backend_image
       essential = true
       portMappings = [
         {
@@ -35,7 +35,17 @@ resource "aws_ecs_task_definition" "api" {
         }
       ]
       environment = [
-        { name = "ENV", value = var.environment }
+        { name = "ENV", value = var.environment },
+        # BILL-02: confirmed via real AWS access (CloudFront distribution EEOXECPHQ8SR0 has
+        # an ALB origin with /api/*, /ws/*, /health*, /metrics*, /openapi.json cache behaviors
+        # forwarding to this service) that production sits behind CloudFront + this ALB, two
+        # appending proxies -- and confirmed the real running task definition (vyomquant-api:214)
+        # already carries TRUSTED_PROXY_HOPS=2, not the code's own fail-safe default of 1.
+        # Declared here so a future terraform-driven redeploy of this task definition cannot
+        # silently drop back to the default and start misattributing/rejecting every genuine
+        # Razorpay webhook. See backend_app/routers/billing.py's own
+        # _TRUSTED_PROXY_HOPS_DEFAULT comment and this finding's ledger entry for the evidence.
+        { name = "TRUSTED_PROXY_HOPS", value = "2" }
       ]
       secrets = [
         {
@@ -110,51 +120,22 @@ resource "aws_ecs_service" "api" {
   depends_on = [aws_lb_listener.http]
 }
 
-# TEE Task
-resource "aws_ecs_task_definition" "tee" {
-  family                   = "vyomquant-tee-${var.environment}"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = 1024
-  memory                   = 2048
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
-
-  container_definitions = jsonencode([
-    {
-      name      = "tee"
-      image     = "vyomquant-tee:latest"
-      essential = true
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "tee"
-        }
-      }
-    }
-  ])
-}
-
-resource "aws_ecs_service" "tee" {
-  name            = "vyomquant-tee-service-${var.environment}"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.tee.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = aws_subnet.private[*].id
-    assign_public_ip = false
-  }
-
-  deployment_circuit_breaker {
-    enable   = true
-    rollback = true
-  }
-}
+# RT-23: the TEE task definition and service that used to live here are deleted, not
+# just left undeployed. backend_app/tee/main.py crashed on import
+# (`from backend_app.core.fleet_manager import get_fleet_manager` -- that module and
+# symbol never existed) and real AWS evidence (gathered the same session as this
+# deletion) confirmed zero ECS services for it had ever actually been created --
+# nothing in production referenced these two resources. command_worker.py already
+# consumes the same COMMAND_STREAM='command_queue' start_bot/stop_bot surface this was
+# meant to cover, and is itself deployed and tested; repairing tee/main.py's import
+# without also giving it a genuinely separate queue would have made both processes
+# consume the same command, a live double-execution hazard against real exchange
+# accounts (documented, not hypothetical: see tests/test_ml_node_detection_is_one_
+# vocabulary.py::TestTheTeeGateIsUnreachable and this finding's own ledger entry,
+# RT-23, for the full investigation). If a genuinely separate execution lane is wanted
+# later, it needs its own queue/consumer-group and the same safety wiring RT-15/16/21
+# already gave the rest of live execution -- a deliberate design decision, not a
+# one-line repair, so it is not reconstructed here.
 
 # Auto Scaling for API Service
 resource "aws_appautoscaling_target" "api_target" {
@@ -194,8 +175,11 @@ resource "aws_ecs_task_definition" "mds" {
 
   container_definitions = jsonencode([
     {
-      name      = "mds"
-      image     = "vyomquant-mds:latest" # ECR URL goes here
+      name = "mds"
+      # NOT a `vyomquant-mds` image, despite that repository existing. The live
+      # vyomquant-mds:5 task definition references .../vyomquant-api, so the MDS runs the
+      # backend image with a different command -- measured, not assumed.
+      image     = local.backend_image
       essential = true
       portMappings = [
         {
@@ -268,99 +252,9 @@ resource "aws_ecs_service" "mds" {
   }
 }
 
-# WebSocket Task
-resource "aws_ecs_task_definition" "websocket" {
-  family                   = "vyomquant-websocket-${var.environment}"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = 512
-  memory                   = 1024
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
-
-  container_definitions = jsonencode([
-    {
-      name      = "websocket"
-      image     = "vyomquant-websocket:latest" # ECR URL goes here
-      essential = true
-      portMappings = [
-        {
-          containerPort = 8002
-          hostPort      = 8002
-          protocol      = "tcp"
-        }
-      ]
-      environment = [
-        { name = "ENV", value = var.environment }
-      ]
-      secrets = [
-        {
-          name      = "DATABASE_URL"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/database_url"
-        },
-        {
-          name      = "SUPABASE_SERVICE_ROLE_KEY"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_service_role_key"
-        },
-        {
-          name      = "SUPABASE_ANON_KEY"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_anon_key"
-        },
-        {
-          name      = "SUPABASE_JWT_SECRET"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_jwt_secret"
-        },
-        {
-          name      = "MASTER_ENCRYPTION_KEYS"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/master_encryption_keys"
-        },
-        {
-          name      = "CREDENTIAL_VAULT_SALT"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/credential_vault_salt"
-        },
-        {
-          name      = "JWT_SECRET"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/jwt_secret"
-        }
-      ]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "websocket"
-        }
-      }
-    }
-  ])
-}
-
-resource "aws_ecs_service" "websocket" {
-  name            = "vyomquant-websocket-service-${var.environment}"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.websocket.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = aws_subnet.private[*].id
-    assign_public_ip = false
-  }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.websocket.arn
-    container_name   = "websocket"
-    container_port   = 8002
-  }
-
-  deployment_circuit_breaker {
-    enable   = true
-    rollback = true
-  }
-
-  depends_on = [aws_lb_listener.http]
-}
+# WS-01: the dedicated websocket task definition/service are removed along with ws_server.py
+# itself (deleted this remediation effort) and alb.tf's matching target group/listener rule --
+# see the comment there for the real-AWS evidence that none of this ever had live traffic.
 
 # Simulator Task (Staging/Paper Trading Only)
 resource "aws_ecs_task_definition" "simulator" {
@@ -374,8 +268,11 @@ resource "aws_ecs_task_definition" "simulator" {
 
   container_definitions = jsonencode([
     {
-      name      = "simulator"
-      image     = "vyomquant-simulator:latest" # ECR URL goes here
+      name = "simulator"
+      # Well-formed but currently unresolvable: no vyomquant-simulator ECR repository
+      # exists and no simulator task definition is ACTIVE. See
+      # var.simulator_image_repository.
+      image     = local.simulator_image
       essential = true
       portMappings = [
         {
@@ -458,6 +355,41 @@ locals {
     backtest = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.worker"] }
     dag      = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.backend.dag_worker"] }
     command  = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.command_worker"] }
+    # INF-03 / marketplace Requirement 11.8: the subscription expiry sweep (30s). It was built
+    # and tested but had no deployment entry, so paid marketplace access never ended.
+    marketplace_expiry = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
+    # OPS-TRAIN-01: backend_app.backend.training_worker.TrainingWorker claims QUEUED rows
+    # via the atomic `SET status='RUNNING' ... WHERE status='QUEUED'` transition described
+    # in that module's own docstring and runs them -- but nothing has ever run this process
+    # in production, so every training job a user submits stays QUEUED forever. The
+    # module's own run_worker() docstring says it is "meant to be deployed as a separate
+    # process", never wired into main.py's startup, specifically so a fitting job can never
+    # share the API process's interpreter, saturate its Redis connection, or block
+    # order/execution request handling (Requirement 16.6, TrainingIsolator's own docstring).
+    # Sized well above the other workers: core/ml_safety.py's MemoryMonitor and
+    # backend/ml_training_policy.py's own resource tiers cap an individual training run at
+    # up to 4096 MB (CAP_MAX_MEMORY / the `max_memory_mb=4_096` tier) -- 512 MB (every other
+    # worker here) would not even fit one job at its own documented ceiling, let alone the
+    # interpreter plus torch/tensorflow/catboost/scikit-learn already loaded. 2 vCPU / 8192
+    # MB leaves roughly 2x headroom over that 4 GB per-job cap for everything else resident
+    # in the process.
+    training = { cpu = 2048, memory = 8192, command = ["python", "-m", "backend_app.backend.training_worker"] }
+    # RT-16: the host for the private venue fill stream. The three links it starts
+    # (ExchangeWebSocketListener -> EventListener -> EventRouter) each existed and none had
+    # a caller, so a fill was only ever discovered by the watchdog's poll.
+    #
+    # IT MUST NOT LIVE IN THE WEB PROCESS, which is why it is a worker at all: gunicorn
+    # runs --workers ${WORKERS:-2} and every worker runs the lifespan hook, so a stream
+    # started there opens two authenticated private sockets per (tenant, venue) and gives
+    # every fill two writers. The worker takes a Redis leader lease
+    # (core/leader_lease.try_acquire_or_renew) so even multiple TASKS of this service
+    # elect one streamer, and it closes its sockets the moment it loses the lease.
+    #
+    # Sized above the 256/512 light workers and below mds's 1024/3072. It holds one
+    # authenticated websocket per live (tenant, venue) pair plus an unbounded
+    # asyncio.PriorityQueue of in-flight events -- more resident state than a queue-polling
+    # worker, far less than mds, which holds candle state for every subscribed symbol.
+    exchange_fills = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.workers.exchange_fill_worker"] }
   }
 }
 
@@ -474,8 +406,10 @@ resource "aws_ecs_task_definition" "workers" {
 
   container_definitions = jsonencode([
     {
-      name      = "worker-${each.key}"
-      image     = "vyomquant-api:latest" # Workers use the backend image
+      name = "worker-${each.key}"
+      # Workers use the backend image, differing only by command. The live worker task
+      # definitions all reference .../vyomquant-api at the same commit SHA as the API.
+      image     = local.backend_image
       essential = true
       command   = each.value.command
       environment = [
@@ -542,4 +476,32 @@ resource "aws_ecs_service" "workers" {
     enable   = true
     rollback = true
   }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# INF-02: the registry is DERIVED, not written down.
+#
+# Hardcoding "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com" would pin the account id
+# into the configuration, which is both a disclosure and a thing that silently breaks in
+# any other account. `data.aws_caller_identity.current` is already declared in iam.tf and
+# var.aws_region already exists, so the registry host composes from facts the provider
+# supplies.
+# ─────────────────────────────────────────────────────────────────────────────────
+locals {
+  ecr_registry = join("", [
+    data.aws_caller_identity.current.account_id,
+    ".dkr.ecr.", var.aws_region, ".amazonaws.com",
+  ])
+
+  #: The one image that serves the API, the MDS and every worker. See the note on
+  #: var.backend_image_repository for the measurement behind "one image".
+  backend_image = join("", [
+    local.ecr_registry, "/", var.backend_image_repository, ":", var.image_tag,
+  ])
+
+  #: Well-formed, and currently unresolvable -- no such ECR repository exists. See the
+  #: note on var.simulator_image_repository.
+  simulator_image = join("", [
+    local.ecr_registry, "/", var.simulator_image_repository, ":", var.image_tag,
+  ])
 }

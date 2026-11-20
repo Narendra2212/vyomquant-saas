@@ -42,17 +42,20 @@ class TestWalkForwardEndpointAccuracy:
         
         mock_optimization_engine = MagicMock()
         mock_optimization_engine.run_walk_forward_analysis = AsyncMock(return_value=[mock_walk_forward_result])
-        
+
         mock_backtest_runtime = MagicMock()
         mock_binance = MagicMock()
         mock_binance.return_value.fetch_ohlcv = AsyncMock(return_value=[[1700000000000 + i*60000, 50000, 51000, 49000, 50500, 100] for i in range(100)])
-        
-        # Mock the get_optimization_engine and get_backtest_runtime functions
-        with patch('backend_app.routers.strategies.get_optimization_engine', return_value=mock_optimization_engine), \
-             patch('backend_app.backend.optimization_engine.get_optimization_engine', return_value=mock_optimization_engine), \
-             patch('backend_app.routers.strategies.get_backtest_runtime', return_value=mock_backtest_runtime), \
+
+        # OPT-03: the endpoint now constructs OptimizationEngine()/BacktestRuntime(...)
+        # directly (a fresh instance per request, not the shared process-wide
+        # get_optimization_engine()/get_backtest_runtime() singletons -- see
+        # strategies.py's own comment at the walk-forward call site), so the mocks are
+        # injected by patching the CLASS constructors themselves.
+        with patch('backend_app.routers.strategies.OptimizationEngine', return_value=mock_optimization_engine), \
+             patch('backend_app.routers.strategies.BacktestRuntime', return_value=mock_backtest_runtime), \
              patch('backend_app.routers.strategies.ccxt.binance', mock_binance):
-            
+
             # Test payload with proper DAG configuration
             payload = {
                 "dag": {
@@ -115,14 +118,15 @@ class TestWalkForwardEndpointAccuracy:
         
         mock_optimization_engine = MagicMock()
         mock_optimization_engine.run_walk_forward_analysis = AsyncMock(return_value=mock_results)
-        
+
         mock_backtest_runtime = MagicMock()
         mock_binance = MagicMock()
         mock_binance.return_value.fetch_ohlcv = AsyncMock(return_value=[[1700000000000 + i*60000, 50000, 51000, 49000, 50500, 100] for i in range(100)])
-        
-        with patch('backend_app.routers.strategies.get_optimization_engine', return_value=mock_optimization_engine), \
-             patch('backend_app.backend.optimization_engine.get_optimization_engine', return_value=mock_optimization_engine), \
-             patch('backend_app.routers.strategies.get_backtest_runtime', return_value=mock_backtest_runtime), \
+
+        # OPT-03: see the identical comment in test_walk_forward_genuine_implementation
+        # above -- patched at the class constructors the endpoint now calls directly.
+        with patch('backend_app.routers.strategies.OptimizationEngine', return_value=mock_optimization_engine), \
+             patch('backend_app.routers.strategies.BacktestRuntime', return_value=mock_backtest_runtime), \
              patch('backend_app.routers.strategies.ccxt.binance', mock_binance):
             
             payload = {

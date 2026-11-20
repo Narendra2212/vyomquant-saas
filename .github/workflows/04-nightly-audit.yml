@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -57,7 +57,7 @@ jobs:
         continue-on-error: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -87,9 +87,104 @@ jobs:
 
       - name: Upload Audit Artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-audit-reports
           path: |
             *.md
             reports/
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  #  SEC-01: watch git history for a recoverable live credential.
+  #
+  #  SEC-01's own closing note names this as the remaining control: "The defect class
+  #  was never one careless file; it was that nothing watched for this." Rotation fixed
+  #  the three credentials that had leaked; this is what notices the fourth.
+  #
+  #  WHY IT IS A SEPARATE JOB AND NOT A STEP IN THE ONE ABOVE. Three reasons, each of
+  #  which would silently defeat it as a step:
+  #
+  #   1. FULL HISTORY. `audit_secrets_in_git_history.py` greps every commit. The audit
+  #      job above checks out at the default depth of 1, so the sweep would scan a
+  #      single commit, find nothing, and report clean -- the worst possible failure
+  #      mode for this particular check. `fetch-depth: 0` is load-bearing here.
+  #   2. IT MUST FAIL LOUDLY. Every step in the job above carries
+  #      `continue-on-error: true`, which is right for a dependency or size report and
+  #      wrong for "a live production credential is readable from git". This job has no
+  #      such escape: the script exits non-zero when it finds one, and that fails the
+  #      run.
+  #   3. AWS CREDENTIALS. The sweep is only meaningful because it compares history
+  #      against the CURRENT value of every secret in Secrets Manager; a static scanner
+  #      cannot do that. CI's Trivy secret scan catches a secret-SHAPED string, which is
+  #      a different and complementary question.
+  #
+  #  SCOPE, STATED HONESTLY: this compares against secrets that exist in Secrets Manager
+  #  at the time it runs, so a credential that leaked and was then deleted from AWS is
+  #  invisible to it. That gap is recorded in SEC-01 rather than papered over.
+  # ───────────────────────────────────────────────────────────────────────────────
+  secret-history-sweep:
+    name: Secret History Sweep (git history vs live Secrets Manager)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # CI-02: declared on THIS job rather than on the workflow, because the other job
+    # (nightly-audit) touches no AWS at all -- every one of its checks is local -- and a
+    # workflow-level `id-token: write` would hand it a credential-minting scope it has no
+    # use for. `contents: read` is named because declaring the block replaces the default.
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      AWS_REGION: ap-southeast-1
+
+    steps:
+      - name: Checkout code with FULL history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Load-bearing: the sweep scans every commit. See the comment above.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Confirm the checkout is not shallow
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" != "false" ]; then
+            echo "::error::The checkout is shallow, so the sweep would scan one commit"
+            echo "and report clean. Refusing to run a check that cannot fail."
+            exit 1
+          fi
+          echo "full history: $(git rev-list --count HEAD) commits"
+
+      # CI-02: short-lived OIDC credentials, and a DIFFERENT role from the deploy one.
+      #
+      # This job runs the secret-history sweep, which needs Secrets Manager reads and two
+      # ECS describes -- all read-only. It uses the audit role rather than the deploy role
+      # because the audit role is also trusted for `pull_request` (08-secret-history-audit
+      # runs on PRs and needs the same credential), and a PR-trusted principal must not be
+      # able to push an image or call ecs:UpdateService. Verified by negative simulation:
+      # against this role, ecs:UpdateService, ecr:PutImage, s3:PutObject and iam:PassRole
+      # all come back implicitDeny.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsAudit-production
+          role-session-name: GitHubActions-04-secret-sweep
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sweep git history against every live secret
+        # Deliberately NOT continue-on-error. A recoverable live credential is an
+        # incident, not a report.
+        run: python scripts/audit_secrets_in_git_history.py
+
+      - name: Upload the sweep report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: secret-history-sweep
+          path: |
+            reports/
+          if-no-files-found: ignore

@@ -1313,6 +1313,11 @@ class TestWaitlistInsertPathTracksTheForm:
 SQL_UNDECLARED_PRESENT_IN_PRODUCTION = {
     "execution_records": "pre-migration base table, 198 rows; 006 only ALTERs it",
     "library_strategies": "present (0 rows); declared only by Alembic e88f9911b5a2",
+    "positions": (
+        "present (0 rows); declared only by Alembic d97ffff9c3bb / b2c3d4e5f6a7. "
+        "067 reshapes it for databases where b2c3d4e5f6a7 never ran, behind a "
+        "to_regclass guard"
+    ),
 }
 
 #: Relations that SQL DML reads, that NO migration declares, and that are
@@ -2408,6 +2413,35 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
             "review_text", "updated_at", "user_id",
         }
     ),
+    #: ``execution_records`` ENTERED THIS ROSTER AT MKT-07, for the same reason
+    #: ``library_strategies`` is on it: declared only by Alembic (revision
+    #: ``d97ffff9c3bb``, which is the revision production is pinned at), and the
+    #: numbered migration set only ever ALTERs it (015, 020, 026, 030), so there
+    #: is no parsed CREATE TABLE for a read to be checked against.
+    #:
+    #: It had no cover until now because nothing read it column by column — the
+    #: live-history read in ``routers/orders.py`` is raw SQL, which this section
+    #: does not parse. The Eligibility_Gate's fifth read (``MP_LIVE_HISTORY``) is
+    #: a PostgREST projection, so from MKT-07 onward nine of these names are read
+    #: by name and need an oracle.
+    #:
+    #: MEASURED, not transcribed from the repository: read-only against
+    #: production, PostgreSQL 17.6,
+    #: ``SELECT column_name FROM information_schema.columns WHERE
+    #: table_schema='public' AND table_name='execution_records'``. 23 columns,
+    #: agreeing exactly with ``staging/provisioning_snapshot.json``. Note what is
+    #: NOT here: no ``is_simulated`` and no ``environment`` column, which is why
+    #: the gate's live discriminator is ``exchange_id IS NOT NULL`` rather than a
+    #: flag.
+    "execution_records": frozenset(  # 23 columns; declared only by Alembic
+        {
+            "avg_price", "created_at", "exchange_id", "exchange_status",
+            "execution_id", "filled_at", "filled_size", "last_exchange_sync",
+            "order_id", "price", "remaining_size", "result", "side", "size",
+            "status", "strategy_id", "submitted_at", "symbol", "task_id",
+            "tenant_id", "updated_at", "user_id", "venue_order_id",
+        }
+    ),
 }
 
 #: A REGISTER OF OPEN DEFECTS, not an allowlist. Every entry was proven to
@@ -2417,13 +2451,10 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
 #: can fail on a NEW one; the count may SHRINK and may never grow.
 #:
 #: The value is (owning module, why it is not fixed here). Each reason is a
-#: statement about WHO decides, not an excuse. All ten remaining entries are now
-#: the SAME reason: the ``billing_invoices`` and ``profiles`` billing columns sit
-#: in the parallel pricing/entitlements workstream's files. ``routers/billing.py``
-#: carries their uncommitted changes; editing it here would collide.
+#: statement about WHO decides, not an excuse.
 #:
-#: THE REGISTER HAS GONE 24 -> 23 -> 10 ACROSS THREE TASKS, and every step was a
-#: read becoming correct rather than an exemption widening:
+#: THE REGISTER IS NOW EMPTY — 24 -> 23 -> 10 -> 5 -> 0 ACROSS FIVE TASKS, and
+#: every step was a read becoming correct rather than an exemption widening:
 #:
 #: * ``strategies.tenant_id`` was the 24th entry. FIXED in task 13.18: the
 #:   marketplace eligibility gate reads the tenant off ``user_id``, which is what
@@ -2446,24 +2477,63 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
 #:   at all, and ``POST /{signal_id}/replay`` was the one capability with no
 #:   equivalent, so it survived and now reads ``signals`` only. See
 #:   :data:`FIXED_SIGNAL_TRACE_SUPERSESSION`.
-KNOWN_UNDECLARED_COLUMN_DEFECTS = {
-    "billing_invoices.amount_inr": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.amount_usd": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.plan": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.provider": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.provider_payment_id": (
-        "routers/billing.py", "parallel workstream",
-    ),
-    "profiles.cancel_at_period_end": ("routers/billing.py", "parallel workstream"),
-    "profiles.next_billing_date": ("core/billing_lifecycle.py", "parallel workstream"),
-    "profiles.pending_downgrade_tier": (
-        "core/billing_lifecycle.py", "parallel workstream",
-    ),
-    "profiles.subscription_status": (
-        "core/billing_lifecycle.py", "parallel workstream",
-    ),
-    "profiles.trial_end_date": ("core/billing_lifecycle.py", "parallel workstream"),
-}
+#: * the five ``billing_invoices`` provider columns were the last. FIXED by
+#:   ``backend_app/migrations/070_bill07_billing_invoices_provider_columns.sql``,
+#:   which DECLARES them -- the opposite resolution to ``profiles.volume_usd``,
+#:   and for the opposite reason. There, nothing computed the figure, so
+#:   declaring a column would have fabricated it. Here the figures are real and
+#:   already in hand: the provider, its payment id, the exact captured amount and
+#:   the plan it bought all arrive on the webhook payload and were being written
+#:   on every capture. The column was the only thing missing, so declaring it
+#:   records a fact rather than inventing one.
+# BILL-01/BILL-05: profiles.cancel_at_period_end / next_billing_date / subscription_status /
+# trial_end_date are now declared by migration 037 and removed from this (shrink-only) register.
+# BILL-07: THE REGISTER IS NOW EMPTY. 24 -> 23 -> 10 -> 5 -> 0.
+#
+# The last five entries were the `billing_invoices` provider columns --
+# `amount_inr`, `amount_usd`, `plan`, `provider`, `provider_payment_id`. Their
+# stated reason was never that the defect was acceptable; it was that
+# `routers/billing.py` carried a parallel pricing workstream's uncommitted
+# changes and editing it would collide. That workstream landed in PR #285, so
+# the reason expired and the entries went with it.
+#
+# They are gone because the defect is FIXED, which is the only way this register
+# is allowed to shrink. `backend_app/migrations/070_bill07_billing_invoices_
+# provider_columns.sql` declares all five, so `_allowed_columns('billing_invoices')`
+# now contains them and `test_every_known_defect_is_still_a_defect` would refuse
+# the entries as stale if they were left behind.
+#
+# What the five were hiding, since "undeclared column" understates it: PostgREST
+# rejects a whole statement on an undefined column, and the writer sat inside
+# `try/except ... logger.warning`, so NO INVOICE ROW HAD EVER BEEN WRITTEN --
+# production held zero. The same three names are also the filter
+# `_revoke_plan_for_refunded_razorpay_payment` uses, and that read is NOT
+# wrapped, so a full refund raised instead of revoking the plan.
+#
+# An empty register is the goal state, not a reason to delete the guard. Every
+# test below still runs against it: the point is that a NEW undeclared column
+# now has nowhere to hide, and re-adding an entry for a column that has since
+# been declared is refused by name at lines 4130 and 4192.
+KNOWN_UNDECLARED_COLUMN_DEFECTS: dict = {}
+
+# RAZORPAY-ONLY: profiles.pending_downgrade_tier is removed from the register above because
+# the defect is GONE, not because it became inconvenient. This register may only shrink, and
+# this is a shrink.
+#
+# The column was written by BillingLifecycle.downgrade_subscription and, as that method's own
+# removal note records, read by NOTHING anywhere -- so a "scheduled downgrade" would never
+# have executed. The method had no production caller at all and was deleted with the nine
+# other uncalled lifecycle methods during the Stripe removal, which removed the last
+# reference to the column and so removed the undeclared-column defect with it.
+#
+# This test is what noticed: it refused with "KNOWN_UNDECLARED_COLUMN_DEFECTS has gone stale:
+# profiles.pending_downgrade_tier is no longer referenced at all". That refusal is the
+# register working as designed, and it is also how the orphaned call sites in
+# scripts/attack_internal_billing_full.py were found -- not by the scripts sweep I had
+# already run, which only looked for deleted names from routers/billing.py.
+#
+# The product has no scheduled downgrade. A plan change takes effect when the new plan is
+# paid for; see tests/test_billing_lifecycle_surface.py.
 
 #: The column reference `routers/library.py` used to carry and no longer does:
 #: `_enrich_cards_with_user_context` read `library_strategies` filtered on
@@ -2541,7 +2611,132 @@ RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS = frozenset(
 #: while every assertion still passes, so the count may shrink and may never
 #: grow. 52 of these sit in the parallel workstream's files, so a small rise
 #: there is expected to be explained rather than absorbed.
-MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 182
+#:
+#: Raised 182 -> 184, deliberately, not to go green: PRIV-01 added
+#: backend_app/backend/account_lifecycle.py's account-data-export loop, which
+#: reads an arbitrary, caller-agnostic set of tables named by
+#: ``_DIRECT_EXPORT_TABLES`` (a module-level literal tuple) through a single
+#: shared ``for table, column in _DIRECT_EXPORT_TABLES: supabase.table(table)...``
+#: body -- the table name is a loop variable, never a literal, by the design
+#: the DRY export loop depends on; unrolling it into one static call per table
+#: would duplicate the same try/except block once per entry and make every
+#: future addition to that tuple require a matching code change here instead
+#: of just a new tuple entry. Of the 3 new sites PRIV-01 introduced, 1 (a
+#: literal-dict UPDATE payload that happened to be built in a local variable
+#: first) WAS made resolvable by inlining it; these 2 (the loop's own
+#: ``.select``/``.eq`` calls) are the genuine, bounded exception.
+#:
+#: Raised 184 -> 185 for RT-24's two new sites, then LOWERED 185 -> 183 by
+#: removing them. Both halves are kept here because the reasoning is the useful
+#: part.
+#:
+#: RT-24 (``2b00ec14``) added two unresolvable sites, measured by diffing the skip
+#: sets across the commit rather than inferred:
+#:
+#:     + backend_app/routers/library.py .update :: payload is not a literal dict
+#:     + backend_app/routers/library.py .update :: payload is not a literal dict
+#:
+#: Both were ``_patch_deployment_status``, the single helper that moves a
+#: ``strategy_deployments`` row out of ``'deploying'``. It took the payload as a
+#: PARAMETER, so no ``.update()`` inside it could ever be a literal.
+#:
+#: The pin was raised with the argument that inlining -- what fixed PRIV-01's
+#: third site -- would duplicate the helper's PGRST204 retry-and-log fallback at
+#: each caller, and that the whole point of the helper is that a missing optional
+#: column must not turn an ALREADY-RUNNING bot into a 500. That objection is
+#: correct about inlining AT THE CALLERS, and it is not the only way out: the
+#: helper now takes keyword arguments and writes each column set out at its own
+#: ``.update()`` call. The helper survives, the single retry-and-log fallback
+#: survives, every caller still calls one function -- and all three writes are
+#: literal, so this parser resolves them.
+#:
+#: That is why the pin comes DOWN rather than staying raised, which is what this
+#: counter's own failure message asks for ("make the new sites resolvable - a
+#: literal table name and a literal projection are all it takes"). 185 -> 183:
+#: the two sites are gone and the tree is now one BELOW where it sat before RT-24
+#: (183 at ``2b00ec14^`` against a pin of 184, so the slack is preserved).
+#:
+#: The win is not cosmetic. ``resolved`` rose 1085 -> 1089 at the same time: this
+#: guard now CHECKS the four columns that helper writes -- ``status``,
+#: ``updated_at``, ``started_at`` and ``error_message`` -- against the declared
+#: schema, where before it could only be told in a comment that they were fine.
+#:
+#: Raised 183 -> 189, measured by diffing the skip sets against ``2b00ec14``
+#: (the commit this file's own history above already uses as its reference
+#: point) rather than inferred. Two genuinely new sites are SEC-24's:
+#:
+#:     + backend_app/backend/mfa_backup_codes.py .insert :: payload is not a literal dict
+#:     + backend_app/backend/mfa_backup_codes.py .upsert :: payload is not a literal dict
+#:
+#: Both build their row from values resolved at call time (a generated code
+#: batch; an upsert-on-conflict row), so neither payload is a literal dict --
+#: the same shape as every other ``.insert``/``.upsert`` already pinned here.
+#:
+#: Six more are RISK-05's, all in ``paper_trading_service.py``, and all a
+#: different shape: ``body.update(self._paper_provenance(...))``,
+#: ``summary.update(...)`` and ``merged.update(supplied)`` in
+#: ``_account_body``/``_position_body``/``_order_body``/``_trade_body`` and the
+#: valuation helper. These are **not** database calls at all -- ``body``,
+#: ``summary`` and ``merged`` are plain local ``dict`` objects being assembled
+#: for an HTTP response, not a Supabase chain, so there is no table or column
+#: for this guard to check here even in principle. They were not flagged at
+#: ``2b00ec14`` because RISK-05's two new methods (``get_consecutive_loss_count``,
+#: ``get_capital_utilization_pct``) land between some of these helpers in the
+#: file, which is enough to move the parser's per-function boundary detection
+#: onto a different, equally-unresolvable read of the same dict-building code --
+#: not a regression in what these lines do, only in how many of them this
+#: parser's blind spot already counted as its own.
+#:
+#: The remaining four sites the raw diff shows (two in ``library.py``, two in
+#: ``billing_lifecycle.py``) are unrelated refactors already on this branch
+#: that each REMOVED one unresolvable site; they are why the net change across
+#: the eight real additions above is +6 rather than +8.
+#:
+#: Raised 189 -> 190 for RISK-06/07, measured by diffing the skip sets across
+#: ``7eb00b96^ -> 7ef19d9f`` rather than inferred. The RAW diff shows three
+#: additions and two removals, and the removals are what make it +1 rather than
+#: +3 -- so the raw number would have overstated the change threefold:
+#:
+#:     + backend_app/routers/risk.py:325 .upsert :: payload is not a literal dict
+#:     + backend_app/routers/risk.py:402 .update :: chain starts at the variable 'settings'
+#:     + backend_app/routers/risk.py:633 .upsert :: payload is not a literal dict
+#:     - backend_app/routers/risk.py:282 .update :: chain starts at the variable 'settings'
+#:     - backend_app/routers/risk.py:473 .upsert :: payload is not a literal dict
+#:
+#: TWO OF THE THREE "NEW" SITES ARE THE OLD TWO, RELOCATED. ``risk.py`` grew by
+#: 253 lines in that change, so ``:282 -> :402`` (the same ``settings.update({…})``)
+#: and ``:473 -> :633`` (the same ``risk_settings`` upsert) are the identical
+#: statements at new line numbers -- same file, same verb, same skip reason, and
+#: one appears in the removals for every one that appears in the additions.
+#:
+#: SO THERE IS EXACTLY ONE GENUINELY NEW SITE: ``risk.py:325``, RISK-07's
+#: ``strategy_limits`` upsert. It is irreducible, which is the only reason the pin
+#: moves instead of the code:
+#:
+#:     async def _persist_strategy_limits(user, uid, rows: list[dict]) -> bool:
+#:         ...
+#:         sb.table("strategy_limits").upsert(rows, on_conflict="user_id,strategy_id")
+#:
+#: ``rows`` is a PARAMETER holding a MULTI-ROW batch. The fix this counter's own
+#: message asks for first -- "a literal table name and a literal projection are
+#: all it takes" -- gets half of what it needs here: the table name IS a literal.
+#: The payload cannot be, because there is no single row to write out; one dict
+#: per strategy arrives from the caller. The alternative shape, a literal upsert
+#: per row inside a loop, would turn one round trip into N to satisfy a test,
+#: which is a worse program. Same shape as every other ``.insert``/``.upsert``
+#: already pinned above (SEC-24's two, library.py's two).
+#:
+#: ``:402`` is additionally not a database call at all -- ``settings`` is a plain
+#: local ``dict`` being merged, the same category as RISK-05's six
+#: ``body.update(...)``/``summary.update(...)`` sites recorded above. It is
+#: counted because the parser attributes any ``.update(`` it cannot trace to a
+#: ``.table()``, and that is the safe direction for it to fail in.
+#:
+#: Not raised to go green: the tree sat at exactly 189 against a pin of 189
+#: before this change (``f6777ebe``), so there was no slack to absorb it, and
+#: ``resolved`` held at 1134 across the diff -- the parser did not stop matching,
+#: it met one more thing it cannot match.
+MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 190
 
 #: Call sites that DID resolve, as observed. The other half of the ratchet: a
 #: parser that stops matching would otherwise satisfy every assertion above.
@@ -4163,13 +4358,8 @@ class TestEveryReferencedColumnIsDeclared:
             "removes a capability rather than a duplicate."
         )
 
-        # 3. The premise, against the retired production measurement rather
-        #    than against a live oracle. The table has no entry in
-        #    PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES any more BECAUSE nothing
-        #    reads it - that roster may only carry tables code actually reads,
-        #    and `test_the_recorded_production_column_sets_are_still_what_they
-        #    _claim` enforces it. So the 22 real columns are retired to a
-        #    constant, and the twelve must not be among them.
+        # 3. The premise, against the retired production measurement. The
+        #    twelve names must not be among the columns the table really has.
         measured = RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS
         present = {c for c in absent_columns if c in measured}
         assert not present, (
@@ -4182,11 +4372,45 @@ class TestEveryReferencedColumnIsDeclared:
             "They are what made the 42703 a measurement rather than 'the "
             "whole table was absent'."
         )
-        assert _allowed_columns(table) is None, (
-            f"{table} has a live column oracle again, which means something "
-            "reads it. Put its 22 columns back into "
-            "PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES alongside that read - "
-            "this constant is the retired copy, not the oracle."
+
+        # 4. A read of this table HAS come back - MKT-07's Eligibility_Gate
+        #    criterion MP_LIVE_HISTORY - so the roster entry came back with it,
+        #    which is what the retired constant's own note asks for. This
+        #    assertion was previously `_allowed_columns(table) is None`; the
+        #    inverse is now the stronger statement, because it checks the live
+        #    oracle against an INDEPENDENT measurement rather than merely
+        #    noting that no oracle exists.
+        oracle = _allowed_columns(table)
+        assert oracle is not None, (
+            f"{table} has no column oracle, but the Eligibility_Gate's fifth "
+            "read projects nine of its columns by name. Restore its entry in "
+            "PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES."
+        )
+        assert measured <= oracle, (
+            f"the live oracle for {table} is missing "
+            f"{sorted(measured - oracle)}, which task 13.17 measured against "
+            "production. A column does not leave a table silently - find the "
+            "migration that dropped it, or re-measure."
+        )
+        # The one permitted difference, and it is named rather than tolerated
+        # as slack: `venue_order_id` was added by
+        # `backend_app/migrations/030_execution_venue_order_id.sql`, after the
+        # 13.17/13.19 measurements. `is_sandbox` was added by
+        # `backend_app/migrations/079_exec_env01_execution_records_is_sandbox.sql`
+        # (EXEC-ENV-01): testnet fills must never count as live history. Any OTHER
+        # addition means the two measurements disagree for an unexplained reason.
+        named = {"venue_order_id", "is_sandbox"}
+        assert oracle - measured <= named and "venue_order_id" in oracle, (
+            f"the live oracle for {table} carries "
+            f"{sorted(oracle - measured - named)} beyond the "
+            "retired measurement with no migration named for them. Name the "
+            "migration here or remove the column from the roster."
+        )
+        offending = {c for c in absent_columns if c in oracle}
+        assert not offending, (
+            f"{sorted(offending)} are in the live oracle for {table}. "
+            "Production answers 42703 for every one of them, so the roster "
+            "entry was not measured - re-measure it."
         )
         for column in absent_columns:
             assert (
@@ -4288,21 +4512,27 @@ DIVERGENT_COLUMN_TYPES = {
         ("numeric(15,2)", "numeric(20,8)"),
         "numeric(15,2)",
     ),
+    # 064 widens this to numeric(14,4) on purpose (BT-04) - an explicit ALTER COLUMN ... TYPE, applied
+    # to production - so production now carries 14,4 and the set has one more spelling.
     "strategy_backtests.profit_factor": (
-        ("numeric(10,4)", "numeric(8,4)"),
-        "numeric(8,4)",
+        ("numeric(10,4)", "numeric(14,4)", "numeric(8,4)"),
+        "numeric(14,4)",
     ),
+    # 064 widens this to numeric(14,4) on purpose (BT-04) - an explicit ALTER COLUMN ... TYPE, applied
+    # to production - so production now carries 14,4 and the set has one more spelling.
     "strategy_backtests.sharpe_ratio": (
-        ("numeric(10,4)", "numeric(8,4)"),
-        "numeric(8,4)",
+        ("numeric(10,4)", "numeric(14,4)", "numeric(8,4)"),
+        "numeric(14,4)",
     ),
     "strategy_backtests.slippage": (
         ("numeric(10,6)", "numeric(6,4)"),
         "numeric(6,4)",
     ),
+    # 064 widens this to numeric(14,4) on purpose (BT-04) - an explicit ALTER COLUMN ... TYPE, applied
+    # to production - so production now carries 14,4 and the set has one more spelling.
     "strategy_backtests.sortino_ratio": (
-        ("numeric(10,4)", "numeric(8,4)"),
-        "numeric(8,4)",
+        ("numeric(10,4)", "numeric(14,4)", "numeric(8,4)"),
+        "numeric(14,4)",
     ),
     "strategy_backtests.start_date": (
         ("date", "timestamp with time zone"),
@@ -4322,9 +4552,11 @@ DIVERGENT_COLUMN_TYPES = {
         ("character varying(20)", "integer"),
         "character varying(20)",
     ),
+    # 064 widens win_rate to numeric(8,4) (BT-04): the column holds a PERCENT, and numeric(6,4)
+    # (< 100) could not store a 100% win rate. Applied to production.
     "strategy_backtests.win_rate": (
-        ("numeric(10,4)", "numeric(6,4)"),
-        "numeric(6,4)",
+        ("numeric(10,4)", "numeric(6,4)", "numeric(8,4)"),
+        "numeric(8,4)",
     ),
     "strategy_deployments.exchange_id": (
         ("character varying(50)", "uuid"),

@@ -1,12 +1,17 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useAutoRefresh, REFRESH } from "../hooks/useAutoRefresh";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
   Plus, Layers, TrendingUp, Edit2,
-  BarChart2, Pause, Play, Trash2, Copy, Settings,
+  BarChart2, Pause, Play, Trash2, Copy, Settings, Square,
   Activity, Zap, Globe, Shield, RefreshCw
 } from "lucide-react";
-import { endpoints, api } from "../api";
-import { CONFIG } from "../config";
+import { endpoints, api, publicGet } from "../api";
+import { readRefusal } from "../design/entitlements";
+import { apiErrorMessage } from "../design/apiErrors";
+import { UpgradePrompt } from "../components/gates/UpgradePrompt";
+import { useFeature } from "../components/gates/FeatureGate";
+import { FEATURES } from "../design/entitlements";
 import { Button } from "../components/ui/Button";
 // Task 10.3: two of the three confirmation surfaces (archive and rename); task 17.2's last
 // part made the deploy modal the third, so `ConfirmDialog` is now this page's only overlay
@@ -18,7 +23,6 @@ import { Button } from "../components/ui/Button";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
-import { DataTable } from "../components/ds/DataTable";
 import { EmptyState } from "../components/ds/EmptyState";
 import { Field } from "../components/ds/Field";
 import { FilterBar } from "../components/ds/FilterBar";
@@ -37,6 +41,16 @@ import {
   HEALTH_UNDETERMINED,
   computeStrategyHealth,
 } from "../lib/strategyHealth";
+// Task 14: the card the listing renders each strategy as. The component is deliberately
+// dumb — this page resolves which facts exist and hands them over, so
+// `design/pageFields.js` stays the single source of truth rather than the card growing a
+// second opinion about what is reportable.
+import {
+  LISTED_LABEL,
+  StrategyCard,
+  StrategyCardGrid,
+  ownershipLabel,
+} from "../components/strategies/StrategyCard";
 import {
   describeArchiveFailure,
   describeBlockingDeployment,
@@ -84,6 +98,20 @@ const _normalizeStatus = (value = "") => {
 };
 
 /**
+ * UI-01: the row's run state — `running`, `paused`, `inactive`, or `null` when the row
+ * carries neither a deployment record nor a lifecycle status.
+ */
+const _deploymentState = (row) => {
+  const dep = row?.most_recent_deployment;
+  const raw = (dep && typeof dep === "object" ? (dep.status ?? dep.state) : null) ?? row?.status;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const s = String(raw).toLowerCase();
+  if (["running", "active", "live", "started", "deploying", "starting"].includes(s)) return "running";
+  if (["paused", "pause"].includes(s)) return "paused";
+  return "inactive";
+};
+
+/**
  * §7.2's "Market / exchange" cell, as one projected string.
  *
  * The three keys `pageFields`' `market` entry names — `symbol`, `deployed_exchange` and
@@ -107,6 +135,22 @@ const normalizeStrategies = (rows = []) =>
     name: _text(row.name) ?? _text(row.strategy_name),
     pair: _text(row.symbol) ?? _text(row.pair),
     market: _marketLabel(row),
+    // ── Task 14: market, exchange and timeframe as THREE facts ──
+    //
+    // `market` above is a COMPOSITE — "BTCUSDT · binance · 1h" — built for a single table
+    // column where three columns would not fit. A card has room for three labelled facts,
+    // and Task 14 names them separately, so each is normalised on its own here.
+    //
+    // This is not duplication for its own sake: a composite cannot express a PARTIAL
+    // absence. A row with a symbol and no venue renders "BTCUSDT" and the reader cannot
+    // tell whether the venue is missing or simply not part of the format. Three facts each
+    // carry their own marker and their own reason.
+    //
+    // `market` itself is retained unchanged, because the table columns, the search
+    // predicate (`visibleStrategies`) and the archive confirmation's review grid all read
+    // it.
+    cardMarket: _text(row.symbol) ?? _text(row.pair),
+    exchange: _text(row.deployed_exchange),
     // The server's spelling, verbatim, for `ds/StrategyStatus` — which reports "Status not
     // reported" for a row carrying none rather than claiming `stopped`, the way
     // `_normalizeStatus` has to for the filter's closed vocabulary.
@@ -128,11 +172,11 @@ const normalizeStrategies = (rows = []) =>
     // `null` when there is nothing to report, so neither is defaulted here.
     last_signal_at: row.last_signal_at ?? null,
     last_execution_at: row.last_execution_at ?? null,
-    // `is_active` is the row's own deployment flag. It reports whether the strategy is
-    // marked active and claims no live worker — the deployment RECORD is a separate read
-    // this page does not make. Absent reads not-available, never "inactive".
-    deploymentState:
-      row.is_active === true ? "active" : row.is_active === false ? "inactive" : null,
+    // UI-01: whether the strategy is RUNNING. `is_active` used to drive this cell, but it is
+    // the not-archived flag — it stays `true` for a stopped strategy, so every row read
+    // "Active". The most-recent deployment record decides when the row carries one; otherwise
+    // the strategy's own lifecycle `status` does. Neither present reads not-available.
+    deploymentState: _deploymentState(row),
     is_running: row.is_running === true,
     // Requirements 1.8/1.9: health is computed from this row's own most-recent deployment
     // status and most-recent backtest outcome, and from nothing else. It was
@@ -154,6 +198,39 @@ const normalizeStrategies = (rows = []) =>
  * The card grid this replaced is what Requirement 4.5 forbids: one 220px-tall card per
  * strategy carrying eight tags, three metric tiles, a progress bar and seven buttons, for
  * ten fields. `DataTable` rows satisfy 4.5 by construction.
+ *
+ * CORRECTION — 4.5 DOES NOT FORBID CARDS, AND THIS NOTE HAS BEEN READ AS SAYING IT DOES.
+ * ------------------------------------------------------------------------------------
+ * Verbatim, from `.kiro/specs/vyomquant-ui-redesign/requirements.md` §4.5:
+ *
+ *     "THE Strategies_Page SHALL NOT render strategies as oversized cards EXCEEDING THE
+ *      INFORMATION DENSITY NEEDED to display the fields listed in 4.1."
+ *
+ * The prohibition is on OVERSIZED, density-wasting cards. The grid described above was
+ * exactly that — 220px and seven buttons for ten fields — so the sentence above is true
+ * about THAT grid, and the generalisation that followed it ("`DataTable` rows satisfy 4.5
+ * by construction") is also true but does not imply the converse. A compact, dense card
+ * satisfies 4.5 as well; "by construction" is a property of rows, not a requirement of
+ * them.
+ *
+ * This matters because the engineering brief's Task 14 asks for exactly that: rectangular
+ * cards carrying name, market, exchange, timeframe, ownership, subscription status,
+ * marketplace listing status, execution state, version, last activity and actions. That is
+ * ELEVEN fields, three of them status badges (Owned / Subscribed / Listed) that read
+ * poorly as table columns and well as badges. A reader of this note concluded Task 14 was
+ * blocked by 4.5 and stopped; it is not blocked, it is CONSTRAINED:
+ *
+ *   - the card must carry the 4.1 fields, not fewer (4.5 is about density, and dropping
+ *     fields to shrink the card fails 4.1 instead);
+ *   - no decorative metric tiles, progress bars or icon rows that add height without
+ *     adding a field;
+ *   - the three fields with nothing behind them stay marked, per the section below —
+ *     a card must not imply it is showing `performance` or `riskState` when the list
+ *     projection carries neither.
+ *
+ * Whoever builds it: keep `FilterBar`, `STATUS_FILTER_OPTIONS`, the no-match empty state
+ * and every entry in `ROW_ACTION`/`ACTION_CATALOG`. Those are 4.2/4.4 and are independent
+ * of the layout.
  *
  * THREE OF THE TEN HAVE NOTHING BEHIND THEM, AND SAY SO
  * ----------------------------------------------------
@@ -195,8 +272,41 @@ const isReported = (field) => fieldEntry(field)?.verdict === VERDICT.AVAILABLE;
 /** Requirement 11.4 — a page of strategies, not a page of trades. */
 const PAGE_SIZE = 25;
 
+/**
+ * Task 14: the orders the card grid offers — and, by omission, the ones it refuses to.
+ *
+ * `performance`, `riskState` and `marketplaceListing` are ABSENT on purpose. All three
+ * render a marker on EVERY card, because the list projection carries none of them, so
+ * ordering by one would reorder nothing a reader can see. That is the rule the table
+ * already applied when it set `sortable: false` on its performance column — "a dead sort
+ * header over a column of markers is a control that does nothing". Here it is expressed by
+ * omitting the option rather than disabling it: a disabled option invites the reader to
+ * wonder what it would have done.
+ *
+ * `read` returns the value to order by, or `null` for "this row has nothing to order by",
+ * which sinks in both directions rather than claiming a position.
+ */
+const SORTABLE_CARD_FIELDS = Object.freeze([
+  { id: "updatedAt", field: "updatedAt", descending: true, read: (row) => row.updated_at ?? null },
+  { id: "name", field: "name", descending: false, read: (row) => row.name ?? null },
+  { id: "market", field: "market", descending: false, read: (row) => row.cardMarket ?? null },
+  { id: "status", field: "status", descending: false, read: (row) => row.statusRaw ?? null },
+  {
+    id: "lastSignalAt",
+    field: "lastSignalAt",
+    descending: true,
+    read: (row) => row.last_signal_at ?? null,
+  },
+  {
+    id: "lastExecutionAt",
+    field: "lastExecutionAt",
+    descending: true,
+    read: (row) => row.last_execution_at ?? null,
+  },
+]);
+
 /** Newest first: the strategy a trader touched last is the one they are looking for. */
-const DEFAULT_SORT = Object.freeze({ key: "updated_at", direction: "desc" });
+const DEFAULT_CARD_SORT = "updatedAt";
 
 /** What the filter row's live region counts. */
 const COUNT_NOUN = "strategies";
@@ -251,10 +361,11 @@ const NO_STRATEGIES_STATE = Object.freeze({
  * The deploy target the row's control opens on — task 17.2
  * ══════════════════════════════════════════════════════════════════════════
  *
- * The deploy modal has always opened with `environment: "live"` selected, so the row's
- * deploy control is, by default, the start of a Live transition. That is what earns it
- * Requirement 4.3's separated treatment and `intent="live"`; the trader can change the
- * target inside the modal, and the label describes what happens if they change nothing.
+ * FE-03: the deploy modal now opens on PAPER. It used to open with `environment: "live"`
+ * preselected, so one careless confirm started a Live transition. Live is only OFFERED
+ * when the server reports the platform can run it (`/api/system/trading-capabilities`, read
+ * below; unknown or unreachable means NOT offered). The label and `intent` describe what
+ * happens if the trader changes nothing, so they now describe a paper deployment.
  *
  * The label and the intent are READ from `lib/deployFlow.js` rather than authored here, so
  * this control and §8.3's flow are titled by the same table — the precedent task 10.4 set
@@ -263,7 +374,7 @@ const NO_STRATEGIES_STATE = Object.freeze({
  * `intent` is a presentation treatment on a menu entry, and the POST is still
  * `endpoints.strategies.deployVersion` with `deploymentRequest`'s own body and query.
  */
-const ROW_DEPLOY_ENVIRONMENT = "live";
+const ROW_DEPLOY_ENVIRONMENT = "paper";
 const ROW_DEPLOY_PRESENTATION = deployPresentation(ROW_DEPLOY_ENVIRONMENT);
 
 /* ── The deploy modal's own form vocabulary (task 17.2c) ─────────────────────────────────
@@ -279,6 +390,11 @@ const EXECUTION_MODE_OPTIONS = Object.freeze([
   Object.freeze({ value: "paper", label: "Paper Simulation (Virtual Execution)" }),
   Object.freeze({ value: "live", label: "Live Execution (Master Executor)" }),
 ]);
+
+/** FE-03: what the mode control offers while the server has not said Live is available. */
+const PAPER_ONLY_MODE_OPTIONS = Object.freeze(
+  EXECUTION_MODE_OPTIONS.filter((option) => option.value === "paper"),
+);
 
 /**
  * Requirement 15.2's message for the capital field, and the whole of its validity rule.
@@ -357,10 +473,11 @@ function RiskCell({ value }) {
     : <StatusBadge state={badge} label={humaniseState(value)} size="sm" />;
 }
 
-/** The deployment flag as text. Absent reads not-available, never "inactive". */
+/** The run state as text. Absent reads not-available, never "Not running". */
 function DeploymentCell({ value }) {
-  if (value === "active") return <StatusBadge state="active" label="Active" size="sm" />;
-  if (value === "inactive") return <StatusBadge state="idle" label="Not active" size="sm" />;
+  if (value === "running") return <StatusBadge state="active" label="Running" size="sm" />;
+  if (value === "paused") return <StatusBadge state="paused" label="Paused" size="sm" />;
+  if (value === "inactive") return <StatusBadge state="idle" label="Not running" size="sm" />;
   return (
     <NotAvailableMarker
       label={labelFor("deploymentState")}
@@ -394,6 +511,18 @@ const instantCell = (field) => function InstantCell({ value }) {
     ? <NotAvailableMarker label={labelFor(field)} reason={reasonFor(field)} />
     : text;
 };
+
+/* ── Task 14: the card's prebuilt cells ──────────────────────────────────────
+ *
+ * Built ONCE, at module scope. `instantCell(...)` and `unreportedCell(...)` each return a
+ * NEW component identity per call, so building them inside the per-row `facts` loop would
+ * hand React a different component type for the same cell on every render and remount four
+ * elements per card. Cheap to avoid, and invisible until a few hundred strategies. */
+const UnreportedListingCell = unreportedCell("marketplaceListing");
+const UnreportedPerformanceCell = unreportedCell("performance");
+const SignalInstantCell = instantCell("lastSignalAt");
+const ExecutionInstantCell = instantCell("lastExecutionAt");
+const UpdatedInstantCell = instantCell("updatedAt");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Server-derived ownership: GET /api/library/my-strategies (task 32.7)
@@ -606,12 +735,36 @@ const OWNERSHIP_DL_CLASS = "m-0 grid gap-1 font-mono text-micro";
 const OWNERSHIP_DL_COLUMNS = Object.freeze({ gridTemplateColumns: "auto 1fr" });
 
 /**
- * The entry grid. `repeat(auto-fit, minmax(300px, 1fr))` has no Tailwind utility and no token
+ * The entry grid. `repeat(auto-fill, minmax(300px, 1fr))` has no Tailwind utility and no token
  * — it is a content dimension, the same class of value as `ds/LoadingState`'s
  * `SKELETON_GEOMETRY` — so it stays an inline style. It carries no colour.
+ *
+ * ---------------------------------------------------------------------------
+ * STRAT-CARDS-01 (2026-11-16): `auto-fill`, NOT `auto-fit`. This is the whole of the
+ * reported "long horizontal strategy strips" defect.
+ * ---------------------------------------------------------------------------
+ * The two keywords differ in exactly one behaviour, and it is the one that matters here:
+ *
+ *   `auto-fit`  COLLAPSES tracks that hold no item, then distributes the freed space to the
+ *               tracks that remain. With one entry there is therefore ONE track, and its
+ *               `1fr` maximum stretches it across the entire container.
+ *   `auto-fill` KEEPS the empty tracks. One entry occupies one track of several, so it stays
+ *               the ~300px card the `minmax` asks for.
+ *
+ * So an account with a single owned strategy — which is the common case for a new account,
+ * and the case in the report — got a full-width band rather than a card. Nothing was wrong
+ * with the card itself: each entry is already a `ds/Panel` in a grid. The grid was told to
+ * collapse itself down to the number of items it happened to hold.
+ *
+ * `auto-fit` is the right choice when a grid should always consume its row (a dashboard
+ * metric strip). It is the wrong choice for a collection whose item count the user controls,
+ * because the layout then changes shape with the data: two strategies read as cards, one
+ * reads as a banner.
+ *
+ * Regression: tests/unit/pages/strategiesCardGrid.test.js
  */
 const OWNERSHIP_GRID_COLUMNS = Object.freeze({
-  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -725,7 +878,6 @@ export default function Strategies() {
   const [editingStrategy, setEditingStrategy] = useState(null);
   const [filterStatus, setFilterStatus] = useState(STATUS_FILTER_ALL);
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState(DEFAULT_SORT);
   const [page, setPage] = useState(1);
   const [focusedStrategyId, setFocusedStrategyId] = useState(() => searchParams.get("strategy_id") || null);
   const [deployModalStrategy, setDeployModalStrategy] = useState(null);
@@ -740,6 +892,14 @@ export default function Strategies() {
     stopLoss: "2",
   });
   const [deployError, setDeployError] = useState(null);
+  // LAUNCH AUDIT: a deploy the PLAN refused (bots / live trading are plan-gated) — rendered as
+  // the upgrade prompt inside the deploy dialog, beside the server's own sentence.
+  const [deployRefusal, setDeployRefusal] = useState(null);
+  // LAUNCH AUDIT: page-level outcome of a clone. Clone used to fail with console.error only, so a
+  // trader at their strategy limit clicked Clone and nothing happened.
+  const [actionNotice, setActionNotice] = useState(null);
+  // FE-03: fail closed. Live is offered only after the server says the platform is live.
+  const [liveAvailable, setLiveAvailable] = useState(false);
   const [connectedExchanges, setConnectedExchanges] = useState([]);
   const [exchangesLoading, setExchangesLoading] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState(null);
@@ -748,6 +908,9 @@ export default function Strategies() {
   // `null` means "not read yet or the read failed" and is never rendered as a list: an error
   // clears it, so the section shows the error state rather than the previous entries
   // (Requirement 12.8 — an error is an error state, never a stale list or a zero).
+  // Task 14: which order the card grid renders in. Replaces ds/DataTable's per-column
+  // sort headers, which a card grid has nowhere to hang.
+  const [cardSort, setCardSort] = useState(DEFAULT_CARD_SORT);
   const [ownershipEntries, setOwnershipEntries] = useState(null);
   const [ownershipMeta, setOwnershipMeta] = useState(null);
   const [ownershipLoading, setOwnershipLoading] = useState(true);
@@ -758,17 +921,81 @@ export default function Strategies() {
   const [disclosed, setDisclosed] = useState({});
   const [subscriptionAction, setSubscriptionAction] = useState({});
 
+  // MKT-07 / Task 15 B: whether this account's plan includes publishing to the Marketplace.
+  //
+  // `permitted` is false until entitlements are READ, not merely false by default — that is
+  // `useFeature`'s stated behaviour and the right direction here: a control that looks enabled
+  // before the plan is known is a control that 403s. While the read is in flight the row action
+  // is disabled and says so.
+  //
+  // This decides the control's APPEARANCE and nothing else. The authorisation is
+  // `Depends(require_marketplace_publish)` on `POST /api/library/submissions`,
+  // `POST /api/library` and the price routes, plus `check_marketplace_publish_quota`; a caller
+  // who reaches those endpoints another way is refused by them.
+  const publishFeature = useFeature(FEATURES.MARKETPLACE_PUBLISH);
+  const marketplacePublish = useMemo(() => {
+    if (publishFeature.permitted) return { permitted: true, reason: undefined };
+    if (!publishFeature.isReady) {
+      return { permitted: false, reason: "Checking what your plan includes…" };
+    }
+    // The server's own refusal copy, composed exactly as `UpgradePrompt`'s `command` variant
+    // composes it, so the plan this names cannot drift from the plan the 403 would name. The
+    // fallback is reached only when the server sent no copy for the feature.
+    const refusal = publishFeature.refusal;
+    const sentence = [refusal?.message, refusal?.upgrade_message]
+      .filter((part) => typeof part === "string" && part.trim() !== "")
+      .join(" ");
+    return {
+      permitted: false,
+      reason: sentence || "Publishing to the marketplace is not included in your plan.",
+    };
+  }, [publishFeature.permitted, publishFeature.isReady, publishFeature.refusal]);
+
   const resumeBuilderStrategy = location.state?.resumeBuilderStrategy || null;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const caps = await publicGet("/api/system/trading-capabilities");
+        if (!cancelled) setLiveAvailable(caps?.live_trading_available === true);
+      } catch {
+        if (!cancelled) setLiveAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // FE-03: the request is built from `deployConfig.environment`, so if Live stops being
+  // available (or was never confirmed) the state itself is forced back to paper - the
+  // control and the request can never disagree.
+  useEffect(() => {
+    if (!liveAvailable) {
+      setDeployConfig((prev) => (prev.environment === "paper" ? prev : { ...prev, environment: "paper" }));
+    }
+  }, [liveAvailable]);
 
   /** Re-read the owner list. The retry action on the error state, and nothing else. */
   const reloadStrategies = useCallback(() => setListReloadKey((k) => k + 1), []);
 
+  // Auto-refresh: a background reload keeps the cards on screen (no full-page loader) and
+  // runs every REFRESH.ACCOUNT ms while the tab is visible, and again on returning to it.
+  const backgroundReloadRef = useRef(false);
+  useAutoRefresh(() => {
+    backgroundReloadRef.current = true;
+    setListReloadKey((k) => k + 1);
+    setOwnershipReloadKey((k) => k + 1);
+  }, REFRESH.ACCOUNT);
+
   useEffect(() => {
     let cancelled = false;
 
+    const background = backgroundReloadRef.current;
     const loadStrategies = async () => {
       try {
-        setIsLoading(true);
+        if (!background) setIsLoading(true);
         console.log("📊 API CALL: GET /api/strategies");
         const payload = await endpoints.strategies.list();
         console.log("📊 API RESPONSE:", payload);
@@ -802,8 +1029,10 @@ export default function Strategies() {
   useEffect(() => {
     let cancelled = false;
 
+    const background = backgroundReloadRef.current;
+    backgroundReloadRef.current = false;
     const loadOwnership = async () => {
-      setOwnershipLoading(true);
+      if (!background) setOwnershipLoading(true);
       setOwnershipError(null);
       try {
         const payload = await api.library.myStrategies();
@@ -1014,6 +1243,37 @@ export default function Strategies() {
     });
   }, [strategies, filterStatus, query]);
 
+  /**
+   * Task 14: the page of rows the card grid renders.
+   *
+   * `ds/DataTable` did this slicing itself from `page`/`pageSize`. The card grid renders
+   * exactly what it is given, so the slice moves here. Clamped against a stale `page`,
+   * which every filter handler already guards by returning to page 1 — belt and braces,
+   * because an out-of-range slice renders an empty grid over rows that exist, and that is
+   * indistinguishable from "no strategies" to the reader.
+   */
+  const sortedStrategies = useMemo(() => {
+    const option = SORTABLE_CARD_FIELDS.find((candidate) => candidate.id === cardSort);
+    if (!option) return visibleStrategies;
+    // Copied before sorting: `visibleStrategies` is a memo other readers share, and
+    // `Array.prototype.sort` mutates in place.
+    return [...visibleStrategies].sort((left, right) => {
+      const a = option.read(left);
+      const b = option.read(right);
+      // A row with nothing to order by sinks, in both directions. Otherwise an absent
+      // value would claim a position — "oldest" for a row with no timestamp at all.
+      if (a === null || a === undefined || a === "") return 1;
+      if (b === null || b === undefined || b === "") return -1;
+      if (a === b) return 0;
+      return option.descending ? (a < b ? 1 : -1) : (a > b ? 1 : -1);
+    });
+  }, [visibleStrategies, cardSort]);
+
+  const pagedStrategies = useMemo(() => {
+    const start = Math.max(0, (page - 1) * PAGE_SIZE);
+    return sortedStrategies.slice(start, start + PAGE_SIZE);
+  }, [sortedStrategies, page]);
+
   /** Requirement 4.1's failure reporting, hoisted out of the row (see the Alert below). */
   const failedStrategies = useMemo(
     () => visibleStrategies.filter((s) => s.status === "failed" || s.health === HEALTH_ERROR),
@@ -1076,7 +1336,6 @@ export default function Strategies() {
             : PANEL_STATES.EMPTY)
           : PANEL_STATES.READY;
 
-  const API_BASE = CONFIG.apiBaseUrl;
 
   const setProcessingFor = (id, value) =>
     setIsProcessing((prev) => ({ ...prev, [id]: value }));
@@ -1217,6 +1476,7 @@ export default function Strategies() {
   const handleOpenDeployModal = async (s) => {
     setDeployModalStrategy(s);
     setDeployError(null);
+    setDeployRefusal(null);
     setSelectedAccount(null);
     setConnectedExchanges([]);
     setExchangesLoading(true);
@@ -1300,7 +1560,10 @@ export default function Strategies() {
       setDeployModalStrategy(null);
     } catch (err) {
       console.error("📊 DEPLOY ERROR:", err);
-      setDeployError(err?.data?.message || err?.response?.data?.message || err?.message || 'Deployment failed');
+      // LAUNCH AUDIT: a plan refusal's sentence lives on `err.data.detail.message`, which the
+      // previous `err.data.message` read missed — a Free account got "Request failed".
+      setDeployRefusal(readRefusal(err));
+      setDeployError(apiErrorMessage(err, 'Deployment failed'));
       setStrategies(prevStrategies);
     } finally {
       setProcessingFor(id, false);
@@ -1313,16 +1576,60 @@ export default function Strategies() {
     setProcessingFor(id, true);
     setStrategies(prev => prev.map(s => s.id === id ? { ...s, status: "paused" } : s));
     try {
+      setActionNotice(null);
       console.log(`📊 PAUSE STRATEGY: POST /api/strategies/${id}/pause`);
       const res = await endpoints.strategies.pause(id);
       console.log("📊 PAUSE RESPONSE:", res);
     } catch (err) {
       console.error("📊 PAUSE ERROR:", err);
       setStrategies(prevStrategies);
+      // LAUNCH AUDIT: the row silently snapped back to its previous state, so a trader who
+      // paused a running bot had no sign the pause had NOT happened. Say so, with the reason.
+      setActionNotice({
+        title: "Pause failed — the strategy is still in its previous state",
+        refusal: readRefusal(err),
+        message: apiErrorMessage(err, "The strategy could not be paused. Please try again."),
+      });
     } finally {
       setProcessingFor(id, false);
     }
   };
+
+  // PAUSE-01: Resume and Stop, written like Pause above -- an optimistic row update that is
+  // rolled back, with the server's reason shown, when the request is refused.
+  const runLifecycleAction = async (id, { call, optimisticStatus, failureTitle, fallback }) => {
+    if (isProcessing[id]) return;
+    const prevStrategies = strategies;
+    setProcessingFor(id, true);
+    setStrategies(prev => prev.map(s => s.id === id ? { ...s, status: optimisticStatus } : s));
+    try {
+      setActionNotice(null);
+      await call(id);
+    } catch (err) {
+      setStrategies(prevStrategies);
+      setActionNotice({
+        title: failureTitle,
+        refusal: readRefusal(err),
+        message: apiErrorMessage(err, fallback),
+      });
+    } finally {
+      setProcessingFor(id, false);
+    }
+  };
+
+  const handleResumeStrategy = (id) => runLifecycleAction(id, {
+    call: endpoints.strategies.resume,
+    optimisticStatus: "running",
+    failureTitle: "Resume failed — the strategy is still paused",
+    fallback: "The strategy could not be resumed. Please try again.",
+  });
+
+  const handleStopStrategy = (id) => runLifecycleAction(id, {
+    call: endpoints.strategies.stop,
+    optimisticStatus: "stopped",
+    failureTitle: "Stop failed — the strategy is still in its previous state",
+    fallback: "The strategy could not be stopped. Please try again.",
+  });
 
   /**
    * Archive one strategy (task 16.3, Requirements 2.9, 2.10, 3.1).
@@ -1408,26 +1715,22 @@ export default function Strategies() {
     if (isProcessing[id]) return;
     setProcessingFor(id, true);
     try {
-      console.log(`📊 CLONE STRATEGY: POST /api/strategies/${id}/clone`);
-      const token = sessionStorage.getItem("token");
-      const res = await fetch(`${API_BASE}/api/strategies/${id}/clone`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        }
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || data.detail || `Clone failed (HTTP ${res.status})`);
-      }
+      setActionNotice(null);
+      // LAUNCH AUDIT: the shared client, not a raw `fetch` — it carries the session token the
+      // way every other call does and rejects with an `ApiError` the readers below understand.
+      const data = await endpoints.strategies.clone(id);
       console.log("📊 CLONE RESPONSE:", data);
       // Reload strategies
       const payload = await endpoints.strategies.list();
       const rows = Array.isArray(payload) ? payload : payload?.data || payload?.strategies || [];
       if (Array.isArray(rows)) setStrategies(normalizeStrategies(rows));
     } catch (err) {
-      console.error("📊 CLONE ERROR:", err.message);
+      console.error("📊 CLONE ERROR:", err?.message);
+      setActionNotice({
+        title: "Clone failed",
+        refusal: readRefusal(err),
+        message: apiErrorMessage(err, "The strategy could not be cloned. Please try again."),
+      });
     } finally {
       setProcessingFor(id, false);
     }
@@ -1607,6 +1910,23 @@ export default function Strategies() {
       icon: Activity,
       onSelect: (row) => navigate(`/app/signal-trace?strategy_id=${row.id}`),
     },
+    // MKT-07 / Task 15 B. Opens the strategy's own Marketplace tab, which is where
+    // `CreatorMarketplacePanel` already implements the listing -> evidence -> price flow. A
+    // second listing surface on this page would be a second opinion about eligibility, and
+    // the brief's own instruction for Task 15 is not to build a second listing system.
+    //
+    // `disabled`/`disabledReason` are read from the account's entitlements, so the control is
+    // VISIBLE on every plan and ENABLED only where publishing is included. The reason is the
+    // server's own refusal copy (`lockedFeatureRefusal`), not a sentence written here, so the
+    // plan named in the tooltip cannot drift from the plan the 403 would name.
+    [ROW_ACTION.LIST_MARKETPLACE]: {
+      label: "List on marketplace",
+      icon: Globe,
+      disabled: !marketplacePublish.permitted,
+      disabledReason: marketplacePublish.reason,
+      onSelect: (row) =>
+        navigate(`/app/strategies/${row.id}`, { state: { activeTab: "marketplace" } }),
+    },
     // Pausing a running strategy stops it placing new orders. That is the safe direction of
     // a live transition and destroys nothing, so it stays inline — `lib/rowActions.js`'s
     // classifier rejects it, and this entry does not get to disagree.
@@ -1614,6 +1934,19 @@ export default function Strategies() {
       label: "Pause",
       icon: Pause,
       onSelect: (row) => handlePauseStrategy(row.id),
+    },
+    // PAUSE-01: offered in Pause's place once the strategy is paused.
+    [ROW_ACTION.RESUME]: {
+      label: "Resume",
+      icon: Play,
+      onSelect: (row) => handleResumeStrategy(row.id),
+    },
+    // PAUSE-01: ends the deployments. The safe direction, so inline; it is also what makes
+    // Delete possible, which refuses while a deployment is running or paused.
+    [ROW_ACTION.STOP]: {
+      label: "Stop",
+      icon: Square,
+      onSelect: (row) => handleStopStrategy(row.id),
     },
     // ── The separated pair. `intent` is read from the classifier, not written here ──────
     [ROW_ACTION.DEPLOY_LIVE]: {
@@ -1627,7 +1960,7 @@ export default function Strategies() {
     // delete would describe an operation the backend stopped performing, and the dialog it
     // opens (below) has said "Archive strategy" since task 10.3.
     [ROW_ACTION.ARCHIVE]: {
-      label: "Archive strategy",
+      label: "Delete strategy",
       icon: Trash2,
       onSelect: (row) => requestArchiveStrategy(row),
     },
@@ -1636,21 +1969,48 @@ export default function Strategies() {
   const ActionsCell = function StrategyActionsCell({ row }) {
     const busy = Boolean(isProcessing[row.id]);
     const title = busy ? BUSY_TITLE : undefined;
-    const { inline, separated } = partitionRowActions(ownerRowActions(row), rowActionCatalog);
+    const { inline, separated: separatedAll } =
+      partitionRowActions(ownerRowActions(row), rowActionCatalog);
+    // UI-02: the deployment was reachable only from the ⋮ menu, so traders could not find
+    // how to start a strategy. It is now a visible, distinctly styled button beside the
+    // inline set. It still only OPENS the deploy dialog (on paper, FE-03) — Live is a
+    // deliberate choice inside that dialog — so nothing is submitted from this click.
+    const deployVisible = separatedAll.includes(ROW_ACTION.DEPLOY_LIVE);
+    const separated = separatedAll.filter((id) => id !== ROW_ACTION.DEPLOY_LIVE);
     const rowLabel = row.name ? row.name : `strategy ${row.id}`;
 
     return (
       <span className="inline-flex flex-wrap items-center gap-1">
+        {deployVisible ? (
+          <Button
+            key={ROW_ACTION.DEPLOY_LIVE}
+            variant="primary"
+            size="xs"
+            icon={Play}
+            title={title ?? "Opens the deploy dialog: paper by default, Live when your plan and exchange allow it"}
+            aria-label={`Deploy ${rowLabel}`}
+            disabled={busy}
+            onClick={() => rowActionCatalog[ROW_ACTION.DEPLOY_LIVE].onSelect(row)}
+          >
+            Deploy
+          </Button>
+        ) : null}
         {inline.map((id) => {
           const action = rowActionCatalog[id];
+          // MKT-07: an inline action may be offered-but-not-permitted. Before this, `busy`
+          // was the only reason a row control could be disabled, so a catalogue entry that
+          // wanted to say "visible, disabled, and here is why" had nowhere to say it. The
+          // reason reaches the user as the button's `title`, which is also what the overflow
+          // branch does with `disabledReason` — one vocabulary, two renderings.
+          const blocked = Boolean(action.disabled);
           return (
             <Button
               key={id}
               variant="ghost"
               size="xs"
               icon={action.icon}
-              title={title}
-              disabled={busy}
+              title={blocked ? action.disabledReason || undefined : title}
+              disabled={busy || blocked}
               onClick={() => action.onSelect(row)}
             >
               {action.label}
@@ -1673,8 +2033,10 @@ export default function Strategies() {
                 // wrong one (Requirement 4.3).
                 intent: separationOf(id),
                 separated: true,
-                disabled: busy,
-                disabledReason: busy ? BUSY_TITLE : undefined,
+                disabled: busy || Boolean(action.disabled),
+                disabledReason: busy
+                  ? BUSY_TITLE
+                  : (action.disabled ? action.disabledReason : undefined),
                 onSelect: () => action.onSelect(row),
               };
             })}
@@ -1753,6 +2115,150 @@ export default function Strategies() {
     { key: "actions", header: "Actions", priority: 1, render: ActionsCell },
   ];
 
+  /* ═══════════════════════════════════════════════════════════════════════════
+   * Task 14 — the same facts, as cards
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Requirement 4.5 forbids cards that EXCEED the density needed for 4.1's fields, not
+   * cards. See the correction in this file's header. The card therefore carries the same
+   * facts as the columns above, from the same renderers, with no decorative addition —
+   * every element on it is a labelled fact or an action.
+   *
+   * THE RENDERERS ARE REUSED, NOT REIMPLEMENTED. `facts[].node` takes the very component
+   * the column used, so a change to how a status or an instant renders lands in both
+   * places at once and the two cannot drift. `label` and `reason` come from `labelFor` /
+   * `reasonFor`, which read `design/pageFields.js` — so the declaration stays the single
+   * source of truth for what exists and why something does not.
+   */
+
+  /** Ownership entries keyed by the strategy they describe, or `null` when unread. */
+  const ownershipByStrategy = useMemo(() => {
+    if (!Array.isArray(ownershipEntries)) return null;
+    const byId = new Map();
+    for (const entry of ownershipEntries) {
+      // Only OWNED entries carry a `strategy_id`. A SUBSCRIBED entry describes another
+      // author's listing and has a `listing_id` instead, which is why the ownership panel
+      // below is not folded into this grid.
+      const key = entry?.strategy_id;
+      if (key !== null && key !== undefined) byId.set(String(key), entry);
+    }
+    return byId;
+  }, [ownershipEntries]);
+
+  /**
+   * The `<dl>` rows for one card: Task 14's twelve fields, in its order.
+   *
+   * A fact is either a `node` (an already-built element, for the facts that need a
+   * component) or a `value` plus the field's declared `reason`, which the card turns into
+   * the marker when the value is absent. One rendering per fact.
+   */
+  const cardFacts = useCallback((row) => {
+    const owned = ownershipByStrategy === null
+      ? undefined
+      : ownershipByStrategy.get(String(row.id));
+
+    // The COMPUTED risk verdict, which the row mapper near the top of this file already
+    // resolved with `computeStrategyHealth` from the most-recent deployment and backtest
+    // records. `row` here is that MAPPED row, so this is not the API row's `health` --
+    // the list endpoint reports no such field, and inventing one as `"healthy"` is the
+    // precise defect `strategyHealth.test.js` pins by forbidding `row.health` anywhere in
+    // this file. Named apart from `row` so the provenance is legible at the use site
+    // rather than depending on which `row` is in scope.
+    const { health: computedRiskVerdict } = row;
+
+    return [
+      { field: "market", label: labelFor("market"), value: row.cardMarket, reason: reasonFor("market") },
+      { field: "exchange", label: labelFor("exchange"), value: row.exchange, reason: reasonFor("exchange") },
+      { field: "timeframe", label: labelFor("timeframe"), value: row.tf, reason: reasonFor("timeframe") },
+      { field: "version", label: labelFor("version"), value: row.current_version, reason: reasonFor("version") },
+      {
+        field: "deploymentState",
+        label: labelFor("deploymentState"),
+        node: <DeploymentCell value={row.deploymentState} row={row} />,
+      },
+      {
+        field: "performance",
+        label: labelFor("performance"),
+        // Declared unavailable on this read: the list projection carries no `pnl`,
+        // `win_rate` or `max_dd`, and those figures exist per BACKTEST. A zero here would
+        // read as a strategy that has never made money, which is a different claim from
+        // "not reported on this read".
+        node: <UnreportedPerformanceCell />,
+      },
+      {
+        field: "ownership",
+        label: labelFor("ownership"),
+        // UNKNOWN rather than absent when the ownership read failed or named no entry:
+        // defaulting to "Owned" would claim an ownership nobody stated. `undefined` here
+        // means the read did not complete, and `Reported` turns it into the marker.
+        value: owned === undefined ? undefined : ownershipLabel(owned?.ownership),
+        reason: reasonFor("ownership"),
+      },
+      {
+        field: "subscription",
+        label: labelFor("subscription"),
+        // `subscription: null` on an OWNED entry is a REPORTED absence — the server states
+        // there is no subscription, which is not the same as not knowing. Either way the
+        // marker carries the declared reason rather than inventing a state.
+        value: owned?.subscription?.state ?? undefined,
+        reason: reasonFor("subscription"),
+      },
+      {
+        field: "marketplaceListing",
+        label: labelFor("marketplaceListing"),
+        // Declared UNAVAILABLE: neither read carries whether YOUR OWN strategy is listed.
+        // Rendering "Not listed" would state a negative about the one author it would
+        // mislead — the one who has listed. See the field's note in `pageFields.js`.
+        node: <UnreportedListingCell />,
+      },
+      {
+        field: "riskState",
+        label: labelFor("riskState"),
+        node: <RiskCell value={computedRiskVerdict} />,
+      },
+      {
+        field: "lastSignalAt",
+        label: labelFor("lastSignalAt"),
+        node: <SignalInstantCell value={row.last_signal_at} />,
+      },
+      {
+        field: "lastExecutionAt",
+        label: labelFor("lastExecutionAt"),
+        node: <ExecutionInstantCell value={row.last_execution_at} />,
+      },
+      {
+        field: "updatedAt",
+        label: labelFor("updatedAt"),
+        node: <UpdatedInstantCell value={row.updated_at} />,
+      },
+    ];
+  }, [ownershipByStrategy]);
+
+  /** The header chips: lifecycle status, the archived flag, and the listing label. */
+  const cardBadges = useCallback((row) => {
+    const owned = ownershipByStrategy === null
+      ? undefined
+      : ownershipByStrategy.get(String(row.id));
+    return (
+      <>
+        {/* `status` is a badge rather than a `<dl>` pair — it is the card's headline
+            state, and it carries `data-card-field` so it is still addressable as the
+            same fact the table's `status` column was. `StrategyStatus` reports
+            "Status not reported" for a row carrying none, rather than claiming
+            `stopped`, and renders the archived flag BESIDE the status because an
+            archived row is history, not an actionable state (Requirement 3.3). */}
+        <span data-card-field="status" className="inline-flex min-w-0 flex-wrap items-center gap-1">
+          <StatusCell row={row} />
+        </span>
+        {/* `Listed` appears only where the read actually carries a listing. An owned
+            strategy's listing state is on neither read, so the absence is reported by the
+            `marketplaceListing` fact's marker rather than by a missing chip — a missing
+            chip says nothing, and Requirement 19.3 wants the reason visible. */}
+        {owned?.listing ? <StatusBadge state="info" label={LISTED_LABEL} size="sm" /> : null}
+      </>
+    );
+  }, [ownershipByStrategy]);
+
   /* ── Handlers. Every one that changes the row set returns to page 1, or a
    *    stale page number renders an empty table over rows that exist. ────── */
 
@@ -1805,6 +2311,18 @@ export default function Strategies() {
           onto `ds/Alert`, which takes the hue, the icon, the border style and the
           live-region role from `severity` (Requirement 1.4); the copy, the testids and the
           dismiss control are unchanged. */}
+      {actionNotice && (
+        actionNotice.refusal ? (
+          <div data-testid="action-refusal">
+            <UpgradePrompt refusal={actionNotice.refusal} variant="banner" />
+          </div>
+        ) : (
+          <Alert severity="error" title={actionNotice.title} data-testid="action-error">
+            {actionNotice.message}
+          </Alert>
+        )
+      )}
+
       {archiveError && (
         <Alert
           severity="error"
@@ -2310,6 +2828,34 @@ export default function Strategies() {
             </ul>
           ) : null}
 
+          {/* Task 14: the sort affordance the card grid replaces column headers with.
+              Rendered above the grid and labelled, so it is reachable by keyboard and by
+              a screen reader (Requirement 18.2/18.4). Returns to page 1 on change, like
+              every other control that changes the row order or the row set — a stale page
+              number renders an empty grid over rows that exist. */}
+          {emptyVariant !== "no-match" && pagedStrategies.length > 0 ? (
+            <div className="flex items-center gap-2 text-micro">
+              <label htmlFor="strategy-card-sort" className="text-content-secondary">
+                Sort by
+              </label>
+              <select
+                id="strategy-card-sort"
+                value={cardSort}
+                onChange={(event) => {
+                  setCardSort(event.target.value);
+                  setPage(1);
+                }}
+                className="min-w-0 rounded border border-border-subtle bg-surface-raised px-2 py-1 text-content-primary"
+              >
+                {SORTABLE_CARD_FIELDS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {labelFor(option.field)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           {emptyVariant === "no-match" ? (
             <EmptyState
               {...NO_STRATEGIES_STATE}
@@ -2320,20 +2866,36 @@ export default function Strategies() {
               clearFiltersAction={{ label: "Clear filters", onClick: clearFilters }}
             />
           ) : (
-            <DataTable
-              columns={columns}
-              rows={visibleStrategies}
-              getRowId={(row) => row.id}
-              rowHref={(row) => `/app/strategies/${row.id}`}
-              totalCount={resultCount}
-              page={page}
-              pageSize={PAGE_SIZE}
-              onPageChange={setPage}
-              sort={sort}
-              onSortChange={setSort}
-              stickyHeader
-              caption="Your strategies, with status, deployment and activity per row"
-            />
+            /* ── Task 14: cards, not rows ──
+             *
+             * Requirement 4.5 forbids cards that EXCEED the density needed for 4.1's
+             * fields, not cards — see the correction in this file's header. Every fact
+             * on the card comes from the same renderer the column used, so the two
+             * cannot drift, and `labelFor`/`reasonFor` keep `design/pageFields.js` the
+             * single source of what exists and why something does not.
+             *
+             * SORTING MOVES FROM COLUMN HEADERS TO ONE LABELLED CONTROL. `ds/DataTable`
+             * owned the sort headers and a card grid has nowhere to hang them, so the
+             * affordance becomes the `Sort by` select above the grid. The honesty rule
+             * that governed the headers governs its option list too: `performance`,
+             * `riskState` and `marketplaceListing` render a marker on EVERY card, so
+             * ordering by them would reorder nothing visible — a control that does
+             * nothing. They are excluded by `SORTABLE_CARD_FIELDS`, not greyed out.
+             *
+             * Pagination is kept and applied here rather than inside the table. */
+            <StrategyCardGrid label="Your strategies, as cards">
+              {pagedStrategies.map((row) => (
+                <StrategyCard
+                  key={row.id}
+                  row={row}
+                  focused={String(row.id) === String(focusedStrategyId)}
+                  nameLabel={labelFor("name")}
+                  facts={cardFacts(row)}
+                  badges={cardBadges(row)}
+                  actions={<ActionsCell row={row} />}
+                />
+              ))}
+            </StrategyCardGrid>
           )}
         </div>
       </Panel>
@@ -2423,6 +2985,11 @@ export default function Strategies() {
                 {deployError || preflight.error?.message}
               </Alert>
             )}
+            {deployRefusal && (
+              <div data-testid="deploy-refusal">
+                <UpgradePrompt refusal={deployRefusal} variant="inline" />
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               {/* The mode leads, because the account control depends on it: a paper binding
@@ -2432,8 +2999,8 @@ export default function Strategies() {
               <Field
                 id="deploy-execution-mode"
                 label="Execution mode"
-                options={EXECUTION_MODE_OPTIONS}
-                value={deployConfig.environment}
+                options={liveAvailable ? EXECUTION_MODE_OPTIONS : PAPER_ONLY_MODE_OPTIONS}
+                value={liveAvailable ? deployConfig.environment : "paper"}
                 onChange={(e) => setDeployConfig(prev => ({ ...prev, environment: e.target.value }))}
               />
 
@@ -2573,13 +3140,13 @@ export default function Strategies() {
         open={archiveDialog !== null}
         onCancel={() => setArchiveDialog(null)}
         onConfirm={handleConfirmArchive}
-        title="Archive strategy"
+        title="Delete strategy?"
         intent="destructive"
         description={
-          "Archiving removes this strategy from your library list. Nothing is deleted: its "
-          + "versions, backtests, deployments and signals are all kept and stay inspectable "
-          + "for history and audit. Archiving is refused while any of its deployments is "
-          + "still deploying, running or paused."
+          "Warning: this removes the strategy from your library and you will no longer be "
+          + "able to open, edit, backtest or deploy it. Its versions, backtests, deployments "
+          + "and signals are retained for history and audit. Deleting is refused while any of "
+          + "its deployments is still deploying, running or paused — stop those first."
         }
         review={[
           { label: "Strategy", value: archiveDialog?.name ?? null },
@@ -2590,8 +3157,8 @@ export default function Strategies() {
           { label: "Removed from", value: "Your strategy library list" },
           { label: "Kept", value: "Versions, backtests, deployments, signals" },
         ]}
-        confirmLabel="Archive strategy"
-        cancelLabel="Keep it in the list"
+        confirmLabel="Delete strategy"
+        cancelLabel="Keep strategy"
       />
 
       {/* ── Rename. A labelled `ds/Field` with inline validation (Requirements 15.1, 15.2)

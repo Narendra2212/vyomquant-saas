@@ -30,6 +30,26 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ws_event_stream")
 
+#: WS-NOISE-01: close codes that mean the CLIENT ended the connection.
+_CLIENT_CLOSE_CODES = frozenset({1000, 1001, 1005, 1006})
+
+
+def _is_client_disconnect(exc: BaseException) -> bool:
+    """Whether ``exc`` is the websocket closing from the client side rather than a fault."""
+    if type(exc).__name__ in {"WebSocketDisconnect", "ConnectionClosed", "ConnectionClosedOK",
+                              "ConnectionClosedError", "ClientDisconnected"}:
+        code = getattr(exc, "code", None)
+        return code is None or int(getattr(code, "value", code)) in _CLIENT_CLOSE_CODES
+    args = getattr(exc, "args", ()) or ()
+    if args:
+        first = args[0]
+        code = getattr(first, "value", first)
+        try:
+            return int(code) in _CLIENT_CLOSE_CODES
+        except (TypeError, ValueError):
+            return False
+    return False
+
 
 @dataclass
 class WebSocketMessage:
@@ -763,7 +783,14 @@ class WebSocketEventStreamer:
                         break
                         
         except Exception as e:
-            logger.error(f"Connection {conn_id} error: {e}")
+            # WS-NOISE-01: a client going away (tab closed, network drop, reload) ends the
+            # socket with 1000/1001/1005/1006. That is the normal end of a connection, not a
+            # server fault, yet it was logged at ERROR - 84 Sentry events a day
+            # (VYOMQUANT-API-PRODUCTION-N/-12). Only anything else is an error.
+            if _is_client_disconnect(e):
+                logger.info(f"Connection {conn_id} closed by client: {e}")
+            else:
+                logger.error(f"Connection {conn_id} error: {e}")
         
         finally:
             await self.subscriptions.unregister_connection(conn_id)

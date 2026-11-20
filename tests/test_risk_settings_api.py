@@ -103,6 +103,43 @@ class TestRiskSettingsAPI:
         finally:
             app.dependency_overrides.clear()
 
+    @patch('backend_app.core.risk_manager.invalidate_user_risk_settings_cache')
+    @patch('backend_app.routers.risk._sb')
+    def test_update_risk_settings_invalidates_the_trade_settings_cache(self, mock_sb, mock_invalidate):
+        """PERF-01: a saved limit must be visible to the next trade, not stale for up to
+        RISK_SETTINGS_CACHE_TTL seconds.
+
+        tests/test_perf01_risk_settings_async_cached.py pins this wiring by reading the
+        route's source for the call to ``invalidate_user_risk_settings_cache`` -- which
+        cannot tell a real call from the same name surviving only in a comment, or from a
+        call whose swallowed exception (the route wraps it in a bare ``except Exception``)
+        never actually reaches the cache. This drives the real endpoint and asserts the
+        function was actually invoked, with the request's own user id.
+        """
+        def mock_user():
+            return {"id": "test_user_cache_789", "access_token": "valid_token"}
+
+        mock_sb_instance = Mock()
+        mock_sb_instance.table.return_value.upsert.return_value.execute.return_value = Mock(data=[{"status": "ok"}])
+        mock_sb.side_effect = AsyncMock(return_value=mock_sb_instance)
+        mock_invalidate.return_value = None
+        mock_invalidate.side_effect = AsyncMock(return_value=None)
+
+        payload = {
+            "max_daily_loss": 2500,
+            "max_positions": 25,
+            "max_leverage": 8,
+            "kill_switches": [{"label": "loss", "enabled": False}]
+        }
+
+        app.dependency_overrides[get_current_user] = mock_user
+        try:
+            response = client.put("/api/risk/settings", json=payload)
+            assert response.status_code == 200
+            mock_invalidate.assert_awaited_once_with("test_user_cache_789")
+        finally:
+            app.dependency_overrides.clear()
+
     @patch('backend_app.routers.risk._sb')
     def test_update_risk_settings_validation(self, mock_sb):
         """Verify PUT /api/risk/settings validates input."""

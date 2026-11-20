@@ -5,6 +5,9 @@
  */
 import { get, post, put, del } from '../../apiClient';
 
+/** Five minutes: long enough for a large synchronous backtest, short enough to still fail. */
+export const BACKTEST_EXECUTE_TIMEOUT_MS = 300000;
+
 /**
  * @typedef {Object} StrategyNode
  * @property {string} id
@@ -155,6 +158,8 @@ export const mapBacktestExecutionToUI = (response) => {
     version: response.version ?? null,
     configuration: response.configuration ?? null,
     ignored_fields: Array.isArray(response.ignored_fields) ? response.ignored_fields : [],
+    // The dates the simulation really covered (BT-05); null when the server did not report them.
+    data_coverage: response.data_coverage && typeof response.data_coverage === 'object' ? response.data_coverage : null,
   };
 };
 
@@ -255,6 +260,13 @@ export const strategiesApi = {
    * @returns {Promise<any>} The updated strategy record.
    */
   rename: (id, name) => put(`/api/strategies/${encodeURIComponent(id)}/rename`, { name }),
+
+  /**
+   * Clone a strategy into a new one owned by the caller. Quota-gated server-side
+   * (`check_strategy_quota`), so a refusal is a 403 with the plan's upgrade payload.
+   * @param {string} id
+   */
+  clone: (id) => post(`/api/strategies/${encodeURIComponent(id)}/clone`, {}),
 
   /**
    * Delete a strategy
@@ -492,6 +504,14 @@ export const strategiesApi = {
   pause: (id) => post(`/api/strategies/${id}/pause`),
 
   /**
+   * Resume a paused strategy: its PAUSED deployments continue (same mode and account).
+   * PAUSE-01 — 409 `NOTHING_TO_RESUME` when no deployment is paused.
+   * @param {string} id
+   * @returns {Promise<{status: string, resumed: number}>}
+   */
+  resume: (id) => post(`/api/strategies/${id}/resume`),
+
+  /**
    * Run backtest
    * @param {BacktestPayload} payload
    * @returns {Promise<BacktestResult>}
@@ -555,6 +575,10 @@ export const strategiesApi = {
     post(
       `/api/strategy-operations/strategies/${encodeURIComponent(strategyId)}/backtests/execute`,
       body,
+      // A backtest runs synchronously and a multi-year, short-interval run takes longer than the
+      // client's 30 s default. Giving up early reported "could not be run" while the server went on
+      // to finish (or fail) the run, so the trader saw an error that was not the outcome.
+      { timeout: BACKTEST_EXECUTE_TIMEOUT_MS },
     ),
 
   /**
@@ -589,6 +613,42 @@ export const strategiesApi = {
     const suffix = query.toString();
     return get(`/api/backtests${suffix ? `?${suffix}` : ''}`);
   },
+
+  /**
+   * Delete one saved backtest. `DELETE /api/backtests/{backtest_id}`.
+   *
+   * WHAT THE SERVER DOES, because two of its properties shape how a caller must treat
+   * the answer. `routers/strategy_operations.delete_backtest` →
+   * `BacktestService.delete_backtest`:
+   *
+   *   * the statement is `.delete().eq("id", id).eq("user_id", user.id)`, so the
+   *     ownership predicate IS the authorization — another tenant's row is not matched
+   *     rather than refused (Requirement 20.1);
+   *   * it runs through the SERVICE-ROLE client, which is what makes it work at all:
+   *     migration 074 (MKT-10) took `DELETE` off `authenticated` for
+   *     `strategy_backtests`, so a direct PostgREST delete from the browser would now
+   *     match nothing.
+   *
+   * THE RESPONSE IS ALWAYS `{success: true}` AND MUST NOT BE READ AS "a row was
+   * removed". Requirement 20.2 requires "this backtest is not yours" and "there is no
+   * such backtest" to be indistinguishable, so the handler deliberately does not
+   * forward whether the predicate matched. A caller that treats the body as
+   * confirmation would report success for a row that never existed.
+   *
+   * So the only honest way to know the list changed is to RE-READ it — `listBacktests`
+   * above — which is also what keeps the history showing what the database holds rather
+   * than what the page assumed.
+   *
+   * PATH NOTE: `/api/backtests/{id}`, with no `strategy-operations` alias, matching
+   * `listBacktests`. The route is declared as `/backtests/{backtest_id}` on a router
+   * mounted at `prefix="/api"`; the prefixed spelling resolves to nothing, which is the
+   * mistake that silently 404'd the history read before task 17.2.
+   *
+   * @param {string} backtestId
+   * @returns {Promise<{success: boolean}>}
+   */
+  deleteBacktest: (backtestId) =>
+    del(`/api/backtests/${encodeURIComponent(backtestId)}`),
 
   /**
    * Validate DAG-based strategy

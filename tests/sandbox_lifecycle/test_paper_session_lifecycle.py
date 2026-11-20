@@ -284,7 +284,10 @@ def test_the_paper_session_lifecycle_runs_create_start_running_stop_and_survives
     assert str(started.session["source_strategy_id"]) == STRATEGY
     assert str(started.session["version_id"]) == VERSION
     assert _recorded_types(paper_store) == ["paper_session_started"]
-    assert redis.subscribed == [f"mds:data:{SANDBOX_VENUE}:{SANDBOX_SYMBOL}"], redis.log
+    # PAPER-11: a non-1m session listens on its own timeframe channel.
+    assert redis.subscribed == [
+        f"mds:data:{SANDBOX_VENUE}:{SANDBOX_SYMBOL}:{SANDBOX_TIMEFRAME}"
+    ], redis.log
 
     opening = repo.get_equity_snapshots(paper_store, SANDBOX_USER["id"], session_id=session_id)
     assert [int(row["series_index"]) for row in opening] == [0], opening

@@ -93,6 +93,13 @@ describe('strategiesApi.executeBacktest', () => {
     }
   });
 
+  it('waits longer than the 30 s default, because the run is synchronous', async () => {
+    mockClient.post.mockResolvedValue(executeResponse());
+    await strategiesApi.executeBacktest('s-1', { start_date: 'x', end_date: 'y' });
+    const [, , config] = mockClient.post.mock.calls[0];
+    expect(config?.timeout).toBeGreaterThan(30000);
+  });
+
   it('encodes the strategy id rather than interpolating it raw', async () => {
     mockClient.post.mockResolvedValue(executeResponse());
 

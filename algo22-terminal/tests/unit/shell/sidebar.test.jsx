@@ -73,7 +73,7 @@ describe('Sidebar: the entries come from NAV_GROUPS', () => {
     const links = navLinks();
 
     expect(links).toHaveLength(NAV_ENTRIES.length);
-    expect(links).toHaveLength(10);
+    expect(links).toHaveLength(9);
     expect(links.map((a) => a.getAttribute('data-nav-id'))).toEqual(
       NAV_ENTRIES.map((e) => e.id),
     );
@@ -99,11 +99,10 @@ describe('Sidebar: the entries come from NAV_GROUPS', () => {
     }
   });
 
-  it('surfaces the three routes that had a working route but no entry', () => {
+  it('surfaces the routes that had a working route but no entry', () => {
     renderSidebar();
     const ids = navLinks().map((a) => a.getAttribute('data-nav-id'));
     expect(ids).toContain('live-trading');
-    expect(ids).toContain('portfolio');
     expect(ids).toContain('trades');
   });
 
@@ -146,8 +145,8 @@ describe('Sidebar: active state', () => {
   }
 
   it('marks the canonical route', () => {
-    renderSidebar({ pathname: '/app/portfolio' });
-    expect(currentIds()).toEqual(['portfolio']);
+    renderSidebar({ pathname: '/app/trades' });
+    expect(currentIds()).toEqual(['trades']);
   });
 
   it('marks Backtester on the /app/backtester alias', () => {

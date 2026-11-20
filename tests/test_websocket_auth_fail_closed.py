@@ -47,12 +47,6 @@ class TestWebSocketAuthFailClosed:
         return TestClient(dag_app)
 
     @pytest.fixture
-    def ws_server_client(self):
-        """Create test client for standalone WebSocket server routes."""
-        from backend_app.backend.ws_server import app as ws_server_app
-        return TestClient(ws_server_app)
-    
-    @pytest.fixture
     def valid_token(self):
         """Generate a valid test token."""
         import jwt
@@ -413,46 +407,19 @@ class TestWebSocketAuthFailClosed:
         
         assert exc_info.value.code in (4003, 4001, 1008, 1000)
     
-    def test_ws_server_public_no_token(self, ws_server_client):
-        """Test /ws/public/{channel} in ws_server rejects connection with no token."""
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with ws_server_client.websocket_connect("/ws/public/orders") as websocket:
-                pass
-        
-        assert exc_info.value.code in (4001, 1008, 1000)
-    
-    def test_ws_server_public_invalid_token(self, ws_server_client, invalid_token):
-        """Test /ws/public/{channel} in ws_server rejects connection with invalid token."""
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with ws_server_client.websocket_connect(f"/ws/public/orders?token={invalid_token}") as websocket:
-                pass
-        
-        assert exc_info.value.code in (4001, 1008, 1000)
-    
-    def test_ws_server_tenant_no_token(self, ws_server_client):
-        """Test /ws/{tenant_id} in ws_server rejects connection with no token."""
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with ws_server_client.websocket_connect("/ws/tenant_123") as websocket:
-                pass
-        
-        assert exc_info.value.code in (4001, 1008, 1000)
-    
-    def test_ws_server_tenant_invalid_token(self, ws_server_client, invalid_token):
-        """Test /ws/{tenant_id} in ws_server rejects connection with invalid token."""
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with ws_server_client.websocket_connect(f"/ws/tenant_123?token={invalid_token}") as websocket:
-                pass
-        
-        assert exc_info.value.code in (4001, 1008, 1000)
-    
-    def test_ws_server_tenant_mismatch(self, ws_server_client, different_tenant_token):
-        """Test /ws/{tenant_id} in ws_server rejects connection with different tenant."""
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with ws_server_client.websocket_connect(f"/ws/tenant_123?token={different_tenant_token}") as websocket:
-                pass
-        
-        assert exc_info.value.code in (4003, 4001, 1008, 1000)
-    
+    # test_ws_server_public_no_token, test_ws_server_public_invalid_token,
+    # test_ws_server_tenant_no_token, test_ws_server_tenant_invalid_token and
+    # test_ws_server_tenant_mismatch used to live here, exercising the standalone
+    # ws_server.py service's own /ws/public/{channel} and /ws/{tenant_id} endpoints via
+    # the now-removed ws_server_client fixture. WS-01 (launch-readiness remediation)
+    # confirmed ws_server.py was dead code -- a separately-deployed service with zero
+    # production callers feeding it and a frontend that never pointed at its endpoints
+    # -- and deleted it. These five tests exercised endpoints that no longer exist; the
+    # real-time websocket auth paths this file otherwise covers (ws_telemetry,
+    # ws_ticker, ws_orderbook, ws_candles, ws_user, ws_dashboard, ws_strategy,
+    # ws_signal_trace, ws_pnl, dag_task_websocket, dag_event_loop_websocket) are
+    # untouched and still fully exercised above and below.
+
     def test_ws_telemetry_verification_exception(self, client):
         """Test /ws/telemetry rejects connection when verification throws exception."""
         # task 13.25 retargeted the patched boundary from `_decode_hs256_token` to

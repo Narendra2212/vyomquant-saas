@@ -45,7 +45,7 @@ const spec = (overrides = {}) => {
     },
     {
       id: 'archive',
-      label: 'Archive strategy',
+      label: 'Delete strategy',
       intent: 'destructive',
       separated: true,
       onSelect: () => { calls.archive += 1; },
@@ -94,21 +94,21 @@ describe('OverflowMenu: Requirement 4.3 — the separation is structural', () =>
     // …and the same fact, said in words.
     const group = within(menu()).getByRole('group', { name: SEPARATED_GROUP_LABEL });
     expect(within(group).getByRole('menuitem', { name: 'Deploy live' })).toBeTruthy();
-    expect(within(group).getByRole('menuitem', { name: 'Archive strategy' })).toBeTruthy();
+    expect(within(group).getByRole('menuitem', { name: 'Delete strategy' })).toBeTruthy();
     // The inline entry is NOT in it — otherwise the group would name nothing useful.
     expect(within(group).queryByRole('menuitem', { name: 'Rename' })).toBeNull();
   });
 
   it('renders the separated entries last, whatever order they are declared in', async () => {
     const items = [
-      { id: 'archive', label: 'Archive strategy', separated: true, onSelect: () => {} },
+      { id: 'archive', label: 'Delete strategy', separated: true, onSelect: () => {} },
       { id: 'rename', label: 'Rename', onSelect: () => {} },
     ];
     render(<OverflowMenu label={LABEL} items={items} />);
     await userEvent.setup().click(trigger());
 
     const labels = within(menu()).getAllByRole('menuitem').map((node) => node.textContent);
-    expect(labels).toEqual(['Rename', 'Archive strategy']);
+    expect(labels).toEqual(['Rename', 'Delete strategy']);
   });
 
   it('marks each entry with its declared treatment and drops an unknown one to neutral', async () => {
@@ -122,7 +122,7 @@ describe('OverflowMenu: Requirement 4.3 — the separation is structural', () =>
       within(menu()).getByRole('menuitem', { name }).getAttribute('data-menu-intent');
 
     expect(intentOf('Deploy live')).toBe('live');
-    expect(intentOf('Archive strategy')).toBe('destructive');
+    expect(intentOf('Delete strategy')).toBe('destructive');
     expect(intentOf('Rename')).toBe('neutral');
     // An intent outside the vocabulary is not honoured as a colour.
     expect(intentOf('Weird')).toBe('neutral');
@@ -143,7 +143,7 @@ describe('OverflowMenu: keyboard and focus (Requirement 18.1)', () => {
     render(<OverflowMenu label={LABEL} items={items} />);
     trigger().focus();
     await user.keyboard('{ArrowUp}');
-    expect(document.activeElement.textContent).toBe('Archive strategy');
+    expect(document.activeElement.textContent).toBe('Delete strategy');
   });
 
   it('moves focus with the arrow keys, wrapping at both ends', async () => {
@@ -158,11 +158,11 @@ describe('OverflowMenu: keyboard and focus (Requirement 18.1)', () => {
     // Wrapped past the end, back to the first entry.
     expect(document.activeElement.textContent).toBe('Rename');
     await user.keyboard('{ArrowUp}');
-    expect(document.activeElement.textContent).toBe('Archive strategy');
+    expect(document.activeElement.textContent).toBe('Delete strategy');
     await user.keyboard('{Home}');
     expect(document.activeElement.textContent).toBe('Rename');
     await user.keyboard('{End}');
-    expect(document.activeElement.textContent).toBe('Archive strategy');
+    expect(document.activeElement.textContent).toBe('Delete strategy');
   });
 
   it('closes on Escape and returns focus to the trigger', async () => {
@@ -183,7 +183,7 @@ describe('OverflowMenu: keyboard and focus (Requirement 18.1)', () => {
     render(<OverflowMenu label={LABEL} items={items} />);
 
     await user.click(trigger());
-    await user.click(within(menu()).getByRole('menuitem', { name: 'Archive strategy' }));
+    await user.click(within(menu()).getByRole('menuitem', { name: 'Delete strategy' }));
 
     expect(calls.archive).toBe(1);
     expect(calls.deploy).toBe(0);
@@ -224,7 +224,7 @@ describe('OverflowMenu: Requirement 15.3 — a disabled entry says why', () => {
     render(<OverflowMenu label={LABEL} items={busy} />);
 
     await user.click(trigger());
-    const entry = within(menu()).getByRole('menuitem', { name: /Archive strategy/ });
+    const entry = within(menu()).getByRole('menuitem', { name: /Delete strategy/ });
 
     // `aria-disabled`, not `disabled`: the entry stays in the tab order so the reason can be
     // reached at all.

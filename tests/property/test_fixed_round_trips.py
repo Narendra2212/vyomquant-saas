@@ -126,13 +126,17 @@ A row is "retrieved and then filtered out" exactly when it is in ``rows_retrieve
 not in the response. Two cautions, both pinned by riders below rather than left for the next
 author to discover:
 
-1. ``browse_library`` applies **no server-side range**. It reads every row matching the public
-   filter and slices the page in Python, so with more matching Listings than fit on the page it
-   retrieves rows it then drops - a PAGINATION drop, not an ownership drop.
-   :func:`test_the_catalogue_slices_its_page_in_python_not_in_the_query` pins that exactly (three
-   Listings, ``limit=1`` -> three rows retrieved, one rendered). It costs no extra statement, so
-   P-57 holds either way, but a list-scoping property that compared retrieved rows to rendered
-   rows without allowing for it would report a leak that is not one.
+1. ``browse_library`` applies a **server-side range**: API-08 moved it from reading every row
+   matching the public filter and slicing the page in Python to issuing
+   ``.range(offset, offset+limit-1)`` with ``count="exact"``, so the Persistence_Layer itself
+   returns only the page and the total match count alongside it. :class:`CountingStore` applies
+   that range for real (see :class:`_CountingRangeQuery` below) rather than inheriting
+   ``MatrixStore``'s own ``.range()``, which is a deliberate no-op there - the right default for a
+   tenant-isolation double, where a wider-than-production result set is the safe direction, but
+   the wrong one here, where it would silently go back to measuring the pre-API-08 over-fetch.
+   :func:`test_the_catalogue_slices_its_page_at_the_query_not_in_python` pins the current fact
+   (three Listings, ``limit=1`` -> ONE row retrieved, one rendered, nothing dropped). It still
+   costs no extra statement, so P-57 holds either way.
 2. ``my_strategies`` drops nothing: all three of its statements carry ``user_id = caller`` as a
    predicate, which the property asserts on every example through ``filter_values``. That is the
    "the scoping is in the query" fact, produced by this store, in the shape 33.11 can read.
@@ -179,6 +183,7 @@ from tests.property.test_tenant_isolation_matrix import (
     PROPERTY_SETTINGS,
     U1,
     MatrixStore,
+    _MatrixQuery,
     _matrix_app,
 )
 
@@ -371,19 +376,47 @@ class StatementLog:
         return "\n".join("  " + s.describe() for s in self.statements)
 
 
+class _CountingRangeQuery(_MatrixQuery):
+    """``_MatrixQuery`` with ``.range()`` actually applied, not ignored.
+
+    ``MatrixStore``'s own ``.range()`` is a deliberate no-op - see its own docstring: returning a
+    SUPERSET of the production result set is the LENIENT direction for a tenant-isolation double,
+    the one that makes a missing filter visible rather than silently forgiven. That is backwards
+    for :class:`CountingStore`'s own job: since API-08, ``browse_library`` issues a real
+    ``.range(offset, offset+limit-1)``, and inheriting the no-op would make this store measure the
+    pre-API-08 behaviour (read everything, slice in Python) instead of the one actually shipped.
+
+    ONE override, recording the bound instead of discarding it, so :class:`CountingStore` can
+    slice the matched rows to it after ``MatrixStore._execute`` has applied every other predicate.
+    """
+
+    def __init__(self, table: str, client: "CountingStore") -> None:
+        super().__init__(table, client)
+        #: ``(start, end)`` inclusive, as supabase-py's own ``.range()`` takes it, or ``None`` if
+        #: this statement never called it.
+        self.applied_range: Optional[Tuple[int, int]] = None
+
+    def range(self, start: int, end: int, **_kw: Any) -> "_CountingRangeQuery":
+        self.applied_range = (start, end)
+        return self
+
+
 class CountingStore(MatrixStore):
     """``MatrixStore`` that records every statement. The counting ``FakeDB`` P-57 needs.
 
-    ONE override, on ``_execute``, because that is the one place every statement passes through -
-    ``_Query.execute`` is ``return self.client._execute(self)`` and nothing in the routers reaches
-    the rows any other way. Counting anywhere else would be counting something other than a round
-    trip.
+    TWO overrides. ``_execute`` is the one every statement passes through - ``_Query.execute`` is
+    ``return self.client._execute(self)`` and nothing in the routers reaches the rows any other
+    way; counting anywhere else would be counting something other than a round trip. ``table`` is
+    the second, so that the query it hands back is :class:`_CountingRangeQuery` rather than
+    ``MatrixStore``'s own ``_MatrixQuery`` - the one point this store's assumptions about the
+    database diverge from the tenant-isolation matrix's (see that class's docstring).
 
-    Nothing about ``MatrixStore``'s behaviour changes: the response this returns is the response
-    ``MatrixStore`` produced, unmodified, so an endpoint measured here sees exactly the database
-    the tenant-isolation matrix drives. ``MatrixStore``'s own ``upsert`` path builds its inner
-    statements against ``FakeSupabase._execute`` directly, which is why an upsert of ``n`` payloads
-    counts as the ONE statement the caller issued rather than as ``n``.
+    Everything else about ``MatrixStore``'s behaviour is unchanged: the response this returns is
+    the response ``MatrixStore`` produced, sliced to a called ``.range()`` and otherwise
+    untouched, so an endpoint measured here sees exactly the database the tenant-isolation matrix
+    drives. ``MatrixStore``'s own ``upsert`` path builds its inner statements against
+    ``FakeSupabase._execute`` directly, which is why an upsert of ``n`` payloads counts as the ONE
+    statement the caller issued rather than as ``n``.
 
     ONE store per property run, ``reset`` between examples: the patches in ``_matrix_app`` capture
     the store by closure, so a fresh object per example would not be the object the router reads.
@@ -416,10 +449,24 @@ class CountingStore(MatrixStore):
         self.round_trips = []
         self._sequence = 0
 
+    # -- the one divergence from MatrixStore's own assumptions --------------
+    def table(self, name: str) -> _CountingRangeQuery:
+        if name not in self.TABLES:
+            self.undeclared_tables.append(name)
+            self._declare(name)
+        return _CountingRangeQuery(name, self)
+
     # -- the one boundary ---------------------------------------------------
     def _execute(self, q: Any) -> Any:
         index = len(self.round_trips)
         response = super()._execute(q)
+        applied_range = getattr(q, "applied_range", None)
+        if applied_range is not None and isinstance(getattr(response, "data", None), list):
+            # ``MatrixStore._execute`` already set ``response.count`` to the FULL match count
+            # before any range (``count="exact"``'s own contract: the total, not the page size),
+            # so only ``data`` is sliced here.
+            start, end = applied_range
+            response.data = response.data[start : end + 1]
         data = response.get("data") if isinstance(response, dict) else getattr(
             response, "data", None
         )
@@ -1121,22 +1168,21 @@ def test_round_trip_two_asks_for_the_listing_in_the_same_request() -> None:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def test_the_catalogue_slices_its_page_in_python_not_in_the_query() -> None:
-    """``browse_library`` retrieves every matching Listing and slices the page in Python.
+def test_the_catalogue_slices_its_page_at_the_query_not_in_python() -> None:
+    """``browse_library`` retrieves only the page it renders; API-08 removed the over-fetch.
 
-    PINNED, not asserted as desirable. ``design.md``'s table describes the catalogue's first
-    statement as ``.range(offset, offset+limit-1)`` with ``count="exact"``; the handler as it
-    stands applies neither, reading all matching rows and taking ``all_rows[offset:offset+limit]``.
-    That does NOT cost an extra statement - the count stays 2, which is why P-57 holds - but it
-    means a row can be retrieved and then dropped, and task 33.11's "no list endpoint retrieved a
-    row it then filtered out" has to know the difference between:
+    PINNED, not re-derived: this used to describe the opposite fact (read every matching row,
+    slice ``all_rows[offset:offset+limit]`` in Python), which is what commit API-08 fixed by
+    switching the handler to issue ``.range(offset, offset+limit-1)`` with ``count="exact"``, so
+    the Persistence_Layer returns only the page and the total count alongside it. That does NOT
+    cost an extra statement - the count stays 2, which is why P-57 holds either way - but it means
+    the retrieved-versus-rendered comparison task 33.11 needs ("no list endpoint retrieved a row
+    it then filtered out") can now be made unconditionally for the catalogue too, rather than
+    needing the PAGINATION-drop exemption this test used to document.
 
-    * a PAGINATION drop, which this is, and which is not an ownership question at all; and
-    * an OWNERSHIP drop, which would be Requirement 21.5's subject.
-
-    Three Listings at ``limit=1``: three rows retrieved, one rendered, two dropped in Python, and
-    the alias read carries only the one author whose row survived the slice. Pinned exactly, so
-    closing it turns this test red and points at the handler rather than at P-57.
+    Three Listings at ``limit=1``: one row retrieved, one rendered, none dropped, and the alias
+    read carries only that one row's author. Pinned exactly, so a regression back to the Python
+    slice turns this test red and points at the handler rather than at P-57.
     """
     store = CountingStore()
     dataset = Dataset(
@@ -1152,24 +1198,22 @@ def test_the_catalogue_slices_its_page_in_python_not_in_the_query() -> None:
     assert len(body["items"]) == 1, body
     assert body["total"] == 3
 
-    # The count is unchanged by the slice - which is the P-57-relevant half.
+    # The count is unchanged by the range - which is the P-57-relevant half.
     assert window.tables() == CATALOGUE_TABLES, window.describe()
 
     retrieved = window.rows_retrieved("library_strategies")
-    assert len(retrieved) == 3, (
-        f"the catalogue read returned {len(retrieved)} row(s) for a page of 1; if it has grown a "
-        f"server-side range, this pinned observation is out of date and task 33.11's "
-        f"retrieved-versus-rendered comparison can be made unconditional. "
+    assert len(retrieved) == 1, (
+        f"the catalogue read returned {len(retrieved)} row(s) for a page of 1; API-08's "
+        f"server-side range means exactly the rendered row should ever be retrieved. "
         f"Statements:\n{window.describe()}"
     )
     rendered = {item["listing_id"] for item in body["items"]}
-    dropped = {row["id"] for row in retrieved} - rendered
-    assert len(dropped) == 2, (
-        f"expected exactly two rows retrieved and dropped by the Python page slice; got "
-        f"{sorted(dropped)}"
+    assert {row["id"] for row in retrieved} == rendered, (
+        "the one row retrieved should be the one row rendered; nothing should be retrieved and "
+        "then dropped once pagination happens at the query"
     )
 
-    # The alias read follows the SLICE, not the result set: one author, not three.
+    # The alias read follows the retrieved page: one author, not three.
     alias = window.on("profiles")[0]
     _operator, _column, value = alias.filters[0]
     assert len(set(value)) == 1, (

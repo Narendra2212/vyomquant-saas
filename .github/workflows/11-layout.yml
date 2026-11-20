@@ -1,0 +1,136 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# 11 Layout — T03's browser-measured layout sweep
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# WHY A SEPARATE WORKFLOW AND NOT A STEP IN `01 PR Check`
+# ----------------------------------------------------------------------------
+# This is the repository's first job that needs a BROWSER. A cold
+# `playwright install` downloads a chromium build, which is the expensive part, so it is
+# cached on the lockfile's resolved Playwright version. Putting that inside `01 PR Check`
+# would add the download to the critical path of a workflow whose conclusion gates
+# `03 Deploy` — and `01 PR Check` deliberately carries no `paths:` filter, so every
+# backend-only pull request would pay for a browser it never starts. Here the filter is on
+# the trigger, which is safe precisely BECAUSE this workflow gates nothing.
+#
+# `03 Deploy`'s pre-deployment gate reads `01 PR Check`'s conclusion, not this one. That is
+# intentional for now: a layout regression should not be able to block shipping a backend
+# fix. Promote it into the gate once it has a track record of not flaking.
+#
+# WHAT IT MEASURES, AND WHY IT CANNOT BE A UNIT TEST
+# ----------------------------------------------------------------------------
+# jsdom performs no layout: every `getBoundingClientRect()` is zeroes and
+# `getComputedStyle` resolves no percentages, so a positional assertion there passes
+# whether or not the measurement ran. `tests/unit/pages/strategyBuilder.layout.test.js`
+# pins LAYOUT-01 as a source rule (no `vh` in a shell-internal module) and says in its own
+# docstring that the geometry belongs in a Playwright sweep. This runs that sweep, at three
+# viewports, in a real browser.
+#
+# PROVEN TO FAIL ON THE DEFECT, which is the only reason to trust a passing run:
+# reintroducing `height: '100vh'` on the builder root made
+# `1280x720: the builder column fills <main> exactly` fail with
+# "off by 11.0px … which is LAYOUT-01". Restoring `flex: 1` + `minHeight: 0` returned all
+# nine to green.
+
+name: 11 Layout
+
+on:
+  pull_request:
+    paths:
+      - 'algo22-terminal/**'
+      - '.github/workflows/11-layout.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'algo22-terminal/**'
+      - '.github/workflows/11-layout.yml'
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: layout-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  layout:
+    name: Layout sweep (real browser, three viewports)
+    # PINNED, and not to be changed to `ubuntu-latest` without re-measuring.
+    #
+    # `ubuntu-latest` now resolves to Ubuntu 26.04, which Playwright 1.59.1 does not
+    # support. The first run of this workflow failed in 19 seconds with:
+    #
+    #     BEWARE: your OS is not officially supported by Playwright; installing
+    #     dependencies for ubuntu26.04-x64 as a fallback.
+    #     Cannot install dependencies for ubuntu26.04-x64 with Playwright 1.59.1!
+    #     ERROR: Playwright does not support chromium on ubuntu26.04-x64
+    #
+    # `--with-deps` is what needs the supported OS: it installs the system libraries
+    # chromium links against, and Playwright ships that list per distribution.
+    #
+    # Pinning the RUNNER rather than bumping Playwright is deliberate. Chasing the runner
+    # with a dependency bump is how #296-#302 turned main red for a day across five
+    # workflows, and a browser-engine major is exactly the kind of change that deserves its
+    # own PR with its own measurement rather than riding along in a CI-wiring commit.
+    # Revisit when Playwright supports 26.04.
+    runs-on: ubuntu-24.04
+    # Measured locally at 49s for nine specs against a warm dev server. CI additionally pays
+    # `npm ci`, a possible browser download, and the cold Vite route-graph compile that the
+    # first navigation triggers — the specs allow 150s for that one navigation. 20 minutes
+    # leaves room for all of it while still killing a genuine hang well short of the
+    # 360-minute default.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: algo22-terminal
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: algo22-terminal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The cache key is the RESOLVED version from the lockfile, not the `^1.59.1` range in
+      # package.json: a range would keep serving a stale browser after a bump, and the
+      # browser build is tied to the Playwright version that drives it.
+      - name: Resolve the Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Playwright browser
+        id: browser-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-chromium-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      # Chromium only. The `layout` project is chromium-only by design (see
+      # `playwright.config.ts`), so installing firefox and webkit would triple the download
+      # for browsers nothing here starts. `--with-deps` is still needed on a cache hit:
+      # it installs the system libraries chromium links against, which live outside the
+      # cached directory.
+      - name: Install chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the layout sweep
+        run: npx playwright test --project=layout
+
+      # Only on failure: the report is the diagnostic, and uploading it on every green run
+      # is storage for nothing.
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-layout-report
+          path: algo22-terminal/playwright-report/
+          retention-days: 7

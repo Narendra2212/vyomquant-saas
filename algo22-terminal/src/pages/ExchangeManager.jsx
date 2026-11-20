@@ -19,19 +19,27 @@
  * place a typed secret is held is the controlled `<input>` the trader is filling in, behind a
  * reveal control they operate themselves.
  *
- * **The one path that can put a typed secret back on screen is the server's own error
- * detail, and it is recorded here rather than patched.** `POST /api/exchanges/test` raises
- * `HTTPException(400, f"Connection failed: {str(e)}")` and `POST /api/exchanges/keys` raises
- * `f"Exchange connection verification failed: {str(e)}"` (`routers/exchange.py:519`, `:161`),
- * where `e` is a ccxt exception raised while connecting with the credential the trader just
- * typed — and ccxt authentication errors routinely quote the request they failed on.
- * `sanitizeErrorMessage` below returns an unmatched `detail` verbatim, so such a string would
- * reach the alert. It is the trader's own key on the trader's own screen rather than a
- * cross-account leak, but it can travel into a screenshot or a support ticket. The fix is a
- * server-side one and Requirement 16.7 puts `backend_app/` outside this spec, so this is a
- * finding, not a silent client-side redaction — and `sanitizeErrorMessage` is carried across
- * byte-identical, because `exchange_manager_phase6.test.jsx` case 7 is what pins its
- * traceback, SQL and raw-exception branches.
+ * **The one path that could put a typed secret back on screen was the server's own error
+ * detail. That is now FIXED SERVER-SIDE and this note records the resolution.** The finding
+ * this header used to report was that `POST /api/exchanges/test` raised
+ * `HTTPException(400, f"Connection failed: {str(e)}")` and `POST /api/exchanges/keys` raised
+ * `f"Exchange connection verification failed: {str(e)}"`, where `e` is a ccxt exception
+ * raised while connecting with the credential the trader had just typed — and ccxt
+ * authentication errors routinely quote the request they failed on. `sanitizeErrorMessage`
+ * returns an unmatched string `detail` verbatim, so such a string reached the alert.
+ *
+ * `routers/exchange.py` no longer interpolates an exception into any response. It classifies
+ * the failure against ccxt's exception hierarchy and answers a structured
+ * `{error, message}` detail whose message is this repository's own copy; the provider text
+ * goes to the operator log with a traceback instead. See the "CREDENTIAL-VERIFICATION
+ * REFUSALS (SC-27)" section there.
+ *
+ * Two consequences for this file. `sanitizeErrorMessage` gained an OBJECT branch, because a
+ * structured detail is not a string and every such refusal was otherwise collapsing into the
+ * generic fallback — the trader lost the actionable sentence the server had written. Its
+ * string branch is still carried across byte-identical, because
+ * `exchange_manager_phase6.test.jsx` case 7 is what pins the traceback, SQL and
+ * raw-exception branches and it supplies a string.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THE CONNECTION STATE WAS NOT A MEASUREMENT, AND NEITHER WAS THE HEALTH
@@ -298,14 +306,15 @@
  *      "which token means this state" on `semantic.js` and nowhere else. `clock_sync`'s three
  *      server values (`ok`, `synchronized`, `assumed_ok`) are not in the table either, so the
  *      probe result is quoted as the server's own word with no hue at all.
- *   4. **The native `confirm()` on disconnect stays.** `ds/ConfirmDialog` and
- *      `ds/CommandButton`'s `confirm` prop are sitting right there and this is the most
- *      valuable thing on the page this commit is not taking: swapping the dialog changes what
- *      a destructive action DOES on the way to doing it, and task 7.3 made the same call for
- *      `TwoFA.jsx`'s *Reset Authenticator* so that `no-native-dialogs.budget.js` is not
- *      touched from a typography commit. The confirmation itself is deliberate friction on an
- *      irreversible action (Requirement 16.5) and is carried across with its wording intact,
- *      as is the bot-count pre-check that refuses the delete before asking.
+ *   4. **RESOLVED (FE-11).** The native `confirm()` on disconnect is gone. It is replaced by
+ *      `ds/ConfirmDialog`, in the same opener/confirm split `pages/StrategyDetail.jsx`'s
+ *      deploy/delete/restore-version dialogs already use: `handleDeleteSaved` now only opens
+ *      `disconnectDialog` state, and only the dialog's own explicit confirm reaches
+ *      `handleConfirmDisconnect`, which is what actually calls `api.exchange.delete`. The
+ *      confirmation itself is still the same deliberate friction on an irreversible action
+ *      (Requirement 16.5), its wording carried across into the dialog's `description`, and the
+ *      bot-count pre-check still refuses the delete before the dialog is ever opened. See
+ *      `tests/unit/guards/no-native-dialogs.budget.js`, whose entry for this file is now `0`.
  *   5. **Read failures and write failures translate differently, on purpose.** Every read
  *      goes through `ds/Panel`'s `error` arm and therefore through `design/errorCopy.js`'s
  *      `translateError`. Every WRITE keeps this page's own `sanitizeErrorMessage`, which is
@@ -359,6 +368,9 @@ import {
 
 import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
+import { ConfirmDialog } from '../components/ds/ConfirmDialog';
+import { MfaStepUpDialog } from '../components/MfaStepUpDialog';
+import { isMfaStepUpRequired } from '../lib/mfaStepUp';
 import { ExchangeStatus } from '../components/ds/ExchangeStatus';
 import { Field } from '../components/ds/Field';
 import { Metric, NotAvailableMarker } from '../components/ds/Metric';
@@ -369,6 +381,7 @@ import { api } from '../api';
 import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from '../design/pageFields';
 import { available, fromNullable, unavailable } from '../design/reported';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import { REFRESH } from '../hooks/useAutoRefresh';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The declaration, indexed once
@@ -427,16 +440,111 @@ const Marker = ({ field, reason }) => (
  * vocabulary for (Requirement 4.4 finding 5). Its remaining `return detail` is the exposure
  * path this file's header reports.
  */
+/*
+ * MFA-STEPUP-01: this sentence is now the FALLBACK, not the workflow.
+ *
+ * It used to be the whole answer to an AAL2 refusal: a trader who had filled in an API key
+ * and pressed Save was told to leave the page, verify somewhere else, come back and retype
+ * everything. `MfaStepUpDialog` runs that challenge in place instead, and this copy is left
+ * for the one case the dialog cannot handle — a refusal whose shape says MFA but which
+ * arrives from a path with no step-up wired, so the trader still needs somewhere to go.
+ *
+ * The *cancelled* case has its own sentence below. Collapsing the two would tell someone who
+ * deliberately dismissed the dialog to go and do the thing they just declined.
+ */
+const MFA_REQUIRED_MESSAGE =
+  "Two-factor authentication is required to save or remove exchange keys. " +
+  "Open Security → Two-Factor Authentication (/app/2fa), set up or confirm your " +
+  "authenticator code, then return here and save again. Nothing was stored.";
+
+/** Shown when the trader dismisses the step-up dialog rather than completing it. */
+const MFA_CANCELLED_MESSAGE =
+  "Verification was cancelled, so nothing was changed. Your details are still on the form — "
+  + "save again when you are ready to confirm with your authenticator.";
+
+/*
+ * `isMfaStepUpRequired` now lives in `lib/mfaStepUp.js`, imported at the top of this file.
+ *
+ * It moved for the reason its own comment here used to give: it was about to become two
+ * copies of the same predicate, because `pages/Billing.jsx` needs it for
+ * `POST /api/billing/resume`, which carries the same `require_aal2` dependency these
+ * exchange-key writes do. Two copies on an authentication boundary is how one page comes to
+ * recognise a refusal the other does not. Nothing about the predicate changed.
+ */
+
 function sanitizeErrorMessage(err, fallback = "An error occurred. Please try again.") {
   if (!err) return fallback;
   if (err.name === "AbortError" || err.name === "CanceledError") return null;
 
-  const status = err?.response?.status;
+  /*
+   * EXCH-SAVE-01. READ THE ERROR WHERE `apiClient` ACTUALLY PUTS IT.
+   *
+   * Every call on this page goes through `apiClient`'s `post`/`get`/`del`, whose response
+   * interceptor rejects with an `ApiError` carrying `status` and `data` as OWN properties
+   * (`apiClient.js` `class ApiError`). It has no `.response`. This function read only the
+   * axios-native `err.response.status` / `err.response.data.detail`, so against a real
+   * request every branch below was dead and every failure on this page — a 403, a 429, and
+   * every structured `{error, message}` refusal `routers/exchange.py` takes care to write —
+   * collapsed into the generic `fallback`. That is how a trader whose save was refused for
+   * want of two-factor authentication was shown only "Failed to save exchange keys." with
+   * nothing to act on. `err.status`/`err.data` are read first; the axios shape stays as the
+   * second source because this page's tests (and any future caller using axios directly)
+   * reject with it.
+   * Regression: tests/unit/exchange_manager_error_shape.test.jsx
+   */
+  const status = err?.status ?? err?.response?.status;
+  const detail = err?.data?.detail ?? err?.response?.data?.detail;
+
   if (status === 401) return "Session expired. Please log in again.";
-  if (status === 403) return "Access denied. Insufficient permissions.";
+  if (status === 403) {
+    // `require_aal2` (core/dependencies.py) answers 403 with a string naming two-factor
+    // authentication. That refusal is a step the trader can complete, not a permission they
+    // lack, so it gets its own instruction instead of "Access denied".
+    //
+    // MFA-STEPUP-01: the write handlers intercept this case BEFORE calling here and open
+    // `MfaStepUpDialog` instead, so on those paths this branch is not reached. It stays as
+    // the honest fallback for any other caller — returning "Access denied" for a refusal the
+    // trader can actually clear would be the original defect in a new place.
+    if (isMfaStepUpRequired(err)) {
+      return MFA_REQUIRED_MESSAGE;
+    }
+    return "Access denied. Insufficient permissions.";
+  }
   if (status === 429) return "Exchange rate limit reached. Please try again shortly.";
 
-  const detail = err?.response?.data?.detail;
+  /*
+   * The server's STRUCTURED refusal: `detail` is `{error, message}` rather than a string.
+   * `routers/exchange.py` now answers this shape for every credential-verification,
+   * storage, disconnect and schema failure (SC-27), and `core/schemas.py`'s
+   * `create_api_error_response` passes a dict `detail` through unchanged, so it arrives
+   * here as an object. Without this branch every one of those refusals fell past the
+   * string branch below to the generic `fallback`, which is how the trader lost the
+   * actionable sentence the server took care to write ("check the API key for typos",
+   * "enable read access on the key", "the venue is rate-limiting us").
+   *
+   * The message is composed server-side out of this repository's own copy and carries no
+   * provider or database text — that is the point of the server-side fix, and it is why
+   * this returns it as-is. The internal-leak guard is still applied, because defence in
+   * depth here costs three lines and the alternative is trusting every future `detail`
+   * dict in the application.
+   *
+   * Placed BEFORE the string branch, which is carried across byte-identical:
+   * `exchange_manager_phase6.test.jsx` case 7 pins its traceback / SQL / raw-exception
+   * behaviour and feeds it a string, so that case never reaches this branch.
+   */
+  if (detail && typeof detail === "object" && typeof detail.message === "string") {
+    const message = detail.message;
+    if (
+      message.includes("Traceback") ||
+      message.includes("SELECT") ||
+      message.includes("TypeError") ||
+      message.includes("500 Internal")
+    ) {
+      return "Exchange service temporarily unavailable. Please try again.";
+    }
+    return message;
+  }
+
   if (typeof detail === "string") {
     // Check for internal stack traces, DB errors, or raw exceptions
     if (detail.includes("Traceback") || detail.includes("SELECT") || detail.includes("TypeError") || detail.includes("500 Internal")) {
@@ -497,6 +605,46 @@ const venueLabel = (venue) =>
  * Every figure on it goes through `rowField`, so a column the response did not carry renders
  * the marker with its declared reason rather than a constant.
  */
+/*
+ * EXCH-STATE-01. The credential's RECORDED verdict, as the server stores it
+ * (`exchange_keys.validation_status` / `last_validated_at` / `can_trade`, written by the save
+ * and by the refresh probe). Spellings mirror `dashboard_aggregation_service`'s valid/invalid
+ * sets so this page and the dashboard read one vocabulary. Anything else — including no
+ * verdict at all — passes nothing, and `ds/ExchangeStatus` keeps saying "not reported".
+ */
+const VERDICT_VALID = new Set(['valid', 'validated', 'verified', 'active', 'ok']);
+const VERDICT_INVALID = new Set([
+  'revoked', 'invalid', 'expired', 'failed', 'error', 'unauthorized', 'denied', 'disabled',
+  'inactive', 'unreadable',
+]);
+const LAST_VERIFIED_UNRECORDED_REASON =
+  'No check of this key has been recorded yet. Use the refresh button to verify it with the '
+  + 'exchange now.';
+
+function credentialVerdict(row) {
+  const raw = typeof row?.validation_status === 'string'
+    ? row.validation_status.trim().toLowerCase()
+    : '';
+  // EXCH-STATE-02: the venue accepted the key but reports it can withdraw funds. Recorded by
+  // the refresh probe; such a key cannot start a live bot, so it reads as Blocked.
+  if (raw === 'withdraw_enabled') {
+    return { connectionState: 'blocked', canTrade: false };
+  }
+  if (VERDICT_VALID.has(raw)) {
+    return { connectionState: 'connected', canTrade: row?.can_trade ?? null };
+  }
+  if (VERDICT_INVALID.has(raw)) {
+    return { connectionState: 'rejected', canTrade: false };
+  }
+  return { connectionState: undefined, canTrade: undefined };
+}
+
+const formatDateTime = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleString();
+};
+
 function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
   const venue = rowField(row, FIELD.connectionName);
   const maskedKey = rowField(row, FIELD.maskedApiKey);
@@ -508,6 +656,8 @@ function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
     : connectedAt;
 
   const name = venue.available ? String(venue.value) : String(row?.exchange_id ?? '');
+  const verdict = credentialVerdict(row);
+  const lastVerified = formatDateTime(row?.last_validated_at);
 
   return (
     <div className="flex min-w-0 flex-col gap-4 rounded-lg border border-line-default bg-surface-raised p-4">
@@ -519,7 +669,12 @@ function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
             reported" and the latency marker with its reason — which is the truth about a
             stored credential nobody has probed. */}
         {venue.available ? (
-          <ExchangeStatus exchange={name} className="min-w-0 flex-1" />
+          <ExchangeStatus
+            exchange={name}
+            connectionState={verdict.connectionState}
+            canTrade={verdict.canTrade}
+            className="min-w-0 flex-1"
+          />
         ) : (
           <Marker field={FIELD.connectionName} reason={venue.reason} />
         )}
@@ -593,6 +748,17 @@ function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
           format="raw"
           unavailable
           unavailableReason={FIELD.connectionHealth.reason}
+        />
+        {/* EXCH-STATE-01: when the exchange last accepted (or rejected) this key — the
+            timestamp that qualifies the status badge above, so "Connected" is always read
+            as "verified at this time", never as a live heartbeat. */}
+        <Metric
+          label="Last verified"
+          value={lastVerified}
+          tier={3}
+          format="raw"
+          unavailable={lastVerified === null}
+          unavailableReason={LAST_VERIFIED_UNRECORDED_REASON}
         />
       </div>
 
@@ -739,6 +905,27 @@ export default function ExchangeManager() {
   */
   const [removedIds, setRemovedIds] = useState([]);
 
+  // FE-11: the disconnect confirmation's data, or `null` while no dialog is open — the same
+  // opener/confirm split `pages/StrategyDetail.jsx`'s deploy/delete/restore-version dialogs
+  // use. `handleDeleteSaved` only sets this; only `ds/ConfirmDialog`'s own explicit confirm
+  // reaches `handleConfirmDisconnect`, which is what actually calls `api.exchange.delete`.
+  const [disconnectDialog, setDisconnectDialog] = useState(null);
+
+  /*
+    MFA-STEPUP-01. The pending AAL2 step-up: `{ label, operation }` or `null`.
+    `operation` is the thunk to re-run once the session actually holds `aal2`.
+
+    Held as ONE piece of state rather than an `open` flag beside a separate callback, so the
+    dialog and the thing it is gating cannot get out of step — there is no state in which the
+    dialog is open with nothing to retry, or a retry is armed with no dialog to authorise it.
+
+    It never coexists with `disconnectDialog`: `overlayRegistry.requestOverlay` THROWS on a
+    second concurrent overlay in development, and `handleConfirmDisconnect` clears the
+    confirmation before its request goes out, so a 403 always arrives with the confirm dialog
+    already closed. `exchange_manager_mfa_stepup.test.jsx` pins that ordering.
+  */
+  const [stepUp, setStepUp] = useState(null);
+
   const selectedExchangeId = selectedExchange?.id ?? null;
   const venueListRef = useRef(null);
 
@@ -755,7 +942,7 @@ export default function ExchangeManager() {
   );
 
   const supported = usePanelState(readSupported, { deps: [] });
-  const connections = usePanelState(readConnections, { deps: [] });
+  const connections = usePanelState(readConnections, { deps: [], intervalMs: REFRESH.ACCOUNT });
   const schema = usePanelState(readSchema, {
     deps: [selectedExchangeId],
     enabled: selectedExchangeId !== null,
@@ -924,6 +1111,10 @@ export default function ExchangeManager() {
         secret_key: credentialValues.secret_key,
         password: credentialValues.password,
         uid: credentialValues.uid,
+        // EXCH-SAVE-01: the "Testnet / Sandbox Mode" checkbox was rendered and then never
+        // sent, so Test Connection and Save both silently used PRODUCTION while the form
+        // said testnet. Sent on both calls so the test proves the environment the save stores.
+        sandbox: credentialValues.sandbox === true,
       });
       setNotice({
         severity: 'info',
@@ -954,6 +1145,9 @@ export default function ExchangeManager() {
         password: credentialValues.password,
         uid: credentialValues.uid,
         label: credentialValues.label,
+        // EXCH-SAVE-01 / EXCH-06: persisted as `exchange_keys.sandbox`, which decides whether
+        // orders route to the venue's testnet or to live. See handleTestConnection.
+        sandbox: credentialValues.sandbox === true,
       });
       setNotice({ severity: 'info', message: 'Exchange keys encrypted and stored securely.' });
 
@@ -963,6 +1157,23 @@ export default function ExchangeManager() {
 
       refetchConnections();
     } catch (err) {
+      /*
+        MFA-STEPUP-01. The refusal a trader can clear is handled here instead of being
+        rendered as a sentence telling them to go somewhere else.
+
+        The form is deliberately NOT cleared on this path — the success branch above clears
+        `credentialValues` and the selection, and doing that here too would make the retry
+        submit an empty body. The whole point is that the key the trader just typed survives
+        the challenge.
+
+        `handleSaveKey` itself is the retry thunk. Safe to re-enter: `finally` below has
+        already released `isSaving` by the time the dialog can resolve, so the guard at the
+        top of this function does not refuse the second attempt.
+      */
+      if (isMfaStepUpRequired(err)) {
+        setStepUp({ label: 'connect this exchange', operation: handleSaveKey });
+        return;
+      }
       const msg = sanitizeErrorMessage(err, "Failed to save exchange keys.");
       if (msg) setNotice({ severity: 'error', message: msg });
     } finally {
@@ -970,38 +1181,68 @@ export default function ExchangeManager() {
     }
   };
 
-  const handleDeleteSaved = async (exchangeId, exchangeName) => {
+  const handleDeleteSaved = (exchangeId, exchangeName) => {
     if (processingById[exchangeId]) return;
 
     const exchange = connectionRows.find((e) => e.exchange_id === exchangeId);
     if (exchange && exchange.bot_count > 0) {
       setNotice({
         severity: 'error',
-        message: `Cannot delete: ${exchange.bot_count} active bot(s) running. Stop bots first.`,
+        message: `Cannot delete: ${exchange.bot_count} active strategy deployment(s) running. `
+          + "Stop them first.",
       });
       return;
     }
 
     /*
-      Requirement 16.5 and 4.4 finding 4: the confirmation is deliberate friction on an
-      irreversible action and is carried across with its wording intact. It is still the
-      native dialog, which is what keeps `no-native-dialogs.budget.js` out of this commit.
+      FE-11 (was Requirement 16.5 / 4.4 finding 4): the confirmation is still deliberate
+      friction on an irreversible action, now rendered as `ds/ConfirmDialog` instead of the
+      native `confirm()` that used to guard this. This only opens the dialog; nothing below
+      it can run before an explicit confirm — see `handleConfirmDisconnect`.
     */
-    if (!confirm(`Are you sure you want to disconnect ${String(exchangeName ?? exchangeId).toUpperCase()}? This action cannot be undone.`)) {
-      return;
-    }
+    setDisconnectDialog({ exchangeId, exchangeName });
+  };
 
+  /*
+    MFA-STEPUP-01: the disconnect WORK, split out from the confirmation.
+
+    `handleConfirmDisconnect` reads `disconnectDialog` and then clears it, so it cannot serve
+    as its own retry — by the time a step-up completes there is no dialog state left to read
+    the id from. This takes the id as an argument, which makes it callable twice: once from
+    the confirmation, once from the step-up.
+
+    The confirmation is NOT re-asked on the retry. The trader already confirmed the
+    irreversible action; the challenge that followed was about proving who they are, not about
+    whether they meant it, and asking again would read as the first confirm not having counted.
+  */
+  const disconnectExchange = async (exchangeId) => {
     setProcessingById((p) => ({ ...p, [exchangeId]: true }));
     try {
       await api.exchange.delete(exchangeId);
       setRemovedIds((ids) => (ids.includes(exchangeId) ? ids : [...ids, exchangeId]));
       setNotice({ severity: 'info', message: 'Exchange connection removed.' });
     } catch (err) {
+      if (isMfaStepUpRequired(err)) {
+        setStepUp({
+          label: 'remove this exchange connection',
+          operation: () => disconnectExchange(exchangeId),
+        });
+        return;
+      }
       const msg = sanitizeErrorMessage(err, "Failed to delete exchange connection.");
       if (msg) setNotice({ severity: 'error', message: msg });
     } finally {
       setProcessingById((p) => ({ ...p, [exchangeId]: false }));
     }
+  };
+
+  const handleConfirmDisconnect = async () => {
+    if (!disconnectDialog) return;
+    const { exchangeId } = disconnectDialog;
+    // Cleared BEFORE the request, which is also what keeps the step-up dialog from colliding
+    // with this one in the registry. See the note on `stepUp`.
+    setDisconnectDialog(null);
+    await disconnectExchange(exchangeId);
   };
 
   const handleTestStoredConnection = async (exchangeId) => {
@@ -1026,6 +1267,9 @@ export default function ExchangeManager() {
       const msg = sanitizeErrorMessage(err, "Stored connection test failed.");
       if (msg) setNotice({ severity: 'error', message: msg });
     } finally {
+      // EXCH-STATE-01: the probe's verdict is now recorded server-side (verified, or invalid
+      // when the exchange rejected the key), so re-read the list for the card to show it.
+      refetchConnections();
       setProcessingById((p) => ({ ...p, [exchangeId]: false }));
     }
   };
@@ -1403,6 +1647,50 @@ export default function ExchangeManager() {
         </Panel>
       </div>
 
+      {/* FE-11: replaces the native `confirm()` that used to guard this disconnect, in the
+          same pattern `pages/StrategyDetail.jsx`'s delete dialog already uses. */}
+      <ConfirmDialog
+        open={disconnectDialog !== null}
+        onCancel={() => setDisconnectDialog(null)}
+        onConfirm={handleConfirmDisconnect}
+        title="Disconnect exchange"
+        intent="destructive"
+        description="This action cannot be undone."
+        review={[
+          {
+            label: "Exchange",
+            value: disconnectDialog
+              ? String(disconnectDialog.exchangeName ?? disconnectDialog.exchangeId).toUpperCase()
+              : null,
+          },
+        ]}
+        confirmLabel="Disconnect"
+        cancelLabel="Cancel"
+      />
+
+      {/*
+        MFA-STEPUP-01. The AAL2 step-up, rendered as a sibling of the confirmation rather
+        than inside either write handler, so one dialog serves every guarded operation on
+        this page and neither handler owns overlay state.
+
+        `onVerified` reads the thunk BEFORE clearing `stepUp`, then runs it. Clearing first
+        and reading after would hand `undefined` to the retry — the operation would be
+        silently dropped after a successful challenge, which is the most expensive way this
+        feature could fail: the trader verifies, the dialog closes, and nothing happens.
+      */}
+      <MfaStepUpDialog
+        open={stepUp !== null}
+        operationLabel={stepUp?.label}
+        onCancel={() => {
+          setStepUp(null);
+          setNotice({ severity: 'guidance', message: MFA_CANCELLED_MESSAGE });
+        }}
+        onVerified={() => {
+          const operation = stepUp?.operation;
+          setStepUp(null);
+          if (typeof operation === 'function') operation();
+        }}
+      />
     </div>
   );
 }

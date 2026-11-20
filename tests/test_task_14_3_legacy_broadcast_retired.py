@@ -33,11 +33,28 @@ WHAT THIS FILE HOLDS IN PLACE
    pass a naive absence test and break every legacy consumer.
 
 4. **The channel itself is untouched.** ``ChannelType.SIGNAL_TRACE``, its
-   ``CHANNEL_EVENTS`` vocabulary, ``ws_event_stream.publish_signal_trace``,
-   ``EventPublisher.publish_signal_trace`` and ``ws_server.CHANNELS`` are all asserted
-   still present and still pointed at the same channel. 14.3 retires the channel for one
-   producer's traffic; deleting the channel would break consumers this spec never
-   surveyed, which is why the task says "leave that channel in place … unchanged".
+   ``CHANNEL_EVENTS`` vocabulary, ``ws_event_stream.publish_signal_trace`` and
+   ``EventPublisher.publish_signal_trace`` are all asserted still present and still
+   pointed at the same channel. 14.3 retired the channel for one producer's traffic
+   only, on the stated reasoning that deleting it outright might break a consumer this
+   spec never surveyed.
+
+   WS-01 (launch-readiness remediation) did that survey, for the half of "any other
+   consumer" that was ever actually DEPLOYED and reachable: the dedicated ``ws_server.py``
+   service (its own Dockerfile, its own ECS task/ALB target group) that would have
+   fanned ``EventPublisher``'s Redis publish back out to a real client. Confirmed dead
+   -- zero production callers of ``EventPublisher``'s own publish methods, a frontend
+   websocket client that never pointed at ``ws_server.py``'s endpoints, and this
+   codebase's own architecture docs recording ``ws_server.py`` as unreachable through
+   the real deployment's public URL. ``ws_server.py``, its Dockerfile, and the one test
+   that exercised it specifically (in test_websocket_auth_fail_closed.py) were deleted
+   on that finding; the terraform resources that would have run it as a service are
+   left alone pending confirmation no live AWS traffic depends on them (a fact no code
+   search can settle). ``event_publisher.py`` itself is kept: it has no production
+   caller either, but costs nothing left in place (no deployed service, no
+   infrastructure of its own) and this suite still uses it as the mock/tripwire target
+   proving ``DAGEventLoop`` never calls back into it -- deleting it would have made
+   that specific regression unverifiable rather than making anything safer.
 
 5. **`signal_trace_engine` never had a client delivery seam, and still has none.**
    Requirement 23.7 names it alongside the Live_Runtime. Asserted rather than assumed,
@@ -385,11 +402,11 @@ class TestTheLegacyChannelSurvives:
         assert published[0][0] == LEGACY_CHANNEL
         assert published[0][1]["payload"] == {"id": "sig-1"}
 
-    def test_the_dedicated_ws_server_still_subscribes_to_it(self):
-        """``ws_server.py``'s fanout is the "any other consumer" the task protects."""
-        from backend_app.backend import ws_server
-
-        assert LEGACY_CHANNEL in ws_server.CHANNELS
+    # test_the_dedicated_ws_server_still_subscribes_to_it used to live here, pinning
+    # ws_server.py's own CHANNELS as the deployed half of "any other consumer" this
+    # class's own docstring hedged against deleting the channel for. WS-01 surveyed
+    # that consumer and found it was never real -- see the class docstring above.
+    # ws_server.py no longer exists; this test exercised code that is gone with it.
 
     def test_the_owned_family_still_does_not_claim_the_legacy_name(self):
         """One character apart. Task 14.1 asserted it; retiring the traffic must not

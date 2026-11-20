@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import * as Sentry from "@sentry/react";
+import { flushPendingReferral } from "./lib/pendingReferral";
 import { AppStateProvider } from './AppState';
 import wsClient from './websocketClient';
 import { Lock } from "lucide-react";
 import { supabase } from './supabase';
+import { carriesLiveSession } from './auth/sessionEvents';
+import { isDesktopApp } from './runtime/desktop';
 import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
@@ -21,6 +24,16 @@ import AccountMenu from './components/shell/AccountMenu';
 // `'navigate'` bridge's id resolution read from it, so neither can disagree with the
 // sidebar about what a route is called or where an id points.
 import { NAV_ENTRIES, routeTitle } from './components/shell/navigation';
+// LEGAL-01. Imported directly rather than lazily: it decides whether analytics
+// may load at all, and it is mounted outside any <Suspense>, so a lazy chunk
+// would render nothing on the first paint — exactly the moment the question
+// needs answering. It is a few hundred bytes.
+import CookieConsent from './components/legal/CookieConsent';
+// LEGAL-01. Signup records an acceptance, which covers new accounts and nothing
+// else: 182 accounts already exist and NONE has a record, because the old
+// checkbox was never persisted. Without this the table would be accurate about
+// new users and permanently silent about every existing one.
+import ReacceptanceGate from './components/legal/ReacceptanceGate';
 // Direct module paths, not `components/ds/index.js`: the barrel pulls the module graph
 // of every primitive, and the shell needs exactly these two (design.md §26).
 import { PageHeader } from './components/ds/PageHeader';
@@ -35,22 +48,25 @@ import {
   LoadingProvider,
 } from './components/common/primitives';
 import { token } from './design/tokens';
+import { alpha } from './design/alpha';
 import { Button } from './components/ui/Button';
 // The one auth-redirect origin derivation (see `config.js`). Used by the local
 // `UpdatePasswordPage` below, which is the component `/reset-password` actually renders.
-import { getAuthRedirectUrl } from './config';
+import { getAuthRedirectUrl, AUTH_REDIRECT_PATH } from './config';
 
 // Public routes (lazy)
 const LandingPage    = lazy(() => import('./components/landing/LandingPage'));
 const DownloadPage   = lazy(() => import('./components/download/DownloadPage'));
 const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard'));
+const AdminMarketplaceReview = lazy(() => import('./pages/AdminMarketplaceReview'));
 const LegalPageRoute = lazy(() => import('./components/legal/LegalPage'));
 
 // Auth / onboarding pages (lazy)
 const AuthPage  = lazy(() => import('./pages/AuthPage'));
 const TwoFA     = lazy(() => import('./pages/TwoFA'));
 const Wizard    = lazy(() => import('./pages/Wizard'));
-const LegalPage = lazy(() => import('./pages/LegalPage'));
+// LEGAL-01: ./pages/LegalPage was a second, divergent copy of the legal
+// documents and is deleted. `/legal` now redirects to `/legal/terms'.
 
 // Authenticated app pages (lazy - one chunk per route)
 const Dashboard           = lazy(() => import('./pages/Dashboard'));
@@ -65,8 +81,7 @@ const ExchangeManager     = lazy(() => import('./pages/ExchangeManager'));
 const RiskSettings        = lazy(() => import('./pages/RiskSettings'));
 const Billing             = lazy(() => import('./pages/Billing'));
 const Profile             = lazy(() => import('./pages/Profile'));
-const SecurityLogs        = lazy(() => import('./pages/SecurityLogs'));
-const Portfolio           = lazy(() => import('./pages/Portfolio'));
+// SECLOG-REMOVED-01 (2026-11-15): `SecurityLogs` is gone. See the route list below.
 const TradeHistory        = lazy(() => import('./pages/TradeHistory'));
 const PaperTrading        = lazy(() => import('./pages/PaperTrading'));
 
@@ -230,7 +245,7 @@ function UpdatePasswordPage() {
           Reset Password
         </h1>
         {success ? (
-          <div style={{ color: token.status.profit.fg, fontSize: 13, textAlign: "center", background: `${token.status.profit.fg}12`, padding: 12, borderRadius: 8 }}>
+          <div style={{ color: token.status.profit.fg, fontSize: 13, textAlign: "center", background: `${alpha(token.status.profit.fg, 7)}`, padding: 12, borderRadius: 8 }}>
             Password updated! Redirecting to dashboard...
           </div>
         ) : (
@@ -279,8 +294,76 @@ function isDemonstrablyExpiredJwt(token) {
   }
 }
 
-// Synchronously extracts auth token from sessionStorage or URL hash
-function getEffectiveToken() {
+// FE-01: the paths where an arriving PKCE `?code=` should be WAITED FOR AND THEN FORWARDED
+// to the dashboard. `getAuthRedirectUrl` (config.js) hands Supabase this exact path for
+// every OTP/sign-up/resend/OAuth call site; `/signin`/`/signup`/`/` are here because
+// `PasswordRecoveryHandler` below forwards a `code` landing on any of those three toward
+// the dashboard once it resolves (the same thing it used to do for a stray implicit hash).
+//
+// `/reset-password` IS NOW A LEGITIMATE `?code=` LANDING PATH AND IS STILL DELIBERATELY
+// ABSENT FROM THIS LIST -- read as "sign-in redirects", not "all auth redirects". The
+// *Forgot password?* control (`pages/AuthPage.jsx`) passes
+// `redirectTo: getAuthRedirectUrl("/reset-password")`, so recovery codes do arrive there.
+// Adding it here would be actively wrong twice over: `hasPendingAuthCodeExchange` would
+// start returning true on that route, and the forwarding branch below would then bounce
+// the user to the dashboard the moment the exchange resolved -- i.e. straight off the form
+// they came to use, with their password unchanged. Keeping it out is also why that route
+// needs no guard-level pending state: it sits outside `AuthGuard`/`GuestGuard` entirely
+// (see its `<Route>`), so nothing bounces an arriving user while supabase-js's own
+// `detectSessionInUrl` completes the exchange that `updateUser` then depends on.
+const _AUTH_REDIRECT_LANDING_PATHS = [AUTH_REDIRECT_PATH, "/signin", "/signup", "/"];
+
+// Exported for tests (FE-01) -- not used by any other module. Renamed from
+// `_isLegitimateAuthHashLandingPath`: it now gates a query-string `code=`, not a hash.
+export function _isLegitimateAuthRedirectLandingPath(pathname) {
+  return _AUTH_REDIRECT_LANDING_PATHS.includes(pathname);
+}
+
+// FE-01: true when the current URL looks like an in-flight PKCE callback this browser
+// might be mid-exchange for -- a `code` query parameter, landing on one of the paths
+// Supabase is actually ever told to redirect to. `exchangeCodeForSession` (triggered
+// automatically by `detectSessionInUrl` in src/supabase.js) is a network round-trip, so
+// `sessionStorage` has not been populated yet on the very first render of a route that
+// just arrived this way. `AuthGuard`/`GuestGuard` use this to show a brief loading state
+// and wait for that exchange to settle instead of bouncing the arriving user to `/signin`
+// (or rendering the sign-in form over them) before Supabase has even answered.
+export function hasPendingAuthCodeExchange() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.location.search === "string" &&
+    /(?:^|[?&])code=/.test(window.location.search) &&
+    _isLegitimateAuthRedirectLandingPath(window.location.pathname)
+  );
+}
+
+// Synchronously extracts auth token from sessionStorage.
+//
+// FE-01 history: this used to ALSO read `window.location.hash` for `access_token=` -- at
+// first unconditionally on every guarded route, then (a first FE-01 pass, commit 83c8a8c)
+// only on an allowlisted path -- and adopt whatever it found as the session if the token
+// was not demonstrably expired. Both were defects, and the second only narrowed where the
+// defect was reachable through THIS function specifically: a non-expired token in a hash
+// proves only that Supabase signed it for SOMEONE, not that it was issued to this browser,
+// and `@supabase/supabase-js`'s OWN `detectSessionInUrl` was separately adopting the exact
+// same hash on ANY route the moment the page loaded -- before any React code ran at all --
+// and bridging it into this app's session via the `onAuthStateChange` listener in
+// `PasswordRecoveryHandler` below. That SDK-level path was never narrowed by the first
+// FE-01 pass, and it is the one a login-CSRF link actually used.
+//
+// The real fix is `flowType: 'pkce'` in src/supabase.js. A legitimate OAuth / magic-link /
+// sign-up redirect now lands as `?code=...`, never `#access_token=...`, and supabase-js
+// exchanges that code for a session only if THIS browser also holds the matching
+// `code_verifier` it generated when the flow was started -- an attacker's own valid `code`
+// has no such verifier here, so the exchange fails and nothing is adopted. supabase-js now
+// also actively REJECTS a stray `#access_token=` hash once `flowType: 'pkce'` is
+// configured (a flow-type mismatch), rather than adopting it the way it used to. So this
+// function has nothing left to safely read out of a hash: a real redirect never produces
+// one for these flows any more, and one that still arrives is either the attack this
+// finding is about or a stale pre-PKCE email link -- and the SDK itself now refuses both.
+// A resolved PKCE exchange reaches `sessionStorage` via the same `onAuthStateChange`
+// bridge; see `hasPendingAuthCodeExchange` and `useGuardedAuthToken` above/below for how
+// the guards wait for that bridge instead of reading a hash by hand.
+export function getEffectiveToken() {
   let token = sessionStorage.getItem("token");
   // An expired token is not a session. Both guards read this one function, so discarding it
   // here is what stops `AuthGuard` admitting a dead credential to the shell - every read
@@ -290,30 +373,104 @@ function getEffectiveToken() {
     sessionStorage.removeItem("token");
     token = null;
   }
-  if (!token && typeof window !== "undefined" && window.location.hash) {
-    const hash = window.location.hash;
-    if (hash.includes("access_token=")) {
-      const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
-      const hashToken = params.get("access_token");
-      if (hashToken && !isDemonstrablyExpiredJwt(hashToken)) {
-        sessionStorage.setItem("token", hashToken);
-        token = hashToken;
-      }
-    }
-  }
   return token;
 }
 
-// AUTH GUARDS
-function AuthGuard() {
-  const token = getEffectiveToken();
-  if (!token) return <Navigate to="/signin" replace />;
+/**
+ * FE-01: the one place `AuthGuard` and `GuestGuard` both decide "is there a session",
+ * now that the answer can require waiting on an in-flight PKCE code exchange rather than
+ * being available synchronously the way a hash-borne implicit token was.
+ *
+ * Returns `{ pending: true, token: null }` while supabase-js's own init/exchange promise
+ * is still outstanding for a `code` on an allowlisted landing path (see
+ * `hasPendingAuthCodeExchange`), and `{ pending: false, token }` once that has settled --
+ * or immediately, with no render delay, when there was never anything to wait for (the
+ * overwhelmingly common case: a normal in-app navigation with an already-established
+ * `sessionStorage` token or none at all).
+ */
+function useGuardedAuthToken() {
+  const [state, setState] = useState(() => {
+    const token = getEffectiveToken();
+    if (token) return { pending: false, token };
+    return hasPendingAuthCodeExchange()
+      ? { pending: true, token: null }
+      : { pending: false, token: null };
+  });
+
+  useEffect(() => {
+    if (!state.pending) return;
+    let cancelled = false;
+    // `getSession()` awaits supabase-js's own `initializePromise`, which is the SAME
+    // promise running the automatic `exchangeCodeForSession` this is waiting on -- so this
+    // resolves only once the SDK has either adopted a genuine code (verifier matched) or
+    // given up (no match / error), never before. Its own result is not read directly:
+    // the `onAuthStateChange` listener in `PasswordRecoveryHandler` is what writes
+    // `sessionStorage`, exactly as it does for every other sign-in path, so re-reading
+    // `getEffectiveToken()` here is what stays in sync with that single source of truth
+    // rather than trusting this call's session shape a second way.
+    supabase.auth.getSession().finally(() => {
+      if (!cancelled) setState({ pending: false, token: getEffectiveToken() });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.pending]);
+
+  return state;
+}
+
+// The brief "waiting on the PKCE exchange" screen. Styled like `AdminGuard`'s own loading
+// branch below, so the two momentary auth-wait screens this app can show do not diverge.
+function AuthExchangePendingScreen() {
+  return (
+    <div style={{ background: token.surface.canvas, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <span className="font-mono" style={{ color: token.content.muted, fontSize: 12 }}>Completing sign-in…</span>
+    </div>
+  );
+}
+
+// AUTH GUARDS. Exported (alongside `AuthExchangePendingScreen`) for
+// tests/unit/authPkceRedirect.test.jsx (FE-01) -- not used by any other module.
+/**
+ * NAV-01: where a signed-in user goes from a guest page -- the page they asked for, if it was one
+ * of this app's own, else the dashboard.
+ *
+ * A link opened in a new tab (or after a browser restart) has a persisted Supabase session but no
+ * per-tab `sessionStorage` token yet, so `AuthGuard` sends it to `/signin`; by the time
+ * `GuestGuard` renders, the session listener has restored the token and the user was sent to the
+ * DASHBOARD, losing the page they opened. Only a same-app `/app/...` path is honoured, so this can
+ * never become an open redirect.
+ */
+export function safeReturnPath(from) {
+  if (typeof from !== 'string') return null;
+  if (!from.startsWith('/app/') || from.startsWith('//') || from.includes('\\')) return null;
+  return from;
+}
+
+export function AuthGuard() {
+  const { pending, token: effectiveToken } = useGuardedAuthToken();
+  const location = useLocation();
+  // REF-ATTR-01: a referral code remembered at signup is claimed once a session exists.
+  useEffect(() => {
+    if (!pending && effectiveToken) flushPendingReferral();
+  }, [pending, effectiveToken]);
+  if (pending) return <AuthExchangePendingScreen />;
+  if (!effectiveToken) {
+    return (
+      <Navigate to="/signin" replace state={{ from: `${location.pathname}${location.search}` }} />
+    );
+  }
   return <Outlet />;
 }
 
-function GuestGuard() {
-  const token = getEffectiveToken();
-  if (token) return <Navigate to="/app/dashboard" replace />;
+export function GuestGuard() {
+  const { pending, token: effectiveToken } = useGuardedAuthToken();
+  const location = useLocation();
+  if (pending) return <AuthExchangePendingScreen />;
+  if (effectiveToken) {
+    return <Navigate to={safeReturnPath(location.state?.from) || '/app/dashboard'} replace />;
+  }
   return <Outlet />;
 }
 
@@ -364,37 +521,94 @@ function AdminGuard() {
   return <Outlet />;
 }
 
-// Intercepts Supabase OAuth and password-recovery hashes on mount
+// Intercepts Supabase password-recovery hashes and in-flight PKCE code callbacks on mount
 function PasswordRecoveryHandler() {
   const navigate = useNavigate();
   useEffect(() => {
     const hash = window.location.hash;
-    if (hash) {
-      if (hash.includes("type=recovery")) {
-        const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
-        const token = params.get("access_token");
-        if (token) {
-          sessionStorage.setItem("token", token);
-          window.history.replaceState(null, "", window.location.pathname);
-          navigate("/reset-password", { replace: true });
-        }
-      } else if (hash.includes("access_token=")) {
-        const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
-        const token = params.get("access_token");
-        if (token) {
-          sessionStorage.setItem("token", token);
-          window.history.replaceState(null, "", window.location.pathname);
-          if (window.location.pathname === "/signin" || window.location.pathname === "/signup" || window.location.pathname === "/") {
-            navigate("/app/dashboard", { replace: true });
-          }
-        }
+    if (hash && hash.includes("type=recovery")) {
+      // THIS BRANCH IS NOW A FALLBACK FOR OLD LINKS, NOT THE WHOLE OF RECOVERY. It used to
+      // say "nothing in src/ calls `resetPasswordForEmail` with an explicit `redirectTo`,
+      // so this app does not control -- and cannot assert -- which path a legitimate
+      // recovery email actually lands on, or what flow type generated it". True when
+      // written, false now: the *Forgot password?* control on `pages/AuthPage.jsx` calls
+      // `resetPasswordForEmail` with `redirectTo: getAuthRedirectUrl("/reset-password")`,
+      // so a reset STARTED FROM THE PRODUCT is PKCE-shaped (`?code=`), lands on a path this
+      // app chose, and is exchanged by supabase-js's own `detectSessionInUrl` against the
+      // verifier the requesting browser stored -- never reaching this hash branch at all.
+      //
+      // What still reaches it is an implicit-shaped `#access_token=...&type=recovery` link
+      // sent out of band, i.e. by an operator from the Supabase dashboard, which is how
+      // every recovery email before 2026-10-28 was sent. Those DO now fail to complete:
+      // with `flowType: 'pkce'` configured (src/supabase.js) supabase-js rejects that hash
+      // as a flow-type mismatch instead of adopting it internally, so the `updateUser` call
+      // on `/reset-password` -- which needs THAT internal session, not the `sessionStorage`
+      // bookkeeping this branch does by hand -- has nothing to act on. Measured rather than
+      // assumed: production holds four such dispatches, all 2026-09-27..09-29, and the one
+      // still-outstanding `recovery_token` among them was sent 2026-09-29 10:25Z, so it is
+      // ~32 days past any GoTrue recovery lifetime and cannot be redeemed by anyone.
+      // The branch is kept because it costs nothing and an operator may send another; the
+      // route to recommend is the product's own control. Tracked under FE-01 in
+      // docs/launch_readiness/REMEDIATION_LEDGER.json. Still rejects a demonstrably
+      // expired token, and the login-CSRF exposure it carries is unchanged -- switching
+      // this client's flow type cannot make a link some other sender generates any safer.
+      const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
+      const token = params.get("access_token");
+      if (token && !isDemonstrablyExpiredJwt(token)) {
+        sessionStorage.setItem("token", token);
+        window.history.replaceState(null, "", window.location.pathname);
+        navigate("/reset-password", { replace: true });
       }
+    }
+    // The former `else if (hash.includes("access_token=") ...)` branch -- the non-recovery
+    // implicit-flow adoption an earlier FE-01 pass narrowed to an allowlisted path -- is
+    // DELETED here, not narrowed further. Under `flowType: 'pkce'` (src/supabase.js) a
+    // legitimate OAuth / magic-link / sign-up redirect never produces that shape again,
+    // and supabase-js's own `_initialize()` now actively REJECTS a `#access_token=` hash
+    // as a flow-type mismatch rather than adopting it -- so there is nothing left here to
+    // safely read out of a hash for that case, and hand-rolling a second, duplicate
+    // acceptance of it would just reopen what this fix exists to close. A legitimate
+    // redirect now lands as `?code=...`, which supabase-js's own `detectSessionInUrl`
+    // exchanges automatically against the locally-held verifier (see `getEffectiveToken`
+    // and `useGuardedAuthToken` above) -- deliberately not re-implemented here by hand.
+
+    // FE-01: forward a resolving PKCE sign-in that landed on `/`, `/signin` or `/signup`
+    // on to the dashboard -- the same three non-dashboard paths the deleted implicit-flow
+    // branch above used to forward from. `AuthGuard`/`GuestGuard` already handle
+    // `AUTH_REDIRECT_PATH` itself (it needs no further hop), so this only ever fires for
+    // the other three. The exchange itself is already running (supabase-js kicked it off
+    // when this module was first imported); this just waits for it and acts once it
+    // settles, rather than re-triggering a second one.
+    if (
+      hasPendingAuthCodeExchange() &&
+      window.location.pathname !== AUTH_REDIRECT_PATH
+    ) {
+      supabase.auth.getSession().then(({ data }) => {
+        if (data?.session?.access_token) {
+          navigate(AUTH_REDIRECT_PATH, { replace: true });
+        }
+      });
     }
 
     // Subscribe to onAuthStateChange for live session events
     if (supabase?.auth?.onAuthStateChange) {
       const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-        if (session?.access_token && (sessionStorage.getItem("token") || event === "SIGNED_IN")) {
+        /*
+          `carriesLiveSession(event)` rather than a literal. This condition used to read
+          `sessionStorage.getItem("token") || event === "SIGNED_IN"`, which admitted a
+          restored session only if THIS TAB had already mirrored one. supabase-js emits
+          `INITIAL_SESSION` when it restores a persisted session — and the client is
+          configured `persistSession: true` — so a returning user satisfied neither arm and
+          had a live session this app could not see.
+
+          That left the two authorities disagreeing: `AuthRedirect` above reads
+          `supabase.auth.getSession()` and navigates such a user INTO the app, while
+          `AuthGuard` reads `getEffectiveToken()`, finds `sessionStorage` empty, and bounces
+          them straight back out. It also left the realtime layer unable to authenticate at
+          all, because `websocketClient.readSessionToken()` reads this same key.
+          See `auth/sessionEvents.js`.
+        */
+        if (session?.access_token && carriesLiveSession(event)) {
           sessionStorage.setItem("token", session.access_token);
         } else if (event === "SIGNED_OUT") {
           sessionStorage.removeItem("token");
@@ -472,6 +686,13 @@ function AppShell() {
     // shell/ResponsiveGate.jsx. Below 768px it renders its own gate screen and
     // `children` never enter the tree, so nothing below here runs at all.
     <ResponsiveGate pathname={location.pathname}>
+      {/* LEGAL-01: mounted inside the AUTHENTICATED shell, because
+          /api/legal/acceptance requires a session — calling it from the public
+          tree would 401 on every landing-page visit. Renders nothing unless the
+          signed-in user's recorded acceptance is older than the published
+          version, which is true for all 182 accounts that predate the
+          acceptance table. */}
+      <ReacceptanceGate />
       <ShellGrid toasts={toasts} removeToast={removeToast} />
     </ResponsiveGate>
   );
@@ -590,6 +811,32 @@ function ShellGrid({ toasts, removeToast }) {
         <main
           id="main-content"
           tabIndex={-1}
+          // LEGAL-01 / data minimisation (GDPR Art 5(1)(c)).
+          //
+          // MASK EVERY AUTHENTICATED PAGE FROM MICROSOFT CLARITY SESSION REPLAY.
+          //
+          // Clarity records pointer movement, clicks and scrolling, and its
+          // default masking covers form inputs but NOT page text. On a trading
+          // platform the text is the sensitive part: account balances, position
+          // sizes, P&L, strategy logic and exchange-connection screens all render
+          // as ordinary text and would otherwise appear in a replay.
+          //
+          // Found by writing docs/legal/DPIA_SCREENING.md -- the screening
+          // concluded a full DPIA is probably not MANDATORY, and then turned up
+          // this, which is a real minimisation problem independent of that
+          // question and fixable with an attribute rather than with legal
+          // argument.
+          //
+          // Applied at the one <main> landmark for authenticated pages, so it
+          // covers every route inside the shell by default rather than relying on
+          // each new page remembering. The public marketing pages render outside
+          // this element and stay unmasked, which is the point: they carry no
+          // personal data and are where the analytics are actually useful.
+          //
+          // Clarity honours data-clarity-mask on a subtree. The ACCOUNT-WIDE
+          // masking mode in the Clarity dashboard is a separate, owner-side
+          // setting; this does not depend on it.
+          data-clarity-mask="true"
           style={{
             gridColumn: 2,
             gridRow: 2,
@@ -608,19 +855,66 @@ function ShellGrid({ toasts, removeToast }) {
   );
 }
 
+/**
+ * What `/` serves — which is deliberately NOT the same in a browser and in the desktop app.
+ *
+ * The two are one bundle, built once, and they do not share a front door. A visitor who
+ * types the domain has not been told what the product is, so the browser gets the marketing
+ * landing page. Someone running the DOWNLOADED application has already been told: they
+ * found it, downloaded it and installed it. Opening to a page that pitches the product and
+ * offers four installers is a dead end — the desktop app would be advertising itself to a
+ * user who is already inside it.
+ *
+ * So the desktop app opens at sign-in. `replace` rather than a push, so the landing page
+ * never enters the desktop history stack: a Back press from the sign-in form must not land
+ * on a marketing page with a "Download for Windows" button on it.
+ *
+ * A RETURNING DESKTOP USER DOES NOT SEE THE FORM. `/signin` sits behind `GuestGuard`, which
+ * sends an already-authenticated session to `AUTH_REDIRECT_PATH`, so a session restored on
+ * launch goes straight through to the dashboard. That is one redirect, before first paint,
+ * and it is why this does not need to read the session itself.
+ *
+ * Exported for `tests/unit/desktopStartsAtSignIn.test.jsx`, which drives both platforms.
+ */
+export function RootRoute() {
+  if (isDesktopApp()) return <Navigate to="/signin" replace />;
+
+  return (
+    <Suspense fallback={PUBLIC_FALLBACK}>
+      <LandingPage />
+    </Suspense>
+  );
+}
+
 // ROOT ROUTING WRAPPER
 export default function AppWrapper() {
   return (
     <ErrorBoundary>
       <AppStateProvider>
         <PasswordRecoveryHandler />
+        {/* LEGAL-01: Google Analytics and Microsoft Clarity used to load on
+            first paint, before any interaction, while the Privacy Policy
+            claimed no third-party tracking was used. They are now gated on this
+            banner's decision (src/legal/consent.js) and the Policy discloses
+            them. Mounted outside <Routes> so the choice is offered on every
+            page, including the legal documents themselves. */}
+        <CookieConsent />
         <Routes>
           {/* Public landing. Every route from here to `/wizard` renders OUTSIDE the shell,
               so all of them take `PUBLIC_FALLBACK` — no page header, no route title. */}
-          <Route path="/" element={<Suspense fallback={PUBLIC_FALLBACK}><LandingPage /></Suspense>} />
+          {/* Browser: the landing page. Desktop app: straight to sign-in. See `RootRoute`. */}
+          <Route path="/" element={<RootRoute />} />
           <Route path="/download" element={<Suspense fallback={PUBLIC_FALLBACK}><DownloadPage /></Suspense>} />
-          {/* Legal */}
-          <Route path="/legal" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPage /></Suspense>} />
+          {/* Legal.
+              LEGAL-01: `/legal` used to render a SECOND, different set of legal
+              documents from src/pages/LegalPage.jsx, which contradicted the
+              canonical ones on refunds — one promised pro-rated service credits,
+              the other said all purchases were final. Which page a customer
+              happened to open decided whether they were owed money. That file is
+              deleted and this URL redirects, so there is one body of text behind
+              one set of routes. A redirect rather than a removal keeps any
+              existing link, bookmark or crawled URL working. */}
+          <Route path="/legal" element={<Navigate to="/legal/terms" replace />} />
           <Route path="/legal/privacy" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="privacy" /></Suspense>} />
           <Route path="/legal/terms" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="terms" /></Suspense>} />
           <Route path="/legal/risk" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="risk" /></Suspense>} />
@@ -632,6 +926,8 @@ export default function AppWrapper() {
           {/* Admin-only: AdminGuard verifies Supabase session + app_metadata.role === 'admin' */}
           <Route element={<AdminGuard />}>
             <Route path="/admin/waitlist" element={<Suspense fallback={PUBLIC_FALLBACK}><AdminDashboard /></Suspense>} />
+            {/* MKT-04: the Marketplace submission review queue (admin-only server-side too). */}
+            <Route path="/admin/marketplace" element={<Suspense fallback={PUBLIC_FALLBACK}><AdminMarketplaceReview /></Suspense>} />
           </Route>
 
           {/* Guest-only: redirect to /app/dashboard if already authenticated */}
@@ -665,8 +961,19 @@ export default function AppWrapper() {
               <Route path="/app/risk" element={<Suspense fallback={SHELL_FALLBACK}><RiskSettings /></Suspense>} />
               <Route path="/app/billing" element={<Suspense fallback={SHELL_FALLBACK}><Billing /></Suspense>} />
               <Route path="/app/profile" element={<Suspense fallback={SHELL_FALLBACK}><Profile /></Suspense>} />
-              <Route path="/app/security-logs" element={<Suspense fallback={SHELL_FALLBACK}><SecurityLogs /></Suspense>} />
-              <Route path="/app/portfolio" element={<Suspense fallback={SHELL_FALLBACK}><Portfolio /></Suspense>} />
+              {/* SECLOG-REMOVED-01 (2026-11-15): `/app/security-logs` is withdrawn from the
+                product. NO redirect is declared for it: the `/app/*` catch-all at the end of
+                this block already sends unknown `/app` paths to the dashboard, so an old
+                bookmark lands somewhere real rather than on a dead route, and adding a
+                dedicated `<Navigate>` would only duplicate that.
+
+                THE BACKEND LOGGING IS UNTOUCHED. Security events, authentication logs and the
+                operational audit trail are still written and still queryable -- removing a
+                page does not authorise deleting the records behind it, and they are needed for
+                incident investigation. `api.user.getSecurityLogs` also stays, because
+                Profile's *Recent access* panel reads it. */}
+              {/* PORTFOLIO-REMOVED-01: the page is gone; old bookmarks land on Trade History. */}
+              <Route path="/app/portfolio/*" element={<Navigate to="/app/trades" replace />} />
               <Route path="/app/trades" element={<Suspense fallback={SHELL_FALLBACK}><TradeHistory /></Suspense>} />
               <Route path="/app/paper-trading" element={<Suspense fallback={SHELL_FALLBACK}><PaperTrading /></Suspense>} />
               <Route path="/app/2fa" element={<Suspense fallback={SHELL_FALLBACK}><TwoFA /></Suspense>} />

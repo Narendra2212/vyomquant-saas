@@ -11,6 +11,7 @@ SECURITY: Service role key usage is strictly controlled with audit logging and v
 import asyncio
 from dataclasses import dataclass, field
 from datetime import date
+import json
 import logging
 import time
 import os
@@ -19,6 +20,13 @@ from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("RiskManager")
+
+#: PERF-01. Separate from routers/risk.py's RISK_SETTINGS_CACHE_TTL (which caches the
+#: full settings-API response shape, including kill_switches/circuit_breaker_armed/
+#: updated_at) -- this cache holds only the three fields validate_trade_request needs,
+#: under its OWN key, so a shape mismatch between the two readers can never silently
+#: drop a field either one depends on. Env-overridable like PROFILE_CACHE_TTL.
+RISK_SETTINGS_CACHE_TTL: int = int(os.environ.get("RISK_SETTINGS_CACHE_TTL", "300"))
 
 
 def _validate_service_role_security() -> None:
@@ -83,44 +91,94 @@ def _validate_user_id_isolation(user_id: str) -> None:
         logger.warning(f"User ID {user_id} does not match UUID format")
 
 
-def _load_user_risk_settings(user_id: str) -> Optional[Dict[str, Any]]:
+def _risk_settings_cache_key(user_id: str) -> str:
+    return f"risk_manager_trade_settings:{user_id}"
+
+
+async def invalidate_user_risk_settings_cache(user_id: str) -> None:
+    """Call this after any write to the ``risk_settings`` table (routers/risk.py's
+    ``PUT /settings`` does), so a tightened or relaxed limit is visible to the next
+    trade immediately rather than staying stale for up to RISK_SETTINGS_CACHE_TTL
+    seconds."""
+    try:
+        from backend_app.core.cache.redis_manager import redis_manager
+
+        await redis_manager.delete(_risk_settings_cache_key(user_id))
+    except Exception as e:  # noqa: BLE001 - invalidation failing must not break the caller
+        logger.warning(f"[RiskSettingsCache] invalidation failed for {user_id}: {e}")
+
+
+async def _load_user_risk_settings(user_id: str) -> Optional[Dict[str, Any]]:
     """
-    Load user-specific risk settings from Supabase.
-    
+    Load user-specific risk settings for trade validation.
+
     SECURITY NOTE: Uses SERVICE_ROLE_KEY to bypass RLS for backend-only access.
     This is intentional - the risk engine needs to read user settings during trade validation
     without requiring the user's session token. Access is still restricted by user_id filtering.
-    
+
     SECURITY ENHANCEMENTS:
     - Service role key validation
     - Audit logging for all access
     - User ID injection validation
     - Strict user_id filtering
+
+    PERF-01 FIX
+    -----------
+    This used to call ``supabase.create_client`` (a brand-new, synchronous client) and
+    then a blocking ``.execute()`` on EVERY trade, from this ``async def`` -- blocking
+    the whole event loop for a Supabase round trip on every single order, not just the
+    one request making it.
+
+    1. **No blocking I/O on the event loop.** Now ``await``s
+       ``core.dependencies.get_service_supabase_async()``, the pooled, connection-reused
+       async service-role client (mirrors ``create_request_supabase_async``'s pool).
+    2. **Cached**, under its own key (see ``_risk_settings_cache_key`` -- deliberately
+       NOT routers/risk.py's ``risk_settings:{uid}`` key, which caches a different,
+       wider shape; reusing it here could silently hand this function a record missing
+       the three fields it reads, or hand that router's GET a record missing the fields
+       IT reads), for ``RISK_SETTINGS_CACHE_TTL`` seconds (default 300s,
+       env-overridable), with explicit invalidation via
+       ``invalidate_user_risk_settings_cache`` wired into the settings-update endpoint.
+
+    NOT DONE: "fail closed on read error for live." No reliable live-vs-paper signal
+    reaches this function today -- ``TradeRequest`` carries no environment field, and
+    its one real caller (``backend/master_executor.py``) does not track one either.
+    Building that signal is a separate, broader change than this finding's cache/async
+    half. Residual risk is bounded regardless: RT-15 (VERIFIED_FIXED this session) hard-
+    gates live trading at the execution boundary, so a stale/defaulted risk-settings read
+    here cannot itself cause a live order to reach an exchange.
     """
     try:
         # SECURITY: Validate service role key before use
         _validate_service_role_security()
-        
+
         # SECURITY: Validate user_id format
         _validate_user_id_isolation(user_id)
-        
+
         # SECURITY: Audit log service role access
         _log_service_role_access(user_id, "load_user_risk_settings")
-        
-        from supabase import create_client
-        
-        supabase_url = os.environ.get("SUPABASE_URL")
-        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        
-        if not supabase_url or not supabase_key:
+
+        cache_key = _risk_settings_cache_key(user_id)
+        if RISK_SETTINGS_CACHE_TTL > 0:
+            try:
+                from backend_app.core.cache.redis_manager import redis_manager
+
+                cached = await redis_manager.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:  # noqa: BLE001 - a cache read failure falls through
+                logger.warning(f"[RiskSettingsCache] read failed for {user_id}: {e}")
+
+        from backend_app.core.dependencies import get_service_supabase_async
+
+        sb = await get_service_supabase_async()
+        if sb is None:
             logger.warning("Supabase credentials not configured, using default risk thresholds")
             return None
-            
-        sb = create_client(supabase_url, supabase_key)
-        
+
         # SECURITY: Strict user_id filtering to prevent cross-tenant access
-        resp = sb.table("risk_settings").select("*").eq("user_id", user_id).execute()
-        
+        resp = await sb.table("risk_settings").select("*").eq("user_id", user_id).execute()
+
         if resp.data:
             settings = resp.data[0]
             # SECURITY: Verify returned data belongs to requested user
@@ -130,12 +188,22 @@ def _load_user_risk_settings(user_id: str) -> Optional[Dict[str, Any]]:
                     f"Requested: {user_id}, Received: {settings.get('user_id')}"
                 )
                 raise RuntimeError("Security violation: User ID mismatch in risk settings")
-            
-            return {
+
+            result = {
                 "max_daily_loss": settings.get("max_daily_loss", 500.0),
                 "max_positions": settings.get("max_positions", 10),
                 "max_leverage": settings.get("max_leverage", 3),
             }
+            if RISK_SETTINGS_CACHE_TTL > 0:
+                try:
+                    from backend_app.core.cache.redis_manager import redis_manager
+
+                    await redis_manager.setex(
+                        cache_key, RISK_SETTINGS_CACHE_TTL, json.dumps(result)
+                    )
+                except Exception as e:  # noqa: BLE001 - caching is an optimisation
+                    logger.warning(f"[RiskSettingsCache] write failed for {user_id}: {e}")
+            return result
         return None
     except Exception as e:
         logger.error(f"Failed to load user risk settings for {user_id}: {e}")
@@ -491,12 +559,58 @@ class InstitutionalRiskManager:
     ) -> Tuple[RiskVerdict, str]:
         """Master circuit breaker for trade validation using structured TradeRequest and RiskThresholds."""
         # Load user-specific risk settings
-        user_settings = _load_user_risk_settings(request.user_id)
+        user_settings = await _load_user_risk_settings(request.user_id)
         if user_settings:
-            # Override thresholds with user-specific settings
-            effective_max_daily_loss = user_settings["max_daily_loss"] / self.total_capital if self.total_capital > 0 else self.thresholds.max_daily_loss_pct
-            effective_max_positions = user_settings["max_positions"]
-            effective_max_leverage = user_settings["max_leverage"]
+            # RISK-03: A USER SETTING MAY ONLY TIGHTEN A LIMIT, NEVER LOOSEN ONE.
+            #
+            # These three values come from `risk_settings`, a table the account holder
+            # controls. Taken verbatim -- as `max_daily_loss` and `max_positions` were --
+            # a user could set them arbitrarily high and make REJECT_DAILY_LOSS and
+            # REJECT_MAX_OPEN_TRADES UNREACHABLE: the two circuit breakers that exist to
+            # stop an account bleeding out over one day and to cap concurrent exposure.
+            # Setting `max_positions = 10_000` removed the second entirely, and
+            # `max_daily_loss` large relative to `total_capital` removed the first.
+            #
+            # `max_leverage` was already safe, and it is the pattern the other two now
+            # follow: section 5 below computes
+            # `min(self.thresholds.drawdown_tier_N_max_leverage, effective_max_leverage)`,
+            # so a user value can only ever pull the ceiling DOWN. The same `min` is
+            # applied to all three here, at the point the effective value is derived,
+            # rather than at each use site -- there is one place to read and one place to
+            # get wrong, and a future check that reads `effective_max_positions` inherits
+            # the clamp instead of having to remember it.
+            #
+            # The ceiling is `self.thresholds`, NOT `TenantQuota.for_plan(request.user_tier)`.
+            # The per-plan figures look like the right answer and are not: they are a
+            # fair-use resource table whose only enforcer is deprecated and unwired, and
+            # the free tier caps leverage at 1.0x while the risk-settings endpoint offers
+            # 3x as its default -- so clamping to them would have withdrawn margin from
+            # every account on the platform and called it a safety fix. `self.thresholds`
+            # is the ceiling ALREADY IN FORCE: it is exactly what the `else` branch below
+            # applies to an account with no settings row. Full argument, with the figures,
+            # in `routers/risk.platform_risk_ceilings`.
+            #
+            # `max_daily_loss` is stored in ACCOUNT CURRENCY and compared as a FRACTION of
+            # capital, so it is converted before being clamped. A non-positive
+            # `total_capital` leaves no denominator to convert with, so the platform
+            # threshold stands alone -- the pre-existing behaviour, unchanged.
+            platform_max_daily_loss = self.thresholds.max_daily_loss_pct
+            if self.total_capital > 0:
+                requested_daily_loss = (
+                    float(user_settings["max_daily_loss"]) / self.total_capital
+                )
+                effective_max_daily_loss = min(
+                    platform_max_daily_loss, requested_daily_loss
+                )
+            else:
+                effective_max_daily_loss = platform_max_daily_loss
+
+            effective_max_positions = min(
+                self.thresholds.max_open_trades, int(user_settings["max_positions"])
+            )
+            effective_max_leverage = min(
+                self.thresholds.base_max_leverage, float(user_settings["max_leverage"])
+            )
         else:
             # Use default thresholds
             effective_max_daily_loss = self.thresholds.max_daily_loss_pct

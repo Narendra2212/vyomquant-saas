@@ -106,6 +106,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import importlib
 import inspect
 import textwrap
@@ -123,9 +124,34 @@ from backend_app.backend.marketplace.entitlement_resolver import (
     EntitlementReason,
 )
 from backend_app.backend.marketplace.errors import HTTP_STATUS_FOR_CODE, MarketplaceError
+from backend_app.core import subscription_dependencies as _subscription_dependencies
 from backend_app.core.rate_limit import limiter as _limiter
+from backend_app.core.subscription_engine import SubscriptionEngine as _SubscriptionEngine
 from backend_app.routers import library as lib
+from tests.conftest import _limiters_in_closure
 from tests.strategies.marketplace_generators import identifiers, utc_instants
+
+
+def _enforcing_limiters(handler: Any) -> List[Any]:
+    """Every limiter that could refuse a direct call to ``handler``.
+
+    The ones in the handler's own decorator closure -- which is where ``slowapi`` keeps the
+    object that actually answers -- plus this module's import-time ``_limiter``, which is the
+    same object until something re-imports ``core.rate_limit``. Both, because which of the two
+    enforces depends on session import order, and a stand-down that misses the enforcer shows
+    up as ``parameter `request` must be an instance of starlette.requests.Request`` rather than
+    as anything to do with this property.
+    """
+    found = list(_limiters_in_closure(handler))
+    if not found:
+        raise AssertionError(
+            "no slowapi Limiter in deploy_marketplace_strategy's closure; either the route no "
+            "longer carries @limiter.limit(...) or the decorator chain got deeper. Not "
+            "ignored, because an empty stand-down refuses every example."
+        )
+    if not any(_limiter is seen for seen in found):
+        found.append(_limiter)
+    return found
 
 #: The configuration ``design.md § Property-based testing configuration`` prescribes for every
 #: property test in this plan: at least 100 examples and no per-example deadline (the first
@@ -628,6 +654,22 @@ def run_deployment_gate(case: AdmissionCase) -> DeployOutcome:
     exhaust 10/60s and make later examples answer 429 instead of answering the property. The
     limit itself is asserted from the limiter's registry by
     ``tests/test_task_33_2_rate_limit_keys.py``, so nothing here weakens it.
+
+    ``_limiter`` is bound at THIS module's import, and three test files re-import
+    ``core.rate_limit`` mid-session, which rebinds the module attribute to a new ``Limiter``
+    while the route keeps closing over the original. Whether ``_limiter`` is still the
+    enforcing object therefore depends on import order. The limiters the handler itself
+    captured are disabled as well, so it does not.
+
+    THE QUOTA AND ENTITLEMENT SEAMS ARE HERE FOR A SHARPER REASON. RT-24 gave this route a
+    bot-slot reservation and a live-trading check that this property predates. Unstubbed,
+    ``reserve_quota`` reaches a Redis that is not there, answers ``(False, 0, 0)``, and the
+    handler raises ``402 DEPLOYMENT_QUOTA_EXCEEDED``. That is not a P-16 answer at all: the
+    property is that admission EQUALS the resolver's decision, and a billing refusal
+    short-circuits the comparison for every entitling case -- including ``caller_is_the_owner``,
+    which is the example that caught it. Stubbed to admit, the gate's own decision is what
+    gets compared again. Quota is asserted on its own by
+    ``tests/test_rt24_marketplace_deployment_starts.py::test_a_quota_refusal_writes_no_row``.
     """
     store = RowStore(
         listing_rows=[dict(row) for row in case.listing_rows],
@@ -641,15 +683,31 @@ def run_deployment_gate(case: AdmissionCase) -> DeployOutcome:
         permission_gate_calls.append((args, kwargs))
         return {"has_permission": True}
 
-    with mock.patch.object(lib, "_build_service_client", lambda: store), mock.patch.object(
-        lib, "get_strategy_audit_logger", lambda: audit
-    ), mock.patch.object(lib, "datetime", _frozen_datetime(case.now)), mock.patch.object(
-        lib, "check_deployment_permission", _record_permission_gate
-    ), mock.patch.object(
-        er, "resolve", spy
-    ), mock.patch.object(
-        _limiter, "enabled", False
-    ):
+    async def _plan(*_a: Any, **_k: Any) -> str:
+        return "pro"
+
+    async def _reserve(*_a: Any, **_k: Any) -> Tuple[bool, int, int]:
+        return (True, 1, 10)
+
+    async def _entitled(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    async def _release(*_a: Any, **_k: Any) -> int:
+        return 0
+
+    with contextlib.ExitStack() as patches:
+        patch = patches.enter_context
+        patch(mock.patch.object(lib, "_build_service_client", lambda: store))
+        patch(mock.patch.object(lib, "get_strategy_audit_logger", lambda: audit))
+        patch(mock.patch.object(lib, "datetime", _frozen_datetime(case.now)))
+        patch(mock.patch.object(lib, "check_deployment_permission", _record_permission_gate))
+        patch(mock.patch.object(er, "resolve", spy))
+        for enforcing in _enforcing_limiters(lib.deploy_marketplace_strategy):
+            patch(mock.patch.object(enforcing, "enabled", False))
+        patch(mock.patch.object(_subscription_dependencies, "get_user_plan", _plan))
+        patch(mock.patch.object(_SubscriptionEngine, "reserve_quota", _reserve))
+        patch(mock.patch.object(_SubscriptionEngine, "check_feature_entitlement", _entitled))
+        patch(mock.patch.object(_SubscriptionEngine, "decrement_quota_usage", _release))
         try:
             response = asyncio.run(
                 lib.deploy_marketplace_strategy(
@@ -744,9 +802,25 @@ def test_p16_admission_agrees_with_the_resolver(case: AdmissionCase) -> None:
         )
         assert outcome.response is not None
         assert outcome.response["granted_via"] == resolved.reason.value
-        assert len(outcome.store.writes_to("strategy_deployments")) == 1, (
-            "an entitling decision must create exactly one strategy_deployments row"
+        # RT-24: the handler no longer stops at the insert. It starts the bot and then records
+        # the outcome, so an admitted deployment now also UPDATES the row it just created --
+        # here always to 'failed', because this harness gives the runtime no service client and
+        # the blueprint build cannot succeed. The property is about ROWS: exactly one is
+        # CREATED. Stated as "one insert, and any other write is an update" rather than "one
+        # write", because the second form would be satisfied by a handler that quietly inserted
+        # a second deployment. Same wording as
+        # tests/test_marketplace_deployment_subscriber_safe.py, so the two cannot drift.
+        deployment_writes = outcome.store.writes_to("strategy_deployments")
+        inserts = [w for w in deployment_writes if w.op == "insert"]
+        assert len(inserts) == 1, (
+            f"an entitling decision must create exactly one strategy_deployments row; it "
+            f"created {len(inserts)}"
         )
+        for other in (w for w in deployment_writes if w.op != "insert"):
+            assert other.op == "update", (
+                f"an entitling decision performed a {other.op!r} on strategy_deployments "
+                f"besides its one insert; only the start-outcome UPDATE is expected"
+            )
         assert outcome.store.writes_to("strategies") == [], (
             "no `strategies` row is created for a marketplace deployment (Requirement 7.1)"
         )
@@ -840,7 +914,12 @@ def test_every_admission_case_kind_is_covered_and_the_pool_admits_and_refuses() 
         )
     )
     assert admitted.error is None, f"an entitling case was refused: {admitted.error!r}"
-    assert len(admitted.store.writes_to("strategy_deployments")) == 1
+    # One row CREATED. RT-24's start-outcome UPDATE to that same row is not a second
+    # deployment; see the matching assertion in P-16 above for why this counts inserts.
+    admitted_inserts = [
+        w for w in admitted.store.writes_to("strategy_deployments") if w.op == "insert"
+    ]
+    assert len(admitted_inserts) == 1
 
 
 def _called_names(func: Any) -> List[str]:

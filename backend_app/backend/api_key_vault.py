@@ -29,6 +29,8 @@ from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from supabase import Client, create_client
 
+from datetime import datetime, timezone
+
 # FIX VA-3: Remove logging.basicConfig() — let the application configure logging.
 #            Never call basicConfig inside a library/module.
 logger = logging.getLogger("APIKeyVault")
@@ -41,6 +43,74 @@ logger = logging.getLogger("APIKeyVault")
 # FIX VA-6: Strict validation regex — only alphanumeric + hyphens + underscores.
 # Prevents spaces/commas/equals that would corrupt ILP line protocol downstream.
 _SAFE_ID_RE = re.compile(r'^[a-zA-Z0-9\-_]{1,128}$')
+
+
+#: EXCH-STATE-01. The three `exchange_keys` columns migration 056 added for a credential's
+#: verified state, which nothing wrote until now -- so every stored key read as "not reported"
+#: no matter how many times the venue had accepted it.
+_VALIDATION_COLUMNS = ("validation_status", "last_validated_at", "can_trade")
+
+#: The two verdicts this module writes. Spellings are the ones
+#: `dashboard_aggregation_service._CREDENTIAL_VALID_STATUSES` / `_INVALID_STATUSES` already
+#: read, so the dashboard and the exchange page agree without a second vocabulary.
+VALIDATION_VERIFIED = "verified"
+VALIDATION_INVALID = "invalid"
+#: EXCH-STATE-02: the venue accepted the key AND reports it can withdraw funds. Recorded by
+#: the stored-key probe, because a key's permissions can be changed at the exchange after
+#: the save-time EXCH-02 check passed. A known negative: such a key never starts a live bot.
+VALIDATION_WITHDRAW_ENABLED = "withdraw_enabled"
+
+_VALIDATION_STATUSES = (VALIDATION_VERIFIED, VALIDATION_INVALID, VALIDATION_WITHDRAW_ENABLED)
+
+
+class CredentialNotTradeable(RuntimeError):
+    """A stored credential's recorded verdict does not permit opening live orders."""
+
+
+def credential_trade_block_reason(keys: Optional[dict]) -> Optional[str]:
+    """Why this credential must not OPEN live orders, or None when it may.
+
+    EXCH-STATE-02. Live trading with real money requires an affirmative, recorded verdict:
+    the venue accepted this key (``verified``) and did not report it read-only. Everything
+    else refuses -- a key no check has recorded, a key the venue rejected, a key that can
+    withdraw. ``can_trade is None`` (the venue did not say) is NOT a refusal: some venues
+    expose no introspection, and the order itself is then the venue's to refuse.
+
+    Opening orders only. Cancelling and flattening reduce risk and are not gated by this.
+    """
+    if not isinstance(keys, dict):
+        return "no stored credential was readable"
+    status = str(keys.get("validation_status") or "").strip().lower()
+    if status == VALIDATION_WITHDRAW_ENABLED:
+        return (
+            "the exchange reports this API key can withdraw funds; create a key with "
+            "withdrawals disabled and store it again"
+        )
+    if status != VALIDATION_VERIFIED:
+        return (
+            "this API key has no recorded successful verification"
+            + (f" (last result: {status})" if status else "")
+            + "; verify it from the Exchange Manager (refresh button) first"
+        )
+    if keys.get("can_trade") is False:
+        return "the exchange reports this API key is read-only"
+    return None
+
+
+def build_validation_record(status: str, can_trade: Optional[bool] = None) -> dict:
+    """The row fragment for one venue check's verdict, timestamped now (UTC).
+
+    ``can_trade`` is passed through as the venue reported it; ``None`` means the venue did
+    not say, and is stored as NULL rather than guessed. An ``invalid`` verdict always
+    records ``can_trade = False``: a key the venue rejects cannot place an order.
+    """
+    if status not in _VALIDATION_STATUSES:
+        raise ValueError(f"unknown validation status: {status!r}")
+    return {
+        "validation_status": status,
+        "last_validated_at": datetime.now(timezone.utc).isoformat(),
+        "can_trade": can_trade if status == VALIDATION_VERIFIED else False,
+    }
 
 
 def _validate_id(value: str, name: str) -> str:
@@ -149,7 +219,28 @@ class APIKeyVault:
         raw_secret_key: Optional[str] = None,
         label:          Optional[str] = None,
         uid:            Optional[str] = None,
+        sandbox:        bool = False,
+        validation:     Optional[dict] = None,
     ) -> bool:
+        """Encrypt and store one credential.
+
+        EXCH-STATE-01: ``validation`` is the result of the venue check the caller just ran
+        against THIS credential (``build_validation_record``). When given it is written in
+        the same upsert as the ciphertext, so a freshly stored key never sits beside the
+        previous key's verdict. When omitted (``rotate_key``, which re-encrypts the same
+        plaintext) the stored verdict is left as it is.
+
+        EXCH-06: ``sandbox`` records whether this credential addresses the venue's
+        testnet rather than production. It is NOT encrypted -- it is not a secret, it is
+        a routing choice, and encrypting it would make it unreadable by the SQL that has
+        to filter on it.
+
+        NOTE WHAT ``label`` AND ``uid`` DO HERE, because it is the trap this parameter
+        had to avoid: both are accepted and then silently dropped -- neither reaches the
+        dict below, and no column exists for them. Adding ``sandbox`` to the signature
+        alone would have reproduced exactly the defect EXCH-06 describes, one layer
+        deeper: a caller that passed it would get no error and no effect.
+        """
         user_id     = _validate_id(user_id,     "user_id")
         exchange_id = _validate_id(exchange_id, "exchange_id")
 
@@ -163,7 +254,15 @@ class APIKeyVault:
             "encrypted_api_key":    self._encrypt(raw_api_key),
             "encrypted_secret_key": self._encrypt(secret),
             "encrypted_password":   self._encrypt(raw_password) if raw_password else None,
+            # Coerced rather than passed through: this value reaches a NOT NULL BOOLEAN
+            # column (migration 060) and a caller handing over `None` or a truthy string
+            # must not turn into a NULL or a type error on the write.
+            "sandbox":              bool(sandbox),
         }
+        if validation:
+            for column in _VALIDATION_COLUMNS:
+                if column in validation:
+                    data[column] = validation[column]
 
         # FIX VA-5: Use upsert to handle existing keys cleanly.
         try:
@@ -173,6 +272,41 @@ class APIKeyVault:
         except Exception as e:
             logger.error(f"Supabase upsert failed for user={user_id}: {e}")
             raise
+
+    def record_validation(self, user_id: str, exchange_id: str, validation: dict) -> bool:
+        """EXCH-STATE-01: persist the verdict of a venue check against the STORED credential.
+
+        Written by ``POST /test-stored``. Returns False rather than raising: the check the
+        trader asked for has already happened and its answer is already in the response, so
+        failing to record it must not turn a successful probe into an error. The cost of a
+        failed write is that the card keeps showing the previous verdict with its timestamp,
+        which says when it was true -- not a fabricated present.
+        """
+        user_id     = _validate_id(user_id,     "user_id")
+        exchange_id = _validate_id(exchange_id, "exchange_id")
+        if not validation or "validation_status" not in validation:
+            return False
+        try:
+            # A literal payload (not a built dict) so the schema-drift guard can check every
+            # column this write names against the table.
+            (
+                self.supabase.table("exchange_keys")
+                .update({
+                    "validation_status": validation["validation_status"],
+                    "last_validated_at": validation.get("last_validated_at"),
+                    "can_trade": validation.get("can_trade"),
+                })
+                .eq("user_id", user_id)
+                .eq("exchange_id", exchange_id.lower())
+                .execute()
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Recording credential validation failed for user=%s exchange=%s: %s",
+                user_id, exchange_id, type(e).__name__,
+            )
+            return False
 
     def load_decrypted_keys(self, user_id: str, exchange_id: str) -> dict:
         user_id     = _validate_id(user_id,     "user_id")
@@ -191,10 +325,63 @@ class APIKeyVault:
                 raise ValueError(f"No keys found for {user_id}/{exchange_id}.")
 
             row = response.data[0]
+
+            # TENANT-01 residual / HY-07: RE-CHECK THE STORED OWNER, do not trust the
+            # query alone.
+            #
+            # The SELECT above already filters `.eq("user_id", user_id)`, so in a correct
+            # world this can never fire. That is exactly the point. Isolation here rests
+            # entirely on the WHERE clause being built correctly every time -- what
+            # TENANT-01 names as "a Python argument rather than a DB policy" -- so a
+            # dropped `.eq`, a refactor that threads the wrong variable, a client library
+            # that reorders filters, or RLS being off on this table all produce the same
+            # symptom: a row belonging to someone else, decrypted and returned.
+            #
+            # `backend_app/core/credential_vault.py` (the unused second vault HY-07
+            # tracks) was the only implementation in the tree that did this, re-verifying
+            # the stored tenant after the fetch and refusing on mismatch, and
+            # tests/test_tenant01_credential_vault_isolation.py was the only executed
+            # proof of it. Porting the invariant here is what makes that module genuinely
+            # redundant rather than merely unreferenced.
+            #
+            # Deliberately RAISES rather than returning None: every caller of this method
+            # expects a dict and already handles the ValueError raised just above for the
+            # not-found case, so failing closed costs nothing and a silent None would be
+            # read as "no credentials" and could be retried into a different code path.
+            stored_owner = row.get("user_id")
+            if stored_owner != user_id:
+                logger.error(
+                    "Cross-tenant credential read refused: caller asked for user=%s "
+                    "exchange=%s but the stored row belongs to user=%s. The query filters "
+                    "on user_id, so reaching this means the filter did not hold -- treat "
+                    "it as an isolation defect, not a bad request.",
+                    user_id, exchange_id, stored_owner,
+                )
+                raise PermissionError(
+                    "Stored credential owner does not match the requesting user."
+                )
+
             return {
                 "api_key":    self._decrypt(row.get("encrypted_api_key")),
                 "secret_key": self._decrypt(row.get("encrypted_secret_key")),
                 "password":   self._decrypt(row.get("encrypted_password")),
+                # EXCH-06. The SELECT above is `*`, so this column has been arriving in
+                # `row` ever since migration 060 added it -- and it was this hand-built
+                # projection that dropped it. `order_control._executor_for` already
+                # reads `keys.get("sandbox")`, so this one line is what turns that
+                # expression from unconditionally False into the trader's actual choice.
+                #
+                # Not decrypted: it is a routing flag, not ciphertext. `bool(...)` over
+                # a plain read because a database that has not yet had 060 applied
+                # returns no such key, and "absent" must mean production -- the same
+                # answer this function gave before the column existed.
+                "sandbox":    bool(row.get("sandbox")),
+                # EXCH-STATE-02: the recorded verdict travels with the key, so the live
+                # path can refuse a key that is unverified, rejected, read-only or able to
+                # withdraw (`credential_trade_block_reason`). Plain reads: a database
+                # without migration 056 returns no such keys, which reads as "no verdict".
+                "validation_status": row.get("validation_status"),
+                "can_trade":         row.get("can_trade"),
             }
         except Exception as e:
             logger.error(f"Failed to load keys for {user_id}: {e}")
@@ -209,6 +396,38 @@ class APIKeyVault:
         exchange_id = _validate_id(exchange_id, "exchange_id")
 
         try:
+            # TENANT-01 residual / HY-07: confirm the row this is about to delete is
+            # actually the caller's BEFORE deleting it.
+            #
+            # A DELETE cannot re-check its own rows after the fact -- once it has run,
+            # the evidence is gone -- so unlike the read path above this has to look
+            # first. The extra SELECT is the price of being able to refuse at all.
+            #
+            # A MISSING ROW IS NOT AN ERROR HERE, and that is a deliberate difference
+            # from the read path: this method's contract is "ensure these keys are gone"
+            # (its docstring lists user-disconnects-exchange, account deletion and
+            # security incident as the callers), and all three are satisfied by a row
+            # that is already absent. Raising would turn a completed account deletion
+            # into a failed one on retry.
+            existing = (
+                self.supabase.table("exchange_keys")
+                .select("user_id")
+                .eq("user_id", user_id)
+                .eq("exchange_id", exchange_id.lower())
+                .execute()
+            )
+            for row in (existing.data or []):
+                stored_owner = row.get("user_id")
+                if stored_owner != user_id:
+                    logger.error(
+                        "Cross-tenant credential deletion refused: caller user=%s "
+                        "exchange=%s but a matched row belongs to user=%s.",
+                        user_id, exchange_id, stored_owner,
+                    )
+                    raise PermissionError(
+                        "Stored credential owner does not match the requesting user."
+                    )
+
             self.supabase.table("exchange_keys") \
                 .delete() \
                 .eq("user_id", user_id) \
@@ -216,6 +435,10 @@ class APIKeyVault:
                 .execute()
             logger.info(f"Keys revoked for user={user_id} exchange={exchange_id}.")
             return True
+        except PermissionError:
+            # Not wrapped in the generic handler below: an isolation refusal must reach
+            # the caller as a refusal, not be re-raised as a storage failure.
+            raise
         except Exception as e:
             logger.error(f"Failed to delete keys for user={user_id}: {e}")
             raise
@@ -303,6 +526,14 @@ class APIKeyVault:
                 raw_api_key = keys["api_key"],
                 raw_secret  = keys["secret_key"],
                 raw_password= keys["password"],
+                # EXCH-06: CARRIED FORWARD EXPLICITLY. A re-encryption must not change
+                # WHERE the credential points. Whether a PostgREST upsert that omits a
+                # column leaves it alone or rewrites it to the column default is a
+                # question this code deliberately does not depend on -- passing the
+                # loaded value makes the rotation correct under either answer, which is
+                # worth more than being right about the semantics. Without it, a key
+                # rotation would silently move a testnet credential to production.
+                sandbox     = bool(keys.get("sandbox")),
             )
             logger.info(f"Keys rotated for user={user_id} exchange={exchange_id}.")
             return True

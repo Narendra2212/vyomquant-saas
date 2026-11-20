@@ -258,3 +258,8 @@ async def test_position_and_balance_reconciliation_detection():
         assert Decimal(str(acct_after["available_balance"])) < Decimal(str(initial_avail))
     finally:
         release_paper_persistence(paper_svc)
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

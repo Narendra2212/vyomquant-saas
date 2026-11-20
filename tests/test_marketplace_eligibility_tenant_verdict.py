@@ -96,9 +96,15 @@ def _projected_columns(projection: str) -> List[str]:
 class _SchemaFaithfulTable:
     """A chain-able fake table that answers ``42703`` for a column it does not have.
 
-    Supports the chain the gate's four reads use - ``select``/``eq``/``in_``/``execute``, plus
-    ``order``/``limit``/``single`` as no-ops so an unrelated read cannot fail on a missing
-    method - and narrows the rows it returns to the projection, as a real one does.
+    Supports the chain the gate's five reads use - ``select``/``eq``/``in_``/``not_.is_``/
+    ``execute``, plus ``order``/``limit``/``single`` as no-ops so an unrelated read cannot fail
+    on a missing method - and narrows the rows it returns to the projection, as a real one does.
+
+    ``not_.is_`` is applied rather than ignored (MKT-07). Read 5 asks for
+    ``exchange_id IS NOT NULL``, which is the clause that separates a live venue fill from
+    anything else; a double that dropped it would answer the live-history criterion from rows
+    the real read would never return, which is the same vacuousness the schema-faithful
+    projection exists to prevent.
     """
 
     def __init__(self, name: str, rows: List[Dict[str, Any]], columns: FrozenSet[str]) -> None:
@@ -123,6 +129,14 @@ class _SchemaFaithfulTable:
         self._filters.append(("in", column, values))
         return self
 
+    @property
+    def not_(self) -> "_NegatedFilters":
+        return _NegatedFilters(self)
+
+    def is_(self, column: str, value: Any) -> "_SchemaFaithfulTable":
+        self._filters.append(("is", column, value))
+        return self
+
     def order(self, *args: Any, **kwargs: Any) -> "_SchemaFaithfulTable":
         return self
 
@@ -140,6 +154,17 @@ class _SchemaFaithfulTable:
             elif kind == "in":
                 wanted = {str(v) for v in value}
                 result = [r for r in result if str(r.get(column, "")) in wanted]
+            elif kind == "is":
+                # PostgREST spells SQL NULL as the literal string ``"null"``.
+                if str(value).lower() == "null":
+                    result = [r for r in result if r.get(column) is None]
+                else:
+                    result = [r for r in result if r.get(column) == value]
+            elif kind == "not_is":
+                if str(value).lower() == "null":
+                    result = [r for r in result if r.get(column) is not None]
+                else:
+                    result = [r for r in result if r.get(column) != value]
         return result
 
     def execute(self) -> _Resp:
@@ -151,6 +176,23 @@ class _SchemaFaithfulTable:
                 for row in self._matched()
             ]
         )
+
+
+class _NegatedFilters:
+    """What ``table.not_`` returns: the same table, with the next predicate negated.
+
+    Mirrors supabase-py, where ``.not_`` is a property that yields a builder carrying a
+    negation flag and every filter method then reads it. Only ``is_`` is implemented, because
+    that is the one negated predicate the gate issues; another negated verb arriving later
+    should fail loudly here rather than be silently dropped.
+    """
+
+    def __init__(self, table: "_SchemaFaithfulTable") -> None:
+        self._table = table
+
+    def is_(self, column: str, value: Any) -> "_SchemaFaithfulTable":
+        self._table._filters.append(("not_is", column, value))
+        return self._table
 
 
 class _SchemaFaithfulSupabase:

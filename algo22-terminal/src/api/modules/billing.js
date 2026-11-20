@@ -19,13 +19,41 @@ import { get, post, del, publicGet } from '../../apiClient';
  */
 
 /**
+ * One row of `billing_invoices`, as `GET /api/billing/invoices` projects it.
+ *
+ * THE LAST THREE ARE NULLABLE AND MUST NOT BE DEFAULTED. Migration 070 declared the five
+ * columns the Razorpay webhook writer had always named (`provider`, `provider_payment_id`,
+ * `amount_usd`, `amount_inr`, `plan`) and deliberately left them nullable, so a row written
+ * before that migration genuinely does not know who captured it or what it bought. The
+ * handler passes those nulls through for the same reason its own comment gives — "a null is
+ * honest where a fabricated 'razorpay' would not be" — so a caller that substitutes
+ * `'razorpay'`, `0` or the account's current plan is making a claim about a trader's money
+ * that nothing in the database supports. Render the absence; see
+ * `design/pageFields.js`'s `invoiceProvider`, `invoicePaymentReference` and `invoicePlan`.
+ *
+ * `amtUSD` / `amtINR` are two columns and `currency` is the row's own denomination, so the
+ * amount is SELECTED by `currency` rather than read from one of them. A currency with no
+ * matching column is an absence, not a dollar figure.
+ *
+ * WHAT IS NOT HERE: no receipt or invoice URL, and nothing identifying the instrument that
+ * paid. Both absences are declared in `design/pageFields.js` (`invoiceReceipt`,
+ * `invoiceInstrument`) rather than worked around — the stored-method read is about the
+ * account's instrument today and says nothing about a past charge.
+ *
  * @typedef {Object} Invoice
- * @property {string} id
- * @property {string} date
- * @property {number} amtUSD
- * @property {number} amtINR
- * @property {string} status
- * @property {string} currency
+ * @property {string} id Invoice reference. Also the React key and the `title` tooltip.
+ * @property {string} date `created_at`. The server orders rows newest first.
+ * @property {number|null} amtUSD `amount_usd`. Null when unknown; never 0 as a stand-in.
+ * @property {number|null} amtINR `amount_inr`. Null when unknown; never 0 as a stand-in.
+ * @property {string} status Defaults to `"unknown"` server-side, which is a reading.
+ * @property {string} currency The row's denomination, selecting which amount applies.
+ * @property {string|null} provider Gateway that captured the charge (`"razorpay"`), or null
+ *   on a row that predates the provider columns.
+ * @property {string|null} providerPaymentId The gateway's own payment id. Unique per
+ *   provider, so it is the value that reconciles a charge against a statement or a support
+ *   ticket. Not secret and not key material. Null on a pre-migration row.
+ * @property {string|null} plan The `item_key` the payment bought — this charge's own
+ *   description, NOT the account's current plan. Null on a pre-migration row.
  */
 
 /**
@@ -48,7 +76,7 @@ import { get, post, del, publicGet } from '../../apiClient';
 /**
  * @typedef {Object} CheckoutResponse
  * @property {string|null} checkoutUrl - Razorpay hosted link, or null when only the modal is available
- * @property {string} provider - "stripe" or "razorpay"
+ * @property {"razorpay"} provider - always "razorpay"; it is the only gateway
  * @property {string} [order_id] - Razorpay order id, for Standard Checkout
  * @property {string} [key_id] - Razorpay PUBLISHABLE key id. Never the key secret.
  * @property {string} [razorpay_key] - Same value as key_id, the spelling the marketplace endpoint uses
@@ -124,8 +152,17 @@ export const billingApi = {
   setCurrency: (currency) => post('/api/billing/currency', { currency }),
 
   /**
-   * Create a checkout session (Stripe for USD, Razorpay for INR)
+   * Create a checkout session. Razorpay is the only gateway.
+   *
    * Backend generates the session server-side — no price data trusted from frontend.
+   *
+   * This used to read "Stripe for USD, Razorpay for INR". There is no second gateway: the
+   * only decision left is the CHARGE CURRENCY, and INR is the only currency the platform can
+   * charge. A request in any other supported currency is quoted in that currency for display
+   * and charged in INR, which is why the response carries `checkout_currency` alongside
+   * `currency` and reports `is_direct_checkout: false` for those buyers. Render the charge,
+   * do not imply the displayed figure is what the card is debited.
+   *
    * @param {CheckoutRequest} request
    * @returns {Promise<CheckoutResponse>}
    */
@@ -161,25 +198,33 @@ export const billingApi = {
    */
   resumeSubscription: () => post('/api/billing/resume', {}),
 
-  /**
-   * Ask the server for a hosted provider billing-portal session.
+  /*
+   * NO `openPortal`. REMOVED BY BILLING-PORTAL-02 (2026-11-15).
    *
-   * PROVIDER-DEPENDENT, AND ON RAZORPAY THERE IS NO PORTAL AT ALL. This used to be documented
-   * as "Open Stripe Billing Portal… Returns a redirect URL to Stripe's hosted portal", which
-   * described a provider this platform does not bill through: Razorpay is the configured one
-   * and it publishes no hosted self-serve portal. The server answers accordingly —
-   * `501 PROVIDER_HAS_NO_BILLING_PORTAL` when the live provider has no portal, and
-   * `503 PAYMENT_PROVIDER_NOT_CONFIGURED` when no provider holds live credentials. Neither
-   * returns a URL, because there is none to return. A `{ url }` comes back only from a
-   * genuinely Stripe-configured deployment.
+   * It wrapped `POST /api/billing/portal`, and its own docblock here opened with "THIS ALWAYS
+   * REJECTS. THERE IS NO PORTAL, AND THERE IS NO LONGER A CASE WHERE THERE IS." Razorpay is
+   * the only gateway and publishes no hosted self-serve billing portal, so the server answers
+   * `501 PROVIDER_HAS_NO_BILLING_PORTAL` (or `503 PAYMENT_PROVIDER_NOT_CONFIGURED`), never a
+   * URL. Stripe's `billing_portal.Session` branch went with Stripe, so the handler has had no
+   * success path at all.
    *
-   * So a caller must treat a rejection as the NORMAL answer and render the server's own
-   * `detail.message`, not assume a URL and not present this as a working control. No caller
-   * may synthesise a portal URL of its own.
+   * The reason it was kept — that `Billing.jsx` rendered the server's structured
+   * `detail.message` verbatim, which is better than the bare 404 a deleted route would give —
+   * argued for good copy on a refusal, not for keeping the buttons. Both call sites are gone
+   * (*Manage billing* in the current-plan panel, *Update payment method* in the payment-failed
+   * alert), so this wrapper has no callers and a client method whose only contract is to
+   * reject is a trap for the next one.
    *
-   * @returns {Promise<{url: string}>} on a Stripe deployment only; rejects otherwise
+   * THE BACKEND ROUTE IS DELIBERATELY UNTOUCHED. `routers/billing.py:2995` still serves it and
+   * still answers 501. This is the removal of a dead frontend control, not of the payment
+   * provider integration: `createCheckout`, `setCurrency`, `cancelSubscription`,
+   * `resumeSubscription` and webhook processing all stay exactly as they were.
+   *
+   * The sentence the refusal used to carry now lives where it is actually useful — in the
+   * payment-failed alert in `Billing.jsx`, stated before the user presses anything, telling
+   * them the instrument is collected by Razorpay Checkout at purchase, is never stored here,
+   * and is changed by paying again with a different instrument.
    */
-  openPortal: () => post('/api/billing/portal', {}),
 
   /**
    * Delete a stored payment method by ID.

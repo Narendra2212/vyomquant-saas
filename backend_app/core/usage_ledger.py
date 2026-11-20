@@ -337,6 +337,29 @@ async def count(
 _LEDGER_TABLE = "plan_usage_ledger"
 
 
+def _ledger_client(supabase: Any) -> Any:
+    """QUOTA-LEDGER-01: the client the ledger is read and written with.
+
+    ``plan_usage_ledger`` is writable only by the service role (customers can read their
+    own rows, never write them -- otherwise deleting your rows would reset your month). The
+    request path hands this module the CALLER's user-scoped client, so every append was
+    refused by the grants and swallowed below: production had zero ledger rows and every
+    metered quota lived only in Redis, which a flush or eviction resets to a free month.
+    The user id is always the server-derived caller's, so the service role widens nothing.
+    Falls back to the client given when no service client can be built (local / tests).
+    """
+    if supabase is None:
+        return None
+    try:
+        from backend_app.core.dependencies import get_service_supabase
+
+        service = get_service_supabase()
+    except Exception as exc:  # noqa: BLE001 - no service credentials: use what we were given
+        logger.debug("QUOTA-LEDGER-01: no service client (%s); using the request client", exc)
+        return supabase
+    return service if service is not None else supabase
+
+
 async def _ledger_total(
     resource: str,
     user_id: str,
@@ -351,6 +374,7 @@ async def _ledger_total(
     """
     if supabase is None:
         return None
+    supabase = _ledger_client(supabase)
     try:
         response = await _execute(
             supabase.table(_LEDGER_TABLE)
@@ -391,6 +415,7 @@ async def _append_ledger(
     """
     if supabase is None:
         return
+    supabase = _ledger_client(supabase)
     try:
         await _execute(
             supabase.table(_LEDGER_TABLE).insert(
@@ -405,7 +430,10 @@ async def _append_ledger(
             )
         )
     except Exception as exc:
-        logger.debug(
+        # A duplicate key is the idempotency index doing its job; anything else means the
+        # durable record is missing, which must be visible (QUOTA-LEDGER-01).
+        log = logger.debug if ("23505" in str(exc) or "duplicate" in str(exc).lower()) else logger.warning
+        log(
             "Usage ledger append skipped for %s/%s/%s (%s): %s",
             user_id,
             resource,
@@ -531,6 +559,7 @@ async def release(
         user_id, resource, amount=amount, period=active_period
     )
     if supabase is not None and idempotency_key:
+        supabase = _ledger_client(supabase)
         try:
             await _execute(
                 supabase.table(_LEDGER_TABLE)

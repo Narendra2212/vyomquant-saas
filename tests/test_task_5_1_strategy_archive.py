@@ -240,7 +240,12 @@ def _rows(strategy=None, deployments=None):
             strategy or _strategy_row(),
             _strategy_row(OTHER_STRATEGY_ID, OTHER_USER_ID, name="THEIRS"),
         ],
-        "strategy_deployments": list(deployments or [_deployment_row()]),
+        # ARCH-01: ``deployments=[]`` means NO deployment row. ``deployments or [...]``
+        # turned an empty list into a default stopped row, so the legacy "no deployment
+        # row" test below was never testing the case its name describes.
+        "strategy_deployments": list(
+            deployments if deployments is not None else [_deployment_row()]
+        ),
         "strategy_versions": [{"id": "v-1", "strategy_id": STRATEGY_ID}],
         "strategy_backtests": [{"id": "b-1", "strategy_id": STRATEGY_ID}],
         "signals": [{"id": "s-1", "strategy_id": STRATEGY_ID}],
@@ -432,6 +437,46 @@ class TestActiveDeploymentsBlockArchival:
         assert len(blocking) == 1
         assert blocking[0]["binding_state"] == "RUNNING"
         assert blocking[0]["source"] == "strategies.status"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", ["paused", "running", "deploying"])
+    async def test_a_strategy_whose_deployments_have_all_ended_can_be_deleted(self, flag):
+        """ARCH-01. ``POST /{id}/pause`` stops every deployment and THEN writes
+        ``strategies.status='paused'``; the archive gate used to read that flag as a live
+        bot, so a paused strategy could never be deleted. Where deployment rows exist they
+        are the authority: a stale strategy flag beside ended rows blocks nothing."""
+        sb = _Supabase(_rows(
+            strategy=_strategy_row(status=flag),
+            deployments=[_deployment_row(status="stopped"),
+                         _deployment_row(status="failed", deployment_id="dep-2")],
+        ))
+
+        result = await archive.archive_strategy(sb, _user(), STRATEGY_ID)
+
+        assert result["status"] == "archived"
+        assert sb.row("strategies", STRATEGY_ID)[ARCHIVED_AT] is not None
+
+    @pytest.mark.asyncio
+    async def test_a_paused_legacy_strategy_with_no_deployment_row_can_be_deleted(self):
+        """Pausing stops the bot before the flag is written, so PAUSED is not trading."""
+        sb = _Supabase(_rows(strategy=_strategy_row(status="paused"), deployments=[]))
+
+        result = await archive.archive_strategy(sb, _user(), STRATEGY_ID)
+
+        assert result["status"] == "archived"
+
+    @pytest.mark.asyncio
+    async def test_a_live_deployment_row_still_blocks_whatever_the_strategy_flag_says(self):
+        sb = _Supabase(_rows(
+            strategy=_strategy_row(status="paused"),
+            deployments=[_deployment_row(status="running")],
+        ))
+
+        with pytest.raises(archive.ArchiveRejected) as caught:
+            await archive.archive_strategy(sb, _user(), STRATEGY_ID)
+
+        assert caught.value.code == "STRATEGY_HAS_ACTIVE_DEPLOYMENTS"
+        assert sb.row("strategies", STRATEGY_ID)[ARCHIVED_AT] is None
 
     @pytest.mark.asyncio
     async def test_an_unreadable_deployment_state_refuses_rather_than_archiving_blind(self):

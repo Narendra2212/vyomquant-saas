@@ -12,8 +12,12 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
-from backend_app.core.dependencies import get_current_user, get_supabase
+from backend_app.core.dependencies import (get_current_user, get_service_supabase,
+                                           get_supabase)
 from backend_app.core.rate_limit import limiter
+# Module import so schedule_user_notification/dispatch_user_notification resolve at
+# call time and a test can replace them. Same note as routers/risk.py.
+from backend_app.core import notification_dispatcher
 from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.websocket_auth import (WS_TICKET_REDIS_PREFIX,
                                              WS_TICKET_TTL_SECONDS,
@@ -53,26 +57,40 @@ class UserLogin(BaseModel):
 # ----------------------------------
 @router.post("/signout")
 def signout(
-    token: str,
     current_user: dict = Depends(get_current_user)  # BE-CRITICAL-001 FIX: Require authentication
 ):
     """
-    Sign out user by revoking their session.
-    
-    BE-CRITICAL-001 FIX: Now requires authentication to prevent unauthorized signout.
-    SECURITY: No fallback mode - must use Supabase authentication.
+    Sign out the caller by revoking their session's refresh token server-side.
+
+    AUTH-01. ``client.auth.sign_out()`` ON AN ANONYMOUS CLIENT REVOKES NOTHING
+    -----------------------------------------------------------------------------
+    This used to build an ANON-keyed client (``SupabaseConnection().get_client()``,
+    never authenticated as the caller — the caller's own browser SDK performed their
+    login, not this backend) and call its plain ``sign_out()``. That method signs the
+    CLIENT OBJECT'S OWN locally-tracked session out, and this client never had one, so
+    the call was a no-op: it returned 200 "Signed out successfully" while the caller's
+    refresh token remained valid indefinitely. The ``token`` parameter this endpoint
+    used to accept was never even read in the function body.
+
+    The fix revokes the caller's session directly, by JWT, via Supabase's admin API
+    (``POST /auth/v1/logout``, authorised by the service-role key rather than any
+    locally-tracked session) — which is exactly what "use admin sign_out(jwt)" means:
+    this makes a real server-to-server call naming WHOSE session to end, independent
+    of whether this process ever held that session itself. ``scope="global"`` revokes
+    every refresh token for the account, not just the one tied to this access token,
+    matching what a user clicking "Sign out" expects.
     """
-    vault = SupabaseConnection()
-    client = vault.get_client()
-    
-    if not client:
+    service_client = get_service_supabase()
+    if not service_client:
         raise HTTPException(
             status_code=503,
-            detail="Supabase authentication required. Configure SUPABASE_URL and SUPABASE_ANON_KEY."
+            detail="Supabase service-role credentials required to revoke a session.",
         )
-    
+
     try:
-        client.auth.sign_out()
+        service_client.auth.admin.sign_out(
+            jwt=current_user["access_token"], scope="global"
+        )
         return {"message": "Signed out successfully"}
     except Exception as e:
         raise HTTPException(
@@ -126,7 +144,17 @@ def get_current_user_profile(user: dict = Depends(get_current_user)):
     Get current authenticated user's profile.
     Fast (<50ms) - uses JWT token claims, no Supabase network call.
     """
-    logger.debug(f"User profile fetched: {user.get('email')}")
+    # SC-8: the email address must not reach the logs. This handler runs on every
+    # /api/auth/me call, so the line that stood here wrote a user's email to stdout — and
+    # from there into CloudWatch, with CloudWatch's retention rather than ours — on every
+    # routine profile fetch. The subject id answers the same debugging question ("whose
+    # request was this?") without carrying a direct identifier, and it is the id that every
+    # other log line in this application already correlates on.
+    #
+    # Lazy %s formatting rather than an f-string: the f-string was interpolated even when
+    # DEBUG was disabled, which is both wasted work and, for a PII field, a value
+    # materialised for no reader.
+    logger.debug("User profile fetched for subject %s", user.get("sub") or user.get("id"))
     return {
         "id": user.get("sub") or user.get("id"),
         "email": user.get("email"),
@@ -187,31 +215,11 @@ async def register(
                 from backend_app.core.supabase_connection import SupabaseConnection
                 admin_client = SupabaseConnection().get_client()
                 if admin_client:
-                    ref_code = user_data.referral_code.upper().strip()
-                    referral_code_res = admin_client.table("referral_codes").select("user_id", "id").eq("code", ref_code).execute()
-                    if referral_code_res.data and len(referral_code_res.data) > 0:
-                        referrer_data = referral_code_res.data[0]
-                        referrer_id = referrer_data["user_id"]
-                        referral_code_id = referrer_data["id"]
-                        if referrer_id == user_id:
-                            logger.warning(f"Self-referral attempt blocked for user {user_id}")
-                        else:
-                            existing_referral = admin_client.table("referral_relationships").select("id").eq("referred_id", user_id).execute()
-                            if not existing_referral.data or len(existing_referral.data) == 0:
-                                admin_client.table("referral_relationships").insert({
-                                    "referrer_id": referrer_id,
-                                    "referred_id": user_id,
-                                    "referral_code_id": referral_code_id,
-                                    "status": "pending"
-                                }).execute()
-                                admin_client.table("profiles").update({
-                                    "referred_by_user_id": referrer_id
-                                }).eq("id", user_id).execute()
-                                logger.info(f"Referral relationship created: {referrer_id} referred {user_id} using code {ref_code}")
-                            else:
-                                logger.warning(f"User {user_id} already has a referrer, ignoring duplicate referral")
-                    else:
-                        logger.warning(f"Invalid referral code: {ref_code}")
+                    # REF-ATTR-01: the one attribution rule, shared with /api/referral/claim.
+                    from backend_app.backend.referral_attribution import attribute_referral
+
+                    outcome = attribute_referral(admin_client, user_id, user_data.referral_code)
+                    logger.info(f"Referral claim at registration for {user_id}: {outcome['status']}")
                 else:
                     logger.warning(f"Referral code {user_data.referral_code} ignored: admin client not available")
             except Exception as ref_err:
@@ -237,6 +245,61 @@ async def register(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _login_dedupe_token(access_token: str) -> str:
+    """A stable, non-reversible handle for ONE session, for use as an idempotency key.
+
+    T10. `new_login_detected` is on the mandatory alert floor (migration 073 pins it to
+    `true`), and until now nothing dispatched it -- the event existed only inside that
+    CHECK constraint.
+
+    KEYED ON THE SESSION, NOT ON THE USER AND A TIMESTAMP. Two sign-ins inside the same
+    second would collide on a per-second key, and the second one -- the interesting one,
+    if the first was the attacker's -- would be de-duplicated away by
+    `uq_notifications_user_idempotency`. One access token is one session, so hashing it
+    gives exactly one key per sign-in.
+
+    THE TOKEN ITSELF NEVER TRAVELS. It is a bearer credential; a notification row is read
+    back by the browser and sits in a database the support tooling can see. SHA-256 is
+    sufficient here because the input is high-entropy and the output is a correlation
+    handle, not an authenticator -- nothing is ever verified against it.
+    """
+    import hashlib
+
+    return hashlib.sha256(str(access_token).encode("utf-8")).hexdigest()[:32]
+
+
+async def _notify_new_login(user_id: str, email: str, access_token: str) -> None:
+    """Tell the account holder that a session was opened. Never raises.
+
+    A customer must never be unable to sign in because the alert could not be sent, so
+    every failure here is caught and logged at ERROR -- ERROR rather than DEBUG because a
+    security alert that silently did not send is the kind of gap that is only discovered
+    after it mattered.
+    """
+    try:
+        await notification_dispatcher.dispatch_user_notification(
+            user_id=str(user_id),
+            event_type="new_login_detected",
+            category="security",
+            severity="warning",
+            title="New Sign-In to Your Account",
+            message=(
+                f"A new session was opened for {email}. If this was not you, change your "
+                "password and review your active sessions."
+            ),
+            metadata={
+                # The hash, never the token.
+                "idempotency_key": f"new_login:{_login_dedupe_token(access_token)}",
+                "email": email,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - a sign-in must not fail over an alert
+        logger.error(
+            "[AUTH] new_login_detected notification was not delivered for user=%s: %s",
+            user_id, exc,
+        )
+
+
 @router.post("/login")
 @limiter.limit("5/minute")
 async def login(
@@ -252,9 +315,22 @@ async def login(
             }
         )
         if res.session:
+            # T10: awaited rather than scheduled. This is an async handler, the dispatch
+            # is one insert, and a security alert that races the response is a security
+            # alert that can be lost on a worker recycle. `_notify_new_login` is total,
+            # so it cannot turn a successful sign-in into a 401.
+            await _notify_new_login(
+                user_id=getattr(res.user, "id", "") or "",
+                email=credentials.email,
+                access_token=res.session.access_token,
+            )
             return {"access_token": res.session.access_token, "token_type": "bearer", "user": res.user}
         else:
             raise HTTPException(status_code=401, detail="Invalid credentials")
+    except HTTPException:
+        # Do not convert a deliberate 401 into another 401 with a different body, and do
+        # not let the generic handler below swallow a non-auth failure.
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 

@@ -317,6 +317,24 @@ _ELIGIBILITY_HANDLER = {
         "library_strategies": frozenset(
             {"id", "moderation_status", "is_active", "source_strategy_id"}
         ),
+        # MKT-07 read 5: the live-execution ledger behind ``MP_LIVE_HISTORY``. Every name
+        # here is declared on ``public.execution_records`` -- checked against
+        # ``staging/provisioning_snapshot.json``, which is also where the absence of an
+        # ``is_simulated`` column is read from, and why ``exchange_id IS NOT NULL`` is the
+        # live discriminator rather than a flag.
+        "execution_records": frozenset(
+            {
+                "execution_id",
+                "strategy_id",
+                "tenant_id",
+                "status",
+                "exchange_id",
+                "filled_size",
+                "filled_at",
+                "submitted_at",
+                "created_at",
+            }
+        ),
     },
     "preexisting": frozenset(
         {
@@ -324,6 +342,9 @@ _ELIGIBILITY_HANDLER = {
             "strategy_versions",
             "strategy_backtests",
             "library_strategies",
+            # Declared by ``d97ffff9c3bb_execution_schema_rebuild``, which is the revision
+            # production is pinned at -- so the gate's fifth read needs no migration.
+            "execution_records",
         }
     ),
 }
@@ -504,13 +525,15 @@ _ENTITLEMENT_HANDLER = {
         "strategy_versions": frozenset(
             {"id", "strategy_id", "version", "is_draft"}
         ),
+        # ``resolve_owned_strategy`` (PAPER-09): the caller's OWN strategy, which has no Listing.
+        "strategies": frozenset({"id", "user_id", "archived_at"}),
     },
     # ``library_strategies``, ``library_subscriptions`` and ``strategy_versions`` all pre-date
     # this work; only their additive columns are this spec's to create, proven present by the
     # 007/008 column assertions. ``marketplace_submissions`` is created by 007, so its
     # ``submission_state`` column IS asserted to exist by the migration set here.
     "preexisting": frozenset(
-        {"library_strategies", "library_subscriptions", "strategy_versions"}
+        {"library_strategies", "library_subscriptions", "strategy_versions", "strategies"}
     ),
 }
 
@@ -642,6 +665,16 @@ _DEPLOYMENT_HANDLER = {
                 "initial_capital",
                 "created_at",
                 "updated_at",
+                # RT-24. The handler no longer stops at the insert: it starts the bot and
+                # then records the outcome, so it writes the two columns that say what
+                # happened. `deploy_version` has always written both at its own equivalent
+                # sites; this path simply never reached them, which is the defect RT-24 is.
+                #
+                # `started_at` on a successful start, `error_message` on a refused one. Both
+                # are base columns of the deployment shape, not new schema -- which is why
+                # this entry grows rather than a migration being added.
+                "started_at",
+                "error_message",
             }
         ),
         "strategy_versions": frozenset({"id", "version"}),
@@ -714,6 +747,14 @@ _EXPIRY_SWEEP_HANDLER = {
                 "status",
                 "stopped_at",
                 "updated_at",
+                # MKT-05: the sweep now signals a LIVE marketplace deployment
+                # differently from a paper one -- `mode` is what it discriminates on,
+                # and `close_requested_at` is the RT-21 durable flatten request it
+                # sets instead of jumping the row to 'stopped' for something that is
+                # actually running in another process. `mode` is created by migration
+                # 004e, `close_requested_at` by the RT-21 migration.
+                "mode",
+                "close_requested_at",
             }
         ),
         "paper_sessions": frozenset(
@@ -723,6 +764,13 @@ _EXPIRY_SWEEP_HANDLER = {
                 "session_state",
                 "stopped_at",
                 "updated_at",
+                # PAPER-04: the liveness pair the orphan-reconciliation pass reads.
+                # `last_heartbeat_at` is created by migration 054; `started_at` by 009.
+                # Both are SELECTed by `paper_repository.list_stale_running_sessions`, and
+                # this manifest is what keeps a mistyped column from reaching production
+                # as a 42703 (Requirement 24.9).
+                "last_heartbeat_at",
+                "started_at",
             }
         ),
     },

@@ -257,12 +257,10 @@ import { exchangeApi } from '../../../src/api/modules/exchange';
 import { libraryApi } from '../../../src/api/modules/library';
 import { ordersApi } from '../../../src/api/modules/orders';
 import { paperApi } from '../../../src/api/modules/paper';
-import { portfolioApi } from '../../../src/api/modules/portfolio';
 import { strategiesApi } from '../../../src/api/modules/strategies';
 import { EMPTY_VARIANTS, REQUIRED_EMPTY_FIELDS } from '../../../src/components/ds/EmptyState';
 import Dashboard from '../../../src/pages/Dashboard';
 import LiveTrading from '../../../src/pages/LiveTrading';
-import Portfolio from '../../../src/pages/Portfolio';
 import Strategies from '../../../src/pages/Strategies';
 import TradeHistory from '../../../src/pages/TradeHistory';
 
@@ -338,14 +336,6 @@ const primeReads = () => {
   vi.spyOn(ordersApi, 'getOpenOrders').mockResolvedValue([]);
   vi.spyOn(ordersApi, 'getHistory').mockResolvedValue([]);
 
-  // BARE ARRAYS, not envelopes. `Portfolio.jsx:991`, `:1008` and `:1026` each check
-  // `Array.isArray(res.value)` and report an error state otherwise — the allocation route
-  // "answers a BARE ARRAY of `{asset, value_usd, pct}`" and the other two are the same
-  // shape. An envelope here puts three chart panels into `error`, and an error panel is not
-  // an empty one: Requirement 19.4 keeps those two states apart and so must the fixture.
-  vi.spyOn(portfolioApi, 'getAllocation').mockResolvedValue([]);
-  vi.spyOn(portfolioApi, 'getEquityCurve').mockResolvedValue([]);
-  vi.spyOn(portfolioApi, 'getHeatmap').mockResolvedValue([]);
 
   vi.spyOn(paperApi, 'getPositions').mockResolvedValue({
     positions: [],
@@ -450,9 +440,6 @@ const FRESH_ACCOUNT = Object.freeze({
    *                          counts all four back, which is the assertion that tells a collapse
    *                          apart from a deletion (Requirement 19.4).
    */
-  'pages/Portfolio.jsx': Object.freeze({
-    panels: 2, emptyPanels: 1, emptyActions: 1, primaryActions: 1,
-  }),
   /*
    * MOVED BY TASK 12.7's SECOND HALF, AND ONLY IN ONE OF THE FOUR NUMBERS.
    *
@@ -518,7 +505,6 @@ const FRESH_ACCOUNT = Object.freeze({
 const SUITES = Object.freeze([
   { file: 'pages/Dashboard.jsx', element: <Dashboard /> },
   { file: 'pages/Strategies.jsx', element: <Strategies /> },
-  { file: 'pages/Portfolio.jsx', element: <Portfolio /> },
   { file: 'pages/TradeHistory.jsx', element: <TradeHistory /> },
   { file: 'pages/LiveTrading.jsx', element: <LiveTrading /> },
 ]);
@@ -743,7 +729,7 @@ describe('a fresh account: the seeded counts', () => {
     ).toEqual([]);
 
     // Neither `toEqual([])` above may pass by having nothing to filter.
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(4); // less Portfolio (PORTFOLIO-REMOVED-01)
     expect(Object.keys(FRESH_ACCOUNT)).toHaveLength(SUITES.length);
   });
 });
@@ -845,78 +831,7 @@ describe('a fresh account: Dashboard is §9.3\'s case', () => {
   }, 30000);
 });
 
-/* ══════════════════════════════════════════════════════════════════════════════════════
- * 3b. Portfolio's collapse, opened — task 12.7's first half
- * ══════════════════════════════════════════════════════════════════════════════════════ */
-
-describe('a fresh account: Portfolio\'s three history panels are collapsed, not deleted', () => {
-  it('keeps the three collapsed history panels\' state, copy and action one keypress away', async () => {
-    /*
-     * REQUIREMENT 19.4, AND THE ONE THING THE COUNTS ABOVE CANNOT SEE.
-     *
-     * `emptyPanels: 1` is what a collapse and a deletion both look like from outside, and
-     * `emptyActions: 1` is what "three actions were de-emphasised" and "three actions were
-     * removed" both look like. So this opens the disclosure and counts again: all 5 panels come
-     * back, all 4 present as empty, all 4 name an action, and the primary action is still the
-     * only one. "Reduced weight is not collapse — the state name, its copy and its action all
-     * stay" is that pair of censuses, not a sentence in a docblock.
-     *
-     * Reached the way a keyboard user reaches it (Requirement 6.4): `ds/Accordion`'s toggle is a
-     * `button` in a heading, so it has an accessible name and it is in the tab order, and this
-     * finds it by that name rather than by a class or a test id.
-     */
-    primeReads();
-    const { container } = render(<MemoryRouter><Portfolio /></MemoryRouter>);
-
-    await waitFor(
-      () => {
-        expect(
-          container.querySelectorAll('[data-panel-state="loading"],[data-panel-state="idle"]')
-            .length,
-        ).toBe(0);
-      },
-      { timeout: 10000 },
-    );
-
-    const closed = censusOf(container);
-    expect(closed.emptyPanels).toBe(1);
-    expect(closed.primaryActions).toBe(1);
-
-    const toggle = screen.getByRole('button', { name: /allocation, equity and daily p&l/i });
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-
-    fireEvent.click(toggle);
-    await waitFor(() => {
-      expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    });
-
-    const open = censusOf(container);
-    expect(
-      {
-        panels: open.panels,
-        emptyPanels: open.emptyPanels,
-        emptyActions: open.emptyActions,
-        primaryActions: open.primaryActions,
-      },
-      `opened, Portfolio shows panel states ${open.states.join(', ')} and empty variants `
-        + `${open.variants.join(', ') || '(none)'}.\n\n`
-        + 'All 5 panels and all 4 empty actions must be behind that one toggle. If the opened\n'
-        + 'counts are lower than the seed task 12.2 took, a panel was REMOVED rather than\n'
-        + 'collapsed, which Requirement 19.4 forbids however few states it leaves on screen.',
-    ).toEqual({ panels: 5, emptyPanels: 4, emptyActions: 4, primaryActions: 1 });
-
-    // And opening it did not turn an absence into a failure. The three that came back say the
-    // trader has none of these — not that a read could not be made, and not that the figures are
-    // unavailable on this ledger, which is what the paper account's three tier-3 panels report
-    // and is a different fact (Requirement 8.3). The collapse condition accepts
-    // `PANEL_STATES.EMPTY` and nothing else, so neither state can be hidden by it.
-    expect(open.states).not.toContain('unavailable');
-    expect(open.states).not.toContain('error');
-
-    cleanup();
-    vi.restoreAllMocks();
-  }, 30000);
-});
+/* 3b. Portfolio's collapse test was removed with the page (PORTFOLIO-REMOVED-01). */
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
  * 4. What must not be lost — Requirements 8.3 and 19.4

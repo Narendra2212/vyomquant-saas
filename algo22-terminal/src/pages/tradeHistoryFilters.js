@@ -304,7 +304,32 @@ export const UNREPORTED_ON_LIVE = Object.freeze(
  *
  * @type {ReadonlyArray<string>}
  */
-export const PAPER_REPORTED_FIELDS = Object.freeze(['pnl', 'fees', 'strategy']);
+// PAPER-SLIP-01 (2026-11-15): `GET /api/paper/trades` now returns the slippage the ledger booked
+// (`paper_fills.slippage_minor`, in quote) and, via PAPER-STRAT-01, a real `strategy` name.
+export const PAPER_REPORTED_FIELDS = Object.freeze(['pnl', 'fees', 'slippage', 'strategy']);
+
+/**
+ * TRADE-13. The ❌-on-live fields the LIVE read reports for an execution recorded AFTER
+ * `master_executor.py`'s telemetry write started carrying `fee` and `slippage`
+ * (`backend_app/backend/telemetry_engine.py log_execution`).
+ *
+ * This is a LEDGER-LEVEL declaration, same as `PAPER_REPORTED_FIELDS` beside it — it says the
+ * LIVE read can carry these fields now, never that every row does. A `fee`/`slippage` column
+ * still renders the not-available marker, per row, for any execution written before this
+ * change (`readFee`/`readSlippage` return `null` for a row with no such key, exactly as they
+ * already do for a paper row missing one — see `FeeCell`/`totalOf` in `TradeHistory.jsx`).
+ *
+ * `pnl` is deliberately absent: realized P&L needs the entry price of the position being
+ * closed, and nothing on the live order-completion path tracks one (`PositionEngine` has no
+ * caller there — see TRADE-13's `REMEDIATION_LEDGER` entry), so it stays declared unavailable
+ * on LIVE rather than rendering a guessed figure.
+ *
+ * @type {ReadonlyArray<string>}
+ */
+// LIVE-HIST-01 (2026-11-15): the live read is `execution_records`, which names the strategy
+// (`strategy`, joined from `strategies.name`, beside `strategy_id`) on every row.
+// LIVE-PNL-01: and realised P&L, per sell, against the average cost of the position's buys.
+export const LIVE_REPORTED_FIELDS = Object.freeze(['fees', 'slippage', 'strategy', 'pnl']);
 
 /** The `pageFields` entry for one Trade History field, or `null`. */
 const historyEntry = (field) => HISTORY_FIELDS.find((f) => f.field === field) ?? null;
@@ -313,8 +338,11 @@ const historyEntry = (field) => HISTORY_FIELDS.find((f) => f.field === field) ??
  * Whether `environment`'s read reports `field` at all.
  *
  * A field with no ❌ verdict is reported everywhere (`market`, `side`, `time`, `price`,
- * `quantity`, `status`). A field with one is reported only where a note says the paper read
- * carries it.
+ * `quantity`, `status`). A field with one is reported only where a note says that
+ * environment's read carries it — `PAPER_REPORTED_FIELDS` for the paper read,
+ * `LIVE_REPORTED_FIELDS` for the live one. The two lists are independent: `fees` is on both
+ * (each read carries it for its own reason), `slippage` is LIVE-only (TRADE-13; no paper fill
+ * records one), and `pnl`/`strategy` stay PAPER-only.
  *
  * @param {string} field A `pageFields` Trade History field name.
  * @param {string} environment
@@ -323,7 +351,8 @@ const historyEntry = (field) => HISTORY_FIELDS.find((f) => f.field === field) ??
 export function isFieldReported(field, environment) {
   if (!UNREPORTED_ON_LIVE.includes(field)) return true;
   return normaliseEnvironment(environment) === ENVIRONMENTS.PAPER
-    && PAPER_REPORTED_FIELDS.includes(field);
+    ? PAPER_REPORTED_FIELDS.includes(field)
+    : LIVE_REPORTED_FIELDS.includes(field);
 }
 
 /**
@@ -897,9 +926,16 @@ export const offersClearFilters = (variant) => variant === EMPTY_VARIANT.NO_MATC
  */
 export function filterTrades(rows, options = {}) {
   const environment = normaliseEnvironment(options.environment);
-  const filters = normaliseFilters(options.filters, environment);
   const query = normaliseQuery(options.search);
   const candidates = tradeRows(rows);
+  const withheld = withheldFilters(candidates, environment);
+  // TH-FILTER-01: a dimension whose control is withheld (unreported, or no row offers a
+  // value) is not applied. Applied, a stale selection the trader can no longer see or clear
+  // filtered the ledger to nothing.
+  const filters = { ...normaliseFilters(options.filters, environment) };
+  for (const entry of withheld) {
+    if (entry.id in DEFAULT_FILTERS) filters[entry.id] = DEFAULT_FILTERS[entry.id];
+  }
   const matched = candidates.filter(buildPredicate({ filters, search: query, environment }));
   const totalCount = candidates.length;
   const resultCount = matched.length;
@@ -919,7 +955,7 @@ export function filterTrades(rows, options = {}) {
     activeFilterCount: active,
     hasActiveFilters: active > 0,
     controls: filterControls(candidates, environment),
-    withheld: withheldFilters(candidates, environment),
+    withheld,
     search: searchControl(candidates, environment),
     marketOptions: marketOptions(candidates),
     strategyOptions: strategyOptions(candidates),

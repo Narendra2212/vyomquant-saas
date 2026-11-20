@@ -113,110 +113,20 @@ def create_razorpay_signature(payload_bytes: bytes, secret: str = "rzp_webhook_s
 
 class TestCompleteRealPaymentFlow:
     """Audit Section 1: Trace entire producer -> webhook -> subscription -> entitlement -> notification -> WebSocket."""
+    # REMOVED: the tests that stood here drove BillingLifecycle.activate_subscription /
+    # start_trial / upgrade_subscription / downgrade_subscription / renew_subscription
+    # against a Supabase mock and asserted each method's own return dict. None of those
+    # methods had a production caller -- renew_subscription's only one was inside
+    # stripe_webhook()'s invoice.payment_succeeded branch, which went with the provider --
+    # so they proved the library returned what it said it returned and nothing about what
+    # the product does. The product's real grant path is the Razorpay webhook
+    # (_apply_billing_entitlement + _record_plan_period), covered behaviourally by
+    # test_billing_e2e.py, test_bill01_razorpay_plans_expire.py and
+    # test_subscription_renewal_regression.py. The surface itself is now pinned by
+    # tests/test_billing_lifecycle_surface.py, which also records that this product has
+    # no trial, no grace period, no proration on upgrade and no scheduled downgrade.
 
-    @pytest.mark.asyncio
-    async def test_stripe_complete_payment_flow_e2e(self):
-        """Trace: Plan Selection -> Minor-Unit Checkout -> Stripe Webhook -> DB Update -> Cache Clear -> Entitlement Unlock -> Notification -> WebSocket."""
-        user_id = "usr_stripe_e2e"
-        mock_sb = make_supabase_mock(tier="free", user_id=user_id)
 
-        # 1. Checkout minor units calculation for Pro ($10 USD = 1000 cents)
-        usd_price_info = await FXService.localize_price(10.0, "USD")
-        assert usd_price_info.minor_units == 1000
-        assert usd_price_info.target_currency == "USD"
-
-        # 2. Simulate Stripe checkout.session.completed signed webhook
-        session_event = {
-            "id": "evt_stripe_12345",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "id": "cs_test_session_abc",
-                    "client_reference_id": user_id,
-                    "payment_intent": "pi_test_stripe_999",
-                    "amount_total": 1000,
-                    "currency": "usd",
-                    "metadata": {
-                        "item_key": "pro",
-                        "discount_applied": "false",
-                    },
-                }
-            }
-        }
-        payload_bytes = json.dumps(session_event).encode("utf-8")
-        sig = create_stripe_signature(payload_bytes, "whsec_test_secret_12345")
-        assert sig.startswith("t=") and "v1=" in sig
-
-        # 3. Simulate processing webhook entitlement and lifecycle activation
-        with patch("backend_app.core.billing_lifecycle.redis_manager.delete", new_callable=AsyncMock) as mock_del:
-            activation_result = await BillingLifecycle.activate_subscription(
-                user_id=user_id,
-                plan="pro",
-                supabase=mock_sb,
-                payment_provider="stripe",
-                payment_id="pi_test_stripe_999"
-            )
-            assert activation_result["status"] == "active"
-            assert activation_result["plan"] == "pro"
-            # Verify Redis cache invalidated
-            mock_del.assert_called_with(f"profile_limits:{user_id}")
-
-        # 4. Verify EntitlementEngine now grants Pro features
-        is_ml_allowed = await SubscriptionEngine.check_feature_entitlement(user_id, "pro", Feature.ML_TRAINING.value)
-        assert is_ml_allowed is True
-
-        is_mkt_allowed = await SubscriptionEngine.check_feature_entitlement(user_id, "pro", Feature.MARKETPLACE_ACCESS.value)
-        assert is_mkt_allowed is True
-
-        # Pro Quant's published live-strategy capacity. Was 5 before the five-plan ladder.
-        bot_limit = SubscriptionEngine.get_quota_limit("pro", Resource.BOTS.value)
-        assert bot_limit == 10
-
-    @pytest.mark.asyncio
-    async def test_razorpay_complete_payment_flow_e2e(self):
-        """Trace: INR Selection -> Paise Conversion -> Razorpay Webhook -> DB Update -> Cache Clear -> Entitlement Unlock -> Notification."""
-        user_id = "usr_rzp_e2e"
-        mock_sb = make_supabase_mock(tier="free", user_id=user_id)
-
-        # 1. INR Minor units conversion for Pro ($10 base -> INR paise)
-        inr_price_info = await FXService.localize_price(10.0, "INR")
-        assert inr_price_info.minor_units > 0
-        assert inr_price_info.target_currency == "INR"
-
-        # 2. Razorpay payment.captured signed webhook
-        payment_event = {
-            "event": "payment.captured",
-            "payload": {
-                "payment": {
-                    "entity": {
-                        "id": "pay_rzp_test_888",
-                        "amount": 99900,
-                        "currency": "INR",
-                        "notes": {
-                            "user_id": user_id,
-                            "item": "pro",
-                        }
-                    }
-                }
-            }
-        }
-        raw_bytes = json.dumps(payment_event).encode("utf-8")
-        secret = "rzp_webhook_secret_99999"
-        expected_sig = create_razorpay_signature(raw_bytes, secret)
-        assert hmac.compare_digest(expected_sig, create_razorpay_signature(raw_bytes, secret))
-
-        # 3. Simulate processing webhook
-        with patch("backend_app.core.billing_lifecycle.redis_manager.delete", new_callable=AsyncMock) as mock_del:
-            activation = await BillingLifecycle.activate_subscription(
-                user_id=user_id,
-                plan="pro",
-                supabase=mock_sb,
-                payment_provider="razorpay",
-                payment_id="pay_rzp_test_888"
-            )
-            assert activation["status"] == "active"
-            assert activation["plan"] == "pro"
-            mock_del.assert_called_with(f"profile_limits:{user_id}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -225,6 +135,18 @@ class TestCompleteRealPaymentFlow:
 
 class TestSubscriptionStateMachine:
     """Audit Section 2: Verify all 12 subscription states."""
+    # REMOVED: the tests that stood here drove BillingLifecycle.activate_subscription /
+    # start_trial / upgrade_subscription / downgrade_subscription / renew_subscription
+    # against a Supabase mock and asserted each method's own return dict. None of those
+    # methods had a production caller -- renew_subscription's only one was inside
+    # stripe_webhook()'s invoice.payment_succeeded branch, which went with the provider --
+    # so they proved the library returned what it said it returned and nothing about what
+    # the product does. The product's real grant path is the Razorpay webhook
+    # (_apply_billing_entitlement + _record_plan_period), covered behaviourally by
+    # test_billing_e2e.py, test_bill01_razorpay_plans_expire.py and
+    # test_subscription_renewal_regression.py. The surface itself is now pinned by
+    # tests/test_billing_lifecycle_surface.py, which also records that this product has
+    # no trial, no grace period, no proration on upgrade and no scheduled downgrade.
 
     @pytest.mark.parametrize("state", [
         SubscriptionStatus.TRIAL,
@@ -239,14 +161,6 @@ class TestSubscriptionStateMachine:
         assert isinstance(state, str)
         assert len(state) > 0
 
-    @pytest.mark.asyncio
-    async def test_trial_lifecycle(self):
-        """User on trial gets 14 days on Starter plan, then auto-downgraded to Free upon expiry."""
-        mock_sb = make_supabase_mock(tier="free", user_id="usr_trial_1")
-        trial = await BillingLifecycle.start_trial("usr_trial_1", mock_sb)
-        assert trial["status"] == "trial_started"
-        assert trial["plan"] == "starter"
-        assert trial["trial_days"] == 14
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -358,31 +272,20 @@ class TestPlanEntitlementsAPIEnforcement:
 
 class TestUpgradesAndDowngrades:
     """Audit Section 4 & 5: Immediate upgrades vs scheduled downgrades with data preservation."""
+    # REMOVED: the tests that stood here drove BillingLifecycle.activate_subscription /
+    # start_trial / upgrade_subscription / downgrade_subscription / renew_subscription
+    # against a Supabase mock and asserted each method's own return dict. None of those
+    # methods had a production caller -- renew_subscription's only one was inside
+    # stripe_webhook()'s invoice.payment_succeeded branch, which went with the provider --
+    # so they proved the library returned what it said it returned and nothing about what
+    # the product does. The product's real grant path is the Razorpay webhook
+    # (_apply_billing_entitlement + _record_plan_period), covered behaviourally by
+    # test_billing_e2e.py, test_bill01_razorpay_plans_expire.py and
+    # test_subscription_renewal_regression.py. The surface itself is now pinned by
+    # tests/test_billing_lifecycle_surface.py, which also records that this product has
+    # no trial, no grace period, no proration on upgrade and no scheduled downgrade.
 
-    @pytest.mark.asyncio
-    async def test_starter_to_pro_immediate_upgrade(self):
-        """Starter -> Pro upgrade activates immediately upon payment."""
-        user_id = "usr_up_test"
-        sb = make_supabase_mock(tier="starter", user_id=user_id)
 
-        res = await BillingLifecycle.upgrade_subscription(user_id, "pro", sb)
-        assert res["status"] == "upgraded"
-        assert res["previous_plan"] == "starter"
-        assert res["new_plan"] == "pro"
-
-    @pytest.mark.asyncio
-    async def test_pro_to_starter_scheduled_downgrade(self):
-        """Pro -> Starter downgrade schedules pending_downgrade_tier at next billing date, preserving user data."""
-        user_id = "usr_down_test"
-        sb = make_supabase_mock(tier="pro", user_id=user_id)
-
-        res = await BillingLifecycle.downgrade_subscription(user_id, "starter", sb)
-        assert res["status"] == "downgrade_scheduled"
-        assert res["current_plan"] == "pro"
-        assert res["pending_plan"] == "starter"
-        sb.table("profiles").update.assert_called_with({
-            "pending_downgrade_tier": "starter"
-        })
 
 
 # ═══════════════════════════════════════════════════════════════════════════

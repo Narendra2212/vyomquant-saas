@@ -3,38 +3,47 @@
  *
  * KEPT, DELIBERATELY. The redesign proposed removing this section outright, on the grounds that
  * a section whose job is to say "not available" four times is a poor use of the fold. That was
- * declined, and correctly: VyomQuant IS built for Windows, macOS and Linux — `src-tauri/` is a
- * real Tauri 2 project and `releases/windows/VyomQuant-Setup-0.1.0.exe` is a real 112 MB build —
- * and the desktop terminals are releasing shortly. A product with three native targets on the
- * way should say so on its landing page.
+ * declined, and the decision has now paid: the four artifacts ARE published, so the section
+ * says so.
  *
- * SO THE FRAMING CHANGED, NOT THE FACTS
- * -------------------------------------
- * The section now announces desktop as a platform that is arriving, while each individual
- * artifact still reports its true state. Those are compatible statements and both belong here.
- * What it must not do is put a link on an artifact that is not served: CI's `dist/` carries no
- * `releases/` directory and `aws s3 sync dist/ --delete` removes that prefix on every deploy, so
- * all four `/releases/…` URLs return 403 and always have.
+ * WHAT CHANGED, AND WHAT DID NOT
+ * ------------------------------
+ * For two years all four `/releases/…` URLs returned 403 — CI's `dist/` carried no `releases/`
+ * directory and `aws s3 sync dist/ --delete` removed that prefix on every deploy — so task 4.3
+ * withdrew the links rather than relabel them. The artifacts are now built by
+ * `07-desktop-build.yml` and served from `/downloads/desktop-v0.1.2/`, each one magic-byte
+ * identified and then re-fetched with no credentials to confirm HTTP 200, a byte-exact
+ * `Content-Length` and a matching SHA-256 before a single URL was written down.
  *
- * WHY THE FOUR PANELS STAY EXACTLY AS THEY ARE
- * --------------------------------------------
- * `PlatformArtifact` reads each artifact's declaration from `design/pageFields.js` and renders
- * `ds/Panel`'s `unavailable` state with the declared reason. It issues no request — a non-empty
- * reason short-circuits `usePanelState` before the reader is consulted — and it cannot render an
- * href, a size or a checksum. `tests/unit/pages/downloadSurface.test.jsx` holds all four in
- * place, in this order, asserting the marker, the verbatim reason, the absence of any anchor
- * inside a card, and that nothing on this section points into `releases/`. Rewriting these into
- * hand-built "arriving" cards would have deleted that guarantee to gain a tone, and the tone is
- * available in the section header for free.
+ * THEY WERE BRIEFLY ON GITHUB RELEASES, WHICH WAS WORSE. 0.1.0 and 0.1.1 were advertised at
+ * `github.com/Narendra2212/vyomquant-saas/releases/download/...`, and THAT REPOSITORY IS
+ * PRIVATE — so all four URLs returned 404 to every visitor for the whole time they were up.
+ * The move back to this origin is paired with the `--exclude "downloads/*"` that the original
+ * `/releases/` prefix never got, so the 403-on-every-deploy failure cannot return either.
  *
- * The Web Platform card keeps its `/app` link. It is the one destination here that works, and
- * the same test file asserts it survives — non-vacuity for everything above it.
+ * WHAT DID NOT CHANGE IS THE MECHANISM. `PlatformArtifact` still renders from a declaration and
+ * still holds no URL, size or checksum of its own; the declarations simply now include published
+ * artifacts (`design/desktopReleases.js`) as well as withdrawals (`design/pageFields.js`), and a
+ * platform with no published build still renders the not-available marker with its reason. So
+ * the guarantee `tests/unit/pages/downloadSurface.test.jsx` holds is intact: no figure reaches
+ * this section that is not read from a declaration.
+ *
+ * THE BUILDS ARE UNSIGNED, AND EACH CARD SAYS SO
+ * ----------------------------------------------
+ * No Authenticode certificate and no Apple Developer ID is configured, so macOS Gatekeeper
+ * REFUSES the first launch and Windows SmartScreen warns. Each card carries its own
+ * platform-specific first-run step from the declaration. A download button that omits that is
+ * the same class of defect as the fabricated sizes this section used to carry.
+ *
+ * The Web Platform card keeps its `/app` link and still leads: it is the supported path and
+ * needs no install. The same test file asserts it survives — non-vacuity for everything above it.
  */
 
 import React from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, Globe, MonitorDown } from 'lucide-react'
 
+import { DESKTOP_RELEASE } from '../../design/desktopReleases'
 import { PlatformArtifact } from '../download/PlatformArtifact'
 
 function WindowsIcon({ className }) {
@@ -75,13 +84,14 @@ export default function DownloadSection() {
               Platforms
             </p>
             <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
-              Trade in the browser today, on your desktop shortly
+              Trade in the browser, or on your desktop
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-content-secondary">
               The web platform is live and complete — nothing to install, nothing to configure.
-              Native terminals for Windows, macOS and Linux are built on Tauri and in final
-              testing. Each one below reports its own status, so you always know what you can
-              actually run.
+              Native desktop terminals for Windows, macOS and Linux are available as a{' '}
+              {DESKTOP_RELEASE.version} beta. They are not code-signed yet, so each download
+              below tells you exactly what your operating system will ask of you on first
+              launch.
             </p>
           </div>
 
@@ -117,8 +127,14 @@ export default function DownloadSection() {
                 <h3 className="text-title font-bold text-content-primary">
                   Native desktop terminals
                 </h3>
+                {/* The badge used to read "In development", because three of the four files
+                    below were 64-69 byte text placeholders and the fourth was not served.
+                    It now carries the published version, read from the declaration rather
+                    than typed, so it cannot contradict the cards beneath it. "Beta" is the
+                    honest qualifier: CI builds and bundles these, but it does not install or
+                    launch them — there is no desktop smoke test on any platform. */}
                 <span className="rounded-md border border-status-warning/30 bg-status-warning-wash px-2 py-0.5 font-mono text-micro font-semibold uppercase tracking-wider text-status-warning">
-                  In final testing
+                  v{DESKTOP_RELEASE.version} beta · unsigned
                 </span>
               </div>
 
@@ -146,8 +162,16 @@ export default function DownloadSection() {
               </div>
 
               <p className="mt-4 font-mono text-micro leading-relaxed text-content-secondary">
-                Your account, strategies and history are the same on every platform — the desktop
-                terminals connect to the account you create today.
+                The desktop terminals connect to the same account, strategies and history —
+                nothing you build in the browser needs rebuilding. Verify any download against
+                its SHA-256 above, or read the{' '}
+                <a
+                  href={DESKTOP_RELEASE.notesUrl}
+                  className="underline decoration-dotted hover:text-content-primary"
+                >
+                  full release notes and checksums
+                </a>
+                .
               </p>
             </div>
           </div>

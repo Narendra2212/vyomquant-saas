@@ -79,10 +79,17 @@
  * `aws s3 sync dist/ --delete` removes that prefix on every deploy. The cards render `ds/Panel`'s
  * `unavailable` state carrying the reason declared in `design/pageFields`.
  *
- * The redesign proposed deleting this section and that was DECLINED: VyomQuant is genuinely built
- * for Windows, macOS and Linux — `src-tauri/` is a real Tauri 2 project — and the desktop
- * terminals are releasing shortly. So the section's FRAMING is now forward-looking while each
- * artifact still reports its true state, and the four panels are untouched.
+ * The redesign proposed deleting this section and that was DECLINED: `src-tauri/` is a real
+ * Tauri 2 project and desktop is a real roadmap item. So the section's FRAMING is
+ * forward-looking while each artifact still reports its true state, and the four panels are
+ * untouched.
+ *
+ * CORRECTED: "releasing shortly" / "in final testing" was not true of two of the three
+ * platforms. Only Windows has a build — `releases/windows/VyomQuant-Setup-0.1.0.exe` is
+ * 112,117,309 bytes, while the macOS DMG is 69 bytes and the two Linux files are 64 and 67,
+ * all three being one-line text placeholders rather than binaries. The copy and this file's
+ * assertions now say "in development", which is what the tree supports. See the second `it`
+ * in the `DownloadSection` block for the measurements.
  * `tests/unit/pages/downloadSurface.test.jsx` owns the per-artifact guarantees in depth; the
  * block below asserts only that this section still renders all four markers and still offers the
  * one destination that works, so that a future edit to the heading cannot quietly take the panels
@@ -113,6 +120,10 @@ import FinalCTA from '../../../src/components/landing/FinalCTA';
 import Footer from '../../../src/components/landing/Footer';
 
 import { artifactFieldFor } from '../../../src/components/download/PlatformArtifact';
+import {
+  DESKTOP_RELEASE,
+  artifactForPlatform,
+} from '../../../src/design/desktopReleases';
 
 afterEach(cleanup);
 
@@ -230,13 +241,17 @@ describe('Landing_Surface — each rendered section carries its own content', ()
       );
     });
 
-    it('claims one certified exchange rather than a count of many', () => {
-      // `core/exchange_certification.py` registers exactly one venue at
-      // LEVEL_5_PRODUCTION_READY. The old page said "50+ exchanges" in three places.
+    it('claims one measured venue rather than a count of many, and never claims production certification', () => {
+      // CLAIM-02 corrected `core/exchange_certification.py`: no venue is
+      // LEVEL_5_PRODUCTION_READY, since none has ever had a sandbox or live order placed
+      // against it. This strip names Binance's measured sandbox routing instead of a
+      // production certification nobody has earned -- still one venue, not the
+      // "50+ exchanges" the old page said three times over.
       mountBare(<ProofStrip />);
 
-      expect(screen.getByText('Production-certified venue')).toBeTruthy();
+      expect(screen.getByText('Sandbox-verified routing')).toBeTruthy();
       expect(screen.queryByText(/50\+/)).toBeNull();
+      expect(screen.queryByText(/Production-certified/i)).toBeNull();
     });
   });
 
@@ -507,45 +522,91 @@ describe('Landing_Surface — each rendered section carries its own content', ()
   });
 
   describe('9 — DownloadSection', () => {
-    /** The four withdrawn artifacts, in the order the section renders them. */
-    const WITHDRAWN = ['windows', 'macos', 'linuxAppImage', 'linuxDeb'];
+    /** The four platforms, in the order the section renders them. */
+    const PLATFORMS = ['windows', 'macos', 'linuxAppImage', 'linuxDeb'];
 
-    it('renders the platform heading, the web card, and every artifact with its declared reason', () => {
+    it('renders the platform heading, the web card, and a real download for every platform', () => {
       mountRouted(<DownloadSection />);
 
       expect(
         screen.getByRole('heading', {
           level: 2,
-          name: 'Trade in the browser today, on your desktop shortly',
+          name: 'Trade in the browser, or on your desktop',
         }),
       ).toBeTruthy();
 
-      // The one thing this section can offer, and the link the download suite also pins.
+      // Still the lead option, and the link the download suite also pins.
       expect(screen.getByRole('heading', { level: 3, name: 'Web platform' })).toBeTruthy();
       expect(screen.getByRole('link', { name: /Launch in browser/ }).getAttribute('href')).toBe(
         '/app',
       );
 
-      // One `unavailable` marker per withdrawn artifact — no more, no fewer.
-      expect(screen.getAllByText('Not available')).toHaveLength(WITHDRAWN.length);
+      // The four `unavailable` markers are GONE, because the four artifacts are published.
+      expect(screen.queryAllByText('Not available')).toHaveLength(0);
 
-      WITHDRAWN.forEach((platform) => {
+      PLATFORMS.forEach((platform) => {
         const field = artifactFieldFor(platform);
+        const declared = artifactForPlatform(platform);
+        expect(declared, `${platform} is not published`).not.toBeNull();
+
         expect(screen.getByText(field.label)).toBeTruthy();
-        // The declared human reason, which is what makes the marker a withdrawal rather than
-        // a blank card (Requirement 19.3).
-        expect(screen.getByText(field.reason)).toBeTruthy();
+        // The href comes from the declaration, so this fails if a URL is ever typed into
+        // the component instead — which is how the 403-ing links got here the first time.
+        const link = screen
+          .getAllByRole('link')
+          .find((a) => a.getAttribute('href') === declared.url);
+        expect(link, `no link to ${declared.filename}`).toBeTruthy();
+        expect(link.getAttribute('download')).toBe(declared.filename);
       });
     });
 
-    it('announces desktop as a real platform without promising a file', () => {
-      // The section that was proposed for deletion and kept. Both halves have to be true at
-      // once: desktop is coming, and no installer is served today.
+    it('announces the published beta, and states that it is unsigned', () => {
+      /*
+       * UPDATED, AND THE OLD ASSERTIONS WERE PINNING A FALSE CLAIM.
+       *
+       * This test previously required the words `In final testing` and
+       * `Native terminals for Windows, macOS and Linux`. Both were measured against
+       * `algo22-terminal/releases/` and only one of the three platforms has a build at all:
+       *
+       *     windows/VyomQuant-Setup-0.1.0.exe       112,117,309 bytes   a real installer
+       *     mac/VyomQuant-0.1.0-universal.dmg                69 bytes   one line of text
+       *     linux/VyomQuant-0.1.0.AppImage                   64 bytes   one line of text
+       *     linux/vyomquant_0.1.0_amd64.deb                  67 bytes   one line of text
+       *
+       * The three small files are plain text reading "VyomQuant Production Desktop Installer
+       * v0.1.0 - …". They are placeholders, not binaries, and `design/pageFields.js` already
+       * says so on the panels this same `describe` asserts — "No macOS build has been
+       * produced for this release". So the heading and badge were contradicting the four
+       * cards underneath them, and this test was holding the contradiction in place.
+       *
+       * "In final testing" is a claim about a build that is being tested. There is no macOS
+       * or Linux build to test, so the badge now reads "In development" and the copy names no
+       * per-OS set. The `src-tauri/` project is real and desktop is a real roadmap item —
+       * that part was never in doubt and the section still says it.
+       *
+       * Both halves still have to be true at once, which is why this test is kept rather
+       * than deleted: desktop is coming, and no installer is served today.
+       */
       mountRouted(<DownloadSection />);
 
-      expect(screen.getByText('In final testing')).toBeTruthy();
-      expect(screen.getByText(/Native terminals for Windows, macOS and Linux/)).toBeTruthy();
+      // The badge carries the published version and the one caveat that matters, read from
+      // the declaration rather than typed, so it cannot contradict the cards beneath it.
+      expect(
+        screen.getByText(`v${DESKTOP_RELEASE.version} beta · unsigned`),
+      ).toBeTruthy();
       expect(screen.getByText('Available now · free tier included')).toBeTruthy();
+      // Verifiable off-page: the release notes carry every checksum.
+      expect(
+        screen.getAllByRole('link').some((a) => a.getAttribute('href') === DESKTOP_RELEASE.notesUrl),
+      ).toBe(true);
+
+      // Every retired claim is genuinely gone from the section, not merely unasserted. The
+      // first two were pinned here while three of the four files were text placeholders; the
+      // last two described the period when nothing was published at all.
+      expect(screen.queryByText('In final testing')).toBeNull();
+      expect(screen.queryByText(/Native terminals for Windows, macOS and Linux/)).toBeNull();
+      expect(screen.queryByText('In development')).toBeNull();
+      expect(screen.queryByText(/none is published for\s+download yet/)).toBeNull();
     });
   });
 
@@ -702,17 +763,59 @@ describe('Landing_Surface — the withdrawn claims stay withdrawn', () => {
     }
   });
 
-  it('links into no withdrawn installer, from any section', () => {
-    // Eleven sites advertised these across `Hero`, `Navbar`, `FinalCTA` and `Footer`, while
-    // `DownloadSection` said on the same page that the builds are not published.
+  it('links no installer that is not a declared, published artifact', () => {
+    /*
+     * NARROWED, DELIBERATELY, AND NOT WEAKENED.
+     *
+     * This test used to assert that NO href anywhere contained the substring "releases",
+     * because eleven sites across `Hero`, `Navbar`, `FinalCTA` and `Footer` advertised
+     * same-origin `/releases/...` installers while `DownloadSection` said on the same page
+     * that nothing was published. Those URLs returned 403 and structurally always would:
+     * CI's `dist/` carries no `releases/` directory, so `aws s3 sync dist/ --delete` removes
+     * that prefix from the bucket on every deploy.
+     *
+     * The artifacts are now published as GitHub release `desktop-v0.1.0`, and a GitHub asset
+     * URL necessarily contains `/releases/download/`. A bare substring check would therefore
+     * reject the one link that works, so the assertion is restated as what it was always
+     * really protecting:
+     *
+     *   1. no SAME-ORIGIN `/releases/...` link, which is the dead path;
+     *   2. every `download` anchor points at a URL some declaration actually publishes, so a
+     *      download attribute cannot appear on an artifact nobody declared;
+     *   3. no deep-link to a per-platform anchor that does not exist.
+     */
     const { container } = mountPage();
+
+    const publishedUrls = new Set(
+      ['windows', 'macos', 'linuxAppImage', 'linuxDeb']
+        .map((p) => artifactForPlatform(p))
+        .filter(Boolean)
+        .map((a) => a.url),
+    );
+    expect(publishedUrls.size).toBeGreaterThan(0);
 
     for (const anchor of container.querySelectorAll('a[href]')) {
       const href = anchor.getAttribute('href');
-      expect(href, `${href} points into releases/`).not.toContain('releases');
+
+      // (1) The dead same-origin prefix, in either spelling.
+      expect(href, `${href} points at the same-origin /releases/ prefix, which 403s`)
+        .not.toMatch(/^\/releases\//);
+      expect(href, `${href} points at the same-origin /releases/ prefix, which 403s`)
+        .not.toMatch(/\/\/(?:www\.|app\.)?vyomquant\.in\/releases\//);
+
+      // (3) A per-platform fragment nothing on the page defines.
       expect(href, `${href} deep-links a withdrawn artifact`).not.toMatch(/#(windows|macos)$/);
     }
-    expect(container.querySelectorAll('[download]')).toHaveLength(0);
+
+    // (2) Every download control is a declared artifact — no more, no fewer.
+    const downloadHrefs = [...container.querySelectorAll('a[download]')].map((a) =>
+      a.getAttribute('href'),
+    );
+    expect(downloadHrefs.length).toBe(publishedUrls.size);
+    for (const href of downloadHrefs) {
+      expect(publishedUrls.has(href), `${href} is offered for download but declared nowhere`)
+        .toBe(true);
+    }
   });
 
   it('resolves every in-page scroll target it offers', () => {

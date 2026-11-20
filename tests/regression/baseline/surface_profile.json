@@ -1,5 +1,5 @@
 {
-  "api_call_count": 8,
+  "api_call_count": 6,
   "api_calls": [
     {
       "handler_count": 1,
@@ -36,49 +36,6 @@
       "path_template": "/api/billing/plan",
       "resolved": true,
       "via": "api.user.getBillingPlan"
-    },
-    {
-      "handler_count": 1,
-      "handlers": [
-        {
-          "decorators": [
-            "router.get('/notifications/settings')"
-          ],
-          "handler": "get_notif_settings",
-          "module": "backend_app.routers.user",
-          "parameters": {
-            "supabase": {
-              "annotation": "SyncClient",
-              "depends_on": "get_request_supabase"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": "str",
-              "status_code": 503
-            }
-          ],
-          "returns": [
-            {},
-            {
-              "one_of": [
-                "computed",
-                {}
-              ]
-            }
-          ],
-          "route_path": "/api/notifications/settings"
-        }
-      ],
-      "method": "GET",
-      "path": "/api/notifications/settings",
-      "path_template": "/api/notifications/settings",
-      "resolved": true,
-      "via": "api.user.getNotificationSettings"
     },
     {
       "handler_count": 1,
@@ -196,48 +153,6 @@
       "handlers": [
         {
           "decorators": [
-            "app.get('/api/stats', tags=['Stats'])"
-          ],
-          "handler": "get_stats",
-          "module": "backend_app.main",
-          "parameters": {},
-          "raises": [],
-          "returns": [
-            {
-              "active_bots": "int",
-              "daily_pnl": "float",
-              "monthly_pnl": "float",
-              "total_pnl": "float",
-              "total_strategies": "int",
-              "total_trades": "computed",
-              "weekly_pnl": "float",
-              "win_rate": "float"
-            },
-            {
-              "active_bots": "int",
-              "daily_pnl": "float",
-              "monthly_pnl": "float",
-              "total_pnl": "float",
-              "total_strategies": "int",
-              "total_trades": "int",
-              "weekly_pnl": "float",
-              "win_rate": "float"
-            }
-          ],
-          "route_path": "/api/stats"
-        }
-      ],
-      "method": "GET",
-      "path": "/api/stats",
-      "path_template": "/api/stats",
-      "resolved": true,
-      "via": "api.user.getStats"
-    },
-    {
-      "handler_count": 1,
-      "handlers": [
-        {
-          "decorators": [
             "router.get('/user/profile')"
           ],
           "handler": "get_profile",
@@ -279,6 +194,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.user.update_notif_settings`, PUT /api/notifications/settings) — TWO ADDED entries, `409` and `503`, and nothing removed or retyped. Required by NOTIF-02. THE 409 is the mandatory-alert floor: `components/NotificationPreferences.jsx` ended with \"Mandatory risk alerts (global kill switch triggers) cannot be disabled\" and rendered, directly above that sentence, the switch that disabled them. Nothing enforced the claim — readers of `notification_settings` across `backend_app` are two, both in this router, and nothing on the dispatch path reads it. Migration 073 adds `chk_notification_settings_mandatory_alerts`, and this status is what a payload refused by it now answers instead of a 500. THE 503 replaces an unguarded `.upsert().execute()`: before this, ANY write failure became a 500 with no sentence a customer could act on. NEITHER IS A NEW REFUSAL OF A LEGAL REQUEST: the request model's own validator (`NotificationEvents.mandatory_alerts_stay_on`) answers 422 first, so the 409 is reachable only when the model and the constraint disagree — which is logged at ERROR with the offending keys, because that disagreement is a defect rather than a customer mistake.",
           "decorators": [
             "router.put('/notifications/settings')"
           ],
@@ -297,7 +213,16 @@
               "depends_on": "get_current_user"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": 409
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
           "returns": [
             {
               "status": "str"

@@ -108,12 +108,39 @@ OWNER: Dict[str, Any] = {
     "role": "authenticated",
 }
 
-#: ``public.exchange_keys``, column for column, as the LIVE database holds it. Queried directly
-#: against production. ``updated_at`` and ``id`` are ABSENT ON PURPOSE: they are what
-#: ``migrations/003_create_exchange_keys_table.sql`` declares and what production does not have,
-#: and their absence here is what turns the pre-fix projection into a real 42703.
-EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = frozenset(
+#: ``public.exchange_keys``, column for column, as the LIVE database holds it. Queried
+#: directly against production, and RE-QUERIED 2026-10-24 -- both times matter, because the
+#: live shape moved between them.
+#:
+#: ``id`` IS NOW PRESENT. ``058_exch03_exchange_keys_stable_handle.sql`` added it (EXCH-03)
+#: and it is applied in production: `deployment_binding.load_owned_exchange_account`
+#: resolves a deployment's ``exchange_account_id`` with ``.eq("id", ...)``, this table had
+#: no such column, and so every live deployment answered 404. The column is a HANDLE, not
+#: an identity -- the primary key remains the composite ``(user_id, exchange_id)`` and the
+#: vault still resolves credentials by it.
+#:
+#: ``updated_at`` REMAINS ABSENT FROM THIS SET, AND THAT IS NOW A DELIBERATE NARROWING
+#: RATHER THAN A STATEMENT ABOUT PRODUCTION. The re-query found ``updated_at`` present in
+#: the live table, so this file's original claim that production lacks it is no longer
+#: true. It is kept out of this set anyway, because what this fixture exists to do is make
+#: the pre-fix projection raise a real ``42703`` -- that is the incident it was written for
+#: (four production failures in a twelve-hour window) and the regression it still guards.
+#: Adding ``updated_at`` here would retire that guard for a column no handler selects.
+#: Recorded rather than silently corrected, so the next reader knows the live table has
+#: moved and does not take this set as a current description of it.
+#:
+#: RE-QUERIED 2026-11-05 (EXCH-STATE-01): production now also holds ``sandbox`` (060) and
+#: ``is_active``, ``validation_status``, ``last_validated_at``, ``can_trade`` (056) --
+#: information_schema returned: can_trade, created_at, encrypted_api_key,
+#: encrypted_password, encrypted_secret_key, exchange_id, id, is_active, last_validated_at,
+#: sandbox, updated_at, user_id, validation_status. The connections read now selects the
+#: verdict columns so the page can show when the venue last accepted a key, and they are
+#: added here so this fixture keeps describing what production really holds. ``updated_at``
+#: stays out, for the reason above. ``LEGACY_EXCHANGE_KEYS_COLUMNS`` keeps the pre-056
+#: shape so the read's fallback for an un-migrated database is still exercised.
+LEGACY_EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = frozenset(
     {
+        "id",
         "user_id",
         "exchange_id",
         "encrypted_api_key",
@@ -121,6 +148,9 @@ EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = frozenset(
         "encrypted_password",
         "created_at",
     }
+)
+EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = LEGACY_EXCHANGE_KEYS_COLUMNS | frozenset(
+    {"sandbox", "is_active", "validation_status", "last_validated_at", "can_trade"}
 )
 
 #: ``public.strategies``, restricted to the columns this handler's aggregation reads.
@@ -131,8 +161,12 @@ TABLE_COLUMNS: Dict[str, FrozenSet[str]] = {
     "strategies": STRATEGIES_COLUMNS,
 }
 
-#: Columns the migration declares and production does not have. Referencing either is the defect.
-COLUMNS_ABSENT_IN_PRODUCTION: Tuple[str, ...] = ("updated_at", "id")
+#: Columns this handler must not reference, because selecting one raises ``42703`` against
+#: the shape this file's fixture models. ``id`` is NO LONGER among them: migration 058
+#: added it for EXCH-03 and the projection now selects it deliberately. ``updated_at``
+#: stays, as the guard for the original incident -- see ``EXCHANGE_KEYS_COLUMNS`` for why
+#: that is a narrowed guard rather than a claim about the live table.
+COLUMNS_ABSENT_IN_PRODUCTION: Tuple[str, ...] = ("updated_at",)
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 EXCHANGE_ROUTER_SOURCE: Path = REPO_ROOT / "backend_app" / "routers" / "exchange.py"
@@ -754,3 +788,49 @@ class TestNoFabricatedSyncTime:
             f"ExchangeConnection still declares last_sync as a property of this response: "
             f"{properties}"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# EXCH-STATE-01 — the recorded verdict is listed, and its absence costs only the verdict
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestTheRecordedVerdictIsListed:
+    def test_a_verified_key_reports_its_verdict_and_when(self) -> None:
+        row = _exchange_key_row("bybit")
+        row.update(
+            validation_status="verified",
+            last_validated_at="2026-11-05T05:45:54+00:00",
+            can_trade=True,
+            sandbox=False,
+        )
+        answer = _list_exchanges(_FakeSupabase(exchange_keys=[row], strategies=[]))
+
+        assert answer.status_code == 200, answer.text
+        (listed,) = answer.body
+        assert listed["validation_status"] == "verified"
+        assert listed["last_validated_at"] == "2026-11-05T05:45:54+00:00"
+        assert listed["can_trade"] is True
+        assert listed["sandbox"] is False
+
+    def test_a_key_no_check_has_recorded_reports_none_not_a_verdict(self) -> None:
+        answer = _list_exchanges(
+            _FakeSupabase(exchange_keys=[_exchange_key_row("bybit")], strategies=[])
+        )
+        (listed,) = answer.body
+        assert listed["validation_status"] is None
+        assert listed["last_validated_at"] is None
+        assert listed["can_trade"] is None
+
+    def test_a_database_without_the_verdict_columns_still_lists_its_keys(self, monkeypatch) -> None:
+        """Pre-056 shape: the wide projection earns a real 42703 from this double; the read
+        must fall back to the identity columns rather than 503 the whole page."""
+        monkeypatch.setitem(TABLE_COLUMNS, "exchange_keys", LEGACY_EXCHANGE_KEYS_COLUMNS)
+        answer = _list_exchanges(
+            _FakeSupabase(exchange_keys=[_exchange_key_row("bybit")], strategies=[])
+        )
+
+        assert answer.status_code == 200, answer.text
+        (listed,) = answer.body
+        assert listed["exchange_id"] == "bybit"
+        assert listed["validation_status"] is None

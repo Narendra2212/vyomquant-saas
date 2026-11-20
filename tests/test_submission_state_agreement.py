@@ -141,6 +141,27 @@ SUBSCRIPTION_ALLOWED_TABLE = "marketplace_subscription_allowed_transitions"
 #: :meth:`TestSubscriptionStateAgreement.test_the_database_permits_the_twelve_pairs_plus_the_addendum`.
 MIGRATION_012_SUBSCRIPTION_ADDENDUM = frozenset({("PAYMENT_FAILED", "ACTIVE")})
 
+#: The additive migration that seeds PAPER-04's two Paper_Session pairs.
+PAPER_SESSION_ADDENDUM_MIGRATION = "054_paper04_abandoned_session_state.sql"
+
+#: **The documented divergence from Requirement 17.7's six pairs**, named as a constant for
+#: exactly the reason the subscription addendum above is: so the divergence stays VISIBLE as
+#: two enumerated pairs rather than as a relaxed assertion.
+#:
+#: Requirement 17.7 names four states and six edges. None of the four can express "was
+#: RUNNING, and the process that ran its loop is gone" -- RUNNING is false, PAUSED invites a
+#: resume that cannot work, STOPPED makes an unplanned death indistinguishable from an
+#: orderly ``stop_session``, and CREATED denies that it ever ran. PAPER-04's whole subject is
+#: that an orphaned session had no truthful state, so the fifth state IS the fix and
+#: ``054_paper04_abandoned_session_state.sql`` seeds the two edges that reach and leave it.
+#:
+#: There is deliberately no ``("ABANDONED", "RUNNING")``: the loop's in-flight position lived
+#: in the dead process and was never persisted, so a resume would cross a gap of unknown
+#: length while reporting a continuity it does not have.
+MIGRATION_054_PAPER_SESSION_ADDENDUM = frozenset(
+    {("RUNNING", "ABANDONED"), ("ABANDONED", "CREATED")}
+)
+
 
 # ---------------------------------------------------------------------------
 # The seed parser — the technique design.md points at test_version_consumer_agreement.py
@@ -717,13 +738,32 @@ def _session_python_pairs():
 
 class TestPaperSessionStateAgreement:
     def test_seed_equals_python_constant(self):
+        """009's six pairs, plus PAPER-04's two from 054.
+
+        Both migrations are READ rather than transcribed, and the addendum is a named
+        constant asserted against what 054 actually seeds -- the same technique the
+        subscription addendum uses, so a divergence in either file still fails here
+        instead of being absorbed by a looser comparison.
+        """
         sql_pairs = _read_seed_pairs(
             "009_paper_trading.sql",
             "paper_session_allowed_transitions",
         )
+        addendum = _read_seed_pairs(
+            PAPER_SESSION_ADDENDUM_MIGRATION,
+            "paper_session_allowed_transitions",
+        )
+        assert addendum == MIGRATION_054_PAPER_SESSION_ADDENDUM, (
+            "054 seeds a different set of Paper_Session pairs than this module names; the "
+            "divergence from Requirement 17.7's six must stay enumerated and visible"
+        )
+        assert len(sql_pairs) == 6, "009 still seeds Requirement 17.7's six pairs"
+
         python_pairs, source = _session_python_pairs()
-        _assert_same_machine(python_pairs, sql_pairs, f"Paper_Session_State ({source})")
-        assert len(python_pairs) == 6
+        _assert_same_machine(
+            python_pairs, sql_pairs | addendum, f"Paper_Session_State ({source})"
+        )
+        assert len(python_pairs) == 8
 
 
 # ---------------------------------------------------------------------------

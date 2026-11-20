@@ -129,6 +129,41 @@ export const CODE_COPY = Object.freeze({
   TRANSACTIONS_FETCH_FAILED: { headline: 'Could not load your transactions', detail: 'The transaction history is temporarily unreadable.', retryable: true },
 
   // ---- Live trading and order safety (`/api/orders/*`) ------------------
+  //
+  // LIVE-COPY-01. The two live-trading gate refusals had NO entry here, so
+  // `core/live_execution_gate.py`'s 403 fell through to the generic 403 copy —
+  // "This action is not available on your account · contact support" — which names
+  // neither the restriction nor anything the operator can do about it. A deploy that
+  // was refused for a specific, knowable reason read as an unexplained permission
+  // problem. Part 3 of the brief: "improve the UI to explain the restriction and
+  // provide an appropriate next step for authorized users".
+  //
+  // Both are `retryable: false` deliberately. Retrying cannot change either verdict —
+  // the allowlist is operator-managed and the platform flag is a deployment setting —
+  // and a retry button on a safety refusal invites exactly the hammering that makes an
+  // incident worse. The next step is a person, not a button.
+  //
+  // Neither message claims the restriction is temporary or implies it will lift on its
+  // own, and neither reveals who is on the allowlist.
+  LIVE_TENANT_NOT_ALLOWLISTED: {
+    headline: 'Live trading is not enabled for this account',
+    detail: 'No order was sent. Live execution is enabled per account by an operator, and this account is not on that list yet. Paper trading and backtesting are unaffected — contact support to request live access.',
+    retryable: false,
+  },
+  LIVE_TRADING_NOT_ENABLED: {
+    headline: 'Live trading is switched off platform-wide',
+    detail: 'No order was sent. Live execution is currently disabled for everyone, not just this account. Paper trading and backtesting are unaffected.',
+    retryable: false,
+  },
+  // The third refusal `assert_platform_live_trading_enabled` can raise. Distinguished
+  // from the one above because the remedy differs for whoever reads the log: this one is
+  // the platform MODE, that one is the live-trading flag, and conflating them sends an
+  // operator to the wrong setting.
+  LIVE_TRADING_DISABLED_BY_PLATFORM_MODE: {
+    headline: 'The platform is not in live mode',
+    detail: 'No order was sent. The platform is running in a safe or paper mode, so live execution is refused for every account. Paper trading and backtesting are unaffected.',
+    retryable: false,
+  },
   EXECUTION_GUARD_BLOCKED: { headline: 'Blocked by a safety check', detail: 'Nothing was sent to the exchange. A risk or safety check refused it.', retryable: false },
   EXECUTION_GUARD_ERROR: { headline: 'Safety checks could not run', detail: 'Nothing was sent to the exchange, because we will not trade without checking first.', retryable: true },
   DIRECT_EXECUTION_BLOCKED: { headline: 'This order cannot be placed here', detail: 'Orders are placed by a deployed strategy, not by hand, on this account.', retryable: false },
@@ -383,6 +418,10 @@ export const CATEGORY_COPY = Object.freeze({
   NETWORK_ERROR: { headline: 'No connection to VyomQuant', detail: 'Check your internet connection and try again.', retryable: true },
   SERVER_ERROR: { headline: 'Something went wrong on our side', detail: 'This is not caused by anything you did. Please try again in a moment.', retryable: true },
   AUTH_ERROR: { headline: 'Your session has expired', detail: 'Sign in again to continue.', retryable: false, action: { label: 'Sign in', to: '/signin' } },
+  // LAUNCH AUDIT: a 403 is NOT an expired session. `ApiError` files 401 and 403 together under
+  // `AUTH_ERROR`, so every refusal — a plan limit, an MFA step-up, a frozen account — was shown
+  // as "Your session has expired · Sign in". A 403 now gets its own copy (see `resolveCategory`).
+  FORBIDDEN: { headline: 'This action is not available on your account', detail: 'If you think it should be, contact support.', retryable: false },
   CLIENT_ERROR: { headline: 'That request could not be completed', detail: 'Check the values you entered and try again.', retryable: false },
   RATE_LIMIT: { headline: 'Too many requests', detail: 'You are refreshing faster than we can answer. Wait a few seconds.', retryable: true },
 });
@@ -537,6 +576,7 @@ function fromRefusal(error) {
 export function resolveCategory(error) {
   if (!error || typeof error !== 'object') return null;
   if (error.status === 429) return 'RATE_LIMIT';
+  if (error.status === 403) return 'FORBIDDEN';
   const category = error.category;
   if (typeof category !== 'string') return null;
   if (Object.prototype.hasOwnProperty.call(CATEGORY_COPY, category)) return category;
@@ -636,9 +676,50 @@ export function enforceNoLeak(candidate, error, context) {
  * @returns {{headline: string, detail: string|null, retryable: boolean,
  *            action: object|null, supportRef: string|null}}
  */
+/** Where a plan refusal's call to action goes. Mirrors `components/gates/UpgradePrompt`'s
+ *  `UPGRADE_ROUTE`; kept literal so this module stays import-free. */
+const PLAN_UPGRADE_ROUTE = '/app/billing';
+
+/**
+ * LAUNCH AUDIT — a PLAN refusal speaks for itself.
+ *
+ * `core/subscription_dependencies.py` answers every gated action with
+ * `403 detail={code, message, upgrade_message, required_plan | contact_sales, cta_label, ...}`.
+ * None of those codes (`STRATEGY_LIMIT_REACHED`, `PAPER_STRATEGY_LIMIT_REACHED`,
+ * `LIVE_TRADING_NOT_INCLUDED`, ...) is in `CODE_COPY`, so the refusal fell through to the 403
+ * category — which read "Your session has expired · Sign in". The refusal's own sentences are the
+ * server's authored copy for exactly this situation, and name the plan that would allow it, so
+ * they are used directly (still passed through `enforceNoLeak`).
+ */
+function fromPlanRefusal(error) {
+  if (!error || typeof error !== 'object' || error.status !== 403) return null;
+  const detail = error.data && typeof error.data === 'object' ? error.data.detail : null;
+  if (!detail || typeof detail !== 'object') return null;
+  const isPlanRefusal =
+    typeof detail.code === 'string'
+    && typeof detail.message === 'string'
+    && detail.message.trim() !== ''
+    && (typeof detail.required_plan === 'string' || detail.contact_sales === true || Number.isFinite(Number(detail.limit)));
+  if (!isPlanRefusal) return null;
+  return {
+    headline: detail.message.trim(),
+    detail: typeof detail.upgrade_message === 'string' && detail.upgrade_message.trim() !== '' ? detail.upgrade_message.trim() : null,
+    retryable: false,
+    action: {
+      label: typeof detail.cta_label === 'string' && detail.cta_label.trim() !== '' ? detail.cta_label.trim() : 'See plans',
+      to: PLAN_UPGRADE_ROUTE,
+    },
+  };
+}
+
 export function translateError(error, context) {
   const chosen =
-    fromCode(error) ?? fromReasons(error) ?? fromRefusal(error) ?? fromCategory(error) ?? fromContext(context);
+    fromCode(error)
+    ?? fromReasons(error)
+    ?? fromRefusal(error)
+    ?? fromPlanRefusal(error)
+    ?? fromCategory(error)
+    ?? fromContext(context);
 
   return enforceNoLeak(
     {

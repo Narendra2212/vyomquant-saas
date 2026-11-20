@@ -28,7 +28,7 @@ const CATALOGUE = {
   [ROW_ACTION.SIGNAL_TRACE]: { label: 'Signal Trace' },
   [ROW_ACTION.PAUSE]: { label: 'Pause' },
   [ROW_ACTION.DEPLOY_LIVE]: { label: 'Deploy live' },
-  [ROW_ACTION.ARCHIVE]: { label: 'Archive strategy' },
+  [ROW_ACTION.ARCHIVE]: { label: 'Delete strategy' },
 };
 
 describe('the classifier (Requirement 4.3)', () => {
@@ -124,10 +124,31 @@ describe('the partition (Requirement 4.2)', () => {
 });
 
 describe('the owner list\'s offer', () => {
-  it('is the seven controls the row carries, and is frozen', () => {
+  it('is the eight controls the row carries, and is frozen', () => {
     const offered = ownerRowActions({ status: 'draft' });
-    expect(offered).toHaveLength(7);
+    // Eight since MKT-07 added `list_marketplace`. Named rather than counted, because a bare
+    // length says nothing about WHICH control arrived or left — the count moving was the only
+    // signal this assertion gave when the eighth was added.
+    expect([...offered]).toEqual([
+      'run_backtest',
+      'edit',
+      'clone',
+      'rename',
+      'signal_trace',
+      'list_marketplace',
+      'deploy_live',
+      'archive',
+    ]);
     expect(Object.isFrozen(offered)).toBe(true);
+  });
+
+  it('offers the marketplace listing on every lifecycle state', () => {
+    // Task 15 B: visible to every tier and every state; whether it is ENABLED is the page's
+    // entitlement read. A state that dropped it would hide the capability from the owners
+    // most likely to qualify for it, since the live-history criterion needs a past run.
+    for (const status of ['draft', 'running', 'paused', 'stopped', 'failed', undefined]) {
+      expect(ownerRowActions({ status })).toContain('list_marketplace');
+    }
   });
 
   it('answers for a row that is missing, null or not an object', () => {

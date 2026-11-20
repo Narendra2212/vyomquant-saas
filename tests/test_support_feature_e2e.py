@@ -18,6 +18,7 @@ Validates:
 
 import sys
 import os
+import uuid
 import pytest
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
@@ -151,7 +152,9 @@ def test_create_and_list_support_tickets(user_a, mock_ws):
         created = res_create.json()
         assert created["status"] == "created"
         ticket_id = created["ticket_id"]
-        assert ticket_id.startswith("tkt_")
+        # SUP-01: support_tickets.id is UUID PRIMARY KEY - a real UUID, not a "tkt_" prefix
+        # (which always failed that column's type and silently fell back to memory-only).
+        assert uuid.UUID(ticket_id)
 
         # 2. List user's tickets
         res_list = client.get("/api/support/tickets")
@@ -544,7 +547,8 @@ def test_real_saas_support_production_acceptance_twenty_points(user_a, user_b, m
         res_create = client.post("/api/support/tickets", json=ticket_payload)
         assert res_create.status_code == 200
         ticket_id = res_create.json()["ticket_id"]
-        assert ticket_id.startswith("tkt_")
+        # SUP-01: a real UUID - see the other call site's own comment on this.
+        assert uuid.UUID(ticket_id)
 
         # 6: Verify ticket persistence
         # 7: Verify appears in user's ticket list

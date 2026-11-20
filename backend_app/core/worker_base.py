@@ -229,17 +229,30 @@ class WorkerBase(ABC):
 
         health_key = f"worker:health:{self.worker_name}"
         try:
-            pool = redis_manager.get_pool()
-            if pool:
-                now_iso = datetime.now(timezone.utc).isoformat()
-                await pool.hset(health_key, mapping={
-                    "status": status,
-                    "consecutive_failures": str(failures),
-                    "last_heartbeat": now_iso,
-                    "running": str(self.running),
-                })
-                # Expire key after 3 missed heartbeats
-                await pool.expire(health_key, int(self.heartbeat_interval * 3))
+            # OBS-04 FIX: this used to call `redis_manager.get_pool()`, which does not
+            # exist on SharedRedisManager -- there is no `get_pool`, no `__getattr__`
+            # fallback, and the `pool` property returns the facade itself. So every
+            # heartbeat raised AttributeError, the `except` below swallowed it as though
+            # Redis were "temporarily down", and NO worker ever wrote a
+            # `worker:health:*` key. The healthy/degraded/unhealthy logic above ran and
+            # its result was discarded; an external liveness probe watching these keys
+            # saw a worker that had never checked in, for every worker in the fleet.
+            #
+            # Proven by execution before the fix: staging/probe_worker_health.py printed
+            #   AttributeError: 'SharedRedisManager' object has no attribute 'get_pool'
+            # Regression: tests/test_obs04_worker_heartbeat_is_written.py
+            #
+            # The facade already exposes `hset` and `expire` directly and is itself
+            # fail-soft, so there is no pool object to fetch.
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await redis_manager.hset(health_key, mapping={
+                "status": status,
+                "consecutive_failures": str(failures),
+                "last_heartbeat": now_iso,
+                "running": str(self.running),
+            })
+            # Expire key after 3 missed heartbeats
+            await redis_manager.expire(health_key, int(self.heartbeat_interval * 3))
         except Exception as e:
             # Don't fail the heartbeat loop if Redis is temporarily down
             logger.warning(f"[{self.worker_name}] Failed to update health key in Redis: {e}")

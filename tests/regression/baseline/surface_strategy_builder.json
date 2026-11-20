@@ -446,57 +446,9 @@
       "via": "api.strategies.previewNode"
     },
     {
-      "handler_count": 2,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: update_strategy). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 1,
       "handlers": [
-        {
-          "decorators": [
-            "router.put('/strategies/{strategy_id}')",
-            "limiter.limit('100/minute')"
-          ],
-          "handler": "update_strategy",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "body": {
-              "annotation": "StrategyUpdateRequest"
-            },
-            "request": {
-              "annotation": "Request"
-            },
-            "strategy_id": {
-              "annotation": "str"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_NOT_FOUND",
-              "status_code": 404
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_UPDATE_FAILED",
-              "status_code": 500
-            }
-          ],
-          "returns": [
-            {
-              "new_version": "computed",
-              "status": "str",
-              "strategy": "computed"
-            }
-          ],
-          "route_path": "/api/strategies/{strategy_id}"
-        },
         {
           "_baseline_note_raises": "AUTHORISED RE-RECORD \u2014 one `raises` entry ADDED to `update_strategy`: DAG_INVALID_STATUS (422) with the structured validation report. WHY. Production defect: `StrategyBuilder.jsx::buildSavePayload` sends `graph_json`, `nodes` and `edges`, and this handler passed the request body STRAIGHT into `.update(body)`. None of those three is a column of `strategies` \u2014 the table's columns are its base set plus what the migrations ALTER in (`current_version`, `environment`, `is_published`, `marketplace_listing_id`, `is_subscribed`, `is_read_only`, `cloned_from`, `status`, `is_active`, `dag_config`) \u2014 so PostgREST answered 42703/PGRST204 and EVERY re-save from the Builder failed with this route's 503, while the first save (POST, which folds the graph into `buy_logic`) succeeded. A graph-carrying body is now compiled through the SAME seam POST uses before anything is written, so a graph accepted by one verb is accepted by the other (Requirement 3.2) and an invalid one is refused with the complete report having persisted nothing (Requirements 3.5, 3.6) \u2014 which is what this added `raises` entry records. The graph then goes into `buy_logic` exactly as the create path stores it, and the compiled graph is persisted as a new `strategy_versions` row with `is_current = TRUE`, without which an edited strategy kept the version its FIRST save produced and a backtest would have executed a plan the author had already replaced. WHAT IS NOT AUTHORISED. Nothing was removed or retyped: the pre-change `raises` and `returns` entries are still recorded here. A body carrying no graph reaches the same UPDATE it always did and cannot reach this 422.",
           "decorators": [

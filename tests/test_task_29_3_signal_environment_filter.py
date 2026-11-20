@@ -395,7 +395,11 @@ def test_the_environment_filter_is_optional_so_the_default_is_unchanged(path):
     parameter = next(
         p for p in _route_for(path).dependant.query_params if p.name == "environment"
     )
-    assert not parameter.required
+    # DEP-01: fastapi's internal ModelField (fastapi._compat.v2.ModelField, as of the
+    # fastapi==0.135.0/starlette==1.3.1 bump) stopped exposing `.required` directly -- the
+    # equivalent now lives on its `field_info` (a pydantic FieldInfo), via `.is_required()`,
+    # the same object `annotation` is already read from a few lines above in this file.
+    assert not parameter.field_info.is_required()
     assert parameter.default is None
 
 

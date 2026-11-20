@@ -7,6 +7,51 @@
   <link rel="canonical" href="https://vyomquant.in/" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
+  <!-- FE-02: this SPA is served as static HTML from S3 behind CloudFront (see
+       .github/workflows/06-frontend-deploy.yml) -- there is no per-request origin here the way
+       there is for the API (backend_app/main.py's SecurityHeadersMiddleware), so this meta tag
+       is the only CSP this app gets. A meta-tag CSP cannot carry `frame-ancestors`, `sandbox`
+       or `report-uri` (the HTML spec has browsers ignore those three on a <meta> CSP; only an
+       HTTP header can set them), so clickjacking protection for this origin is a CloudFront
+       response-headers-policy / ALB concern (X-Frame-Options), tracked separately by INF-02
+       ("terraform does not describe the production deployment").
+
+       script-src carries no 'unsafe-inline': the three scripts that used to be inline here
+       (local-dev detection, Sentry, GA/Clarity) now ship as /src/bootstrap.js, a same-origin
+       module already covered by 'self' -- see that file's header comment. The origins below
+       are every one this build actually loads from, confirmed by grepping src/: Google Fonts'
+       stylesheet (style-src/font-src), the Sentry/GA/Clarity loaders bootstrap.js injects
+       (script-src), and Razorpay Standard Checkout, the ONLY payment path on this
+       platform (src/utils/razorpayCheckout.js) -- Stripe is NOT included because Stripe has
+       been REMOVED FROM THE PRODUCT IN FULL: no webhook route, no checkout branch, no SDK in
+       requirements-base.txt. Granting Stripe origins here would be a permission for code
+       that does not exist. (The reason recorded here previously was weaker and is now out of
+       date -- it said this deployment merely had no live Stripe secret and that Stripe-only
+       endpoints 500ed by design. src-tauri/tauri.conf.json had NOT reached the same
+       conclusion and granted js.stripe.com and api.stripe.com until it was corrected;
+       tests/test_tauri_csp_configuration.py now holds the two policies to the same answer.)
+       frame-src is REQUIRED, not optional: Standard Checkout renders as a modal iframe, so
+       (PAY-01) the iframe itself is served from https://api.razorpay.com/v1/checkout/public,
+       NOT from checkout.razorpay.com (which only serves checkout.js). Without api.razorpay.com
+       here the modal opens as a blank page with the browser's "blocked" icon. Also,
+       permitting the script that opens it without the frame it opens would fail only at the
+       moment a customer tries to pay. connect-src's *.vyomquant.in/.com hosts and
+       wildcarded Supabase host cover every topology the deploy workflow's own API-hostname
+       allow-list names (same-origin CloudFront proxy, a dedicated api.vyomquant.in, or the raw
+       CloudFront domain). -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self' https://js.sentry-cdn.com https://www.googletagmanager.com https://www.clarity.ms https://checkout.razorpay.com;
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+    font-src 'self' data: https://fonts.gstatic.com;
+    img-src 'self' data: blob: https://www.googletagmanager.com https://*.clarity.ms;
+    connect-src 'self' https://*.vyomquant.com wss://*.vyomquant.com https://vyomquant.in https://*.vyomquant.in wss://vyomquant.in wss://*.vyomquant.in https://*.supabase.co wss://*.supabase.co https://*.sentry.io https://*.clarity.ms https://www.google-analytics.com https://api.razorpay.com https://lumberjack.razorpay.com;
+    frame-src https://checkout.razorpay.com https://api.razorpay.com;
+    object-src 'none';
+    base-uri 'self';
+    form-action 'self';
+  " />
+
   <!-- Web fonts: Inter (--font-sans) + JetBrains Mono (--font-mono), the two
        families named in src/styles/tokens.css. Loaded here rather than through an
        @import inside a rendered <style>, which blocks and re-evaluates on every
@@ -16,133 +61,130 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 
-  <!-- Primary SEO Meta Tags -->
-  <title>VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS</title>
-  <meta name="title" content="VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS" />
-  <meta name="description" content="Institutional-grade algorithmic trading infrastructure featuring visual strategy design (DAG), VectorBT backtesting, paper trading, XGBoost ML integration, and automated exchange execution." />
-  <meta name="keywords" content="quantitative trading, algorithmic trading, backtesting, vectorbt, strategy builder, crypto trading bot, python trading, xgboost trading, automated trading SaaS" />
-  <meta name="author" content="VyomQuant Technologies" />
-  <meta name="theme-color" content="#0a0e17" />
+  <!-- Primary SEO Meta Tags
+
+       "Institutional" came out of the title and the description. `components/landing/
+       SecuritySection.jsx` states in its own copy that this product holds no third-party
+       security certification — "we would rather say that than imply one" — and it dropped an
+       "Enterprise Security" badge for exactly that reason. A title claiming an institutional
+       terminal is the same unearned attestation one level up, where it is the first thing a
+       search result shows, and it also mis-describes the audience: this is a retail crypto
+       algorithmic-trading product.
+
+       What stays is every claim that has an implementation behind it: the visual DAG builder
+       (`backend_app/backend/strategy_dag/`), vectorbt backtesting (`backtesting_engine.py`,
+       with `vectorbt==0.26.2` pinned and the engine refusing to fabricate metrics without
+       it), paper trading (`paper_trading_service.py`) and exchange execution
+       (`exchange_executor.py`). "ML" is named rather than "AI": the ML/DL training stack is
+       real (XGBoost, LightGBM, RandomForest, CatBoost, LSTM, GRU, Transformer), while
+       `routers/copilot.py`'s "AI Copilot" is a seven-entry keyword matcher with no model
+       behind it, so no AI claim is made anywhere in this document. -->
+  <title>VyomQuant — Build, Backtest & Automate Crypto Trading Strategies</title>
+  <meta name="title" content="VyomQuant — Build, Backtest & Automate Crypto Trading Strategies" />
+  <meta name="description" content="Design systematic crypto trading strategies on a visual canvas, backtest them on vectorbt, rehearse in paper trading, then automate them on your own exchange account. Paper trading is the default. Free tier, no card required." />
+  <meta name="keywords" content="quantitative trading, algorithmic trading, backtesting, vectorbt, strategy builder, crypto trading bot, paper trading, strategy marketplace, automated trading SaaS" />
+  <meta name="author" content="Aerora Dynamics Private Limited" />
+  <!-- `#080A0E` is `--color-surface-canvas` in src/styles/tokens.css. It was `#0a0e17`, a
+       fourth colour that matched neither the token nor anything else, so the browser chrome
+       and the first painted frame were a different near-black from the app. -->
+  <meta name="theme-color" content="#080A0E" />
   
-  <!-- Open Graph / Facebook -->
+  <!-- Open Graph / Facebook
+
+       NO `og:image`. It pointed at `https://vyomquant.in/og-image.png`, and that file does
+       not exist: `public/` holds robots.txt, sitemap.xml, tauri.svg, vite.svg and
+       vq-favicon.svg, so Vite copies no `og-image.png` into `dist/` and the deploy has
+       nothing to upload. Every share of this page rendered an empty image frame.
+
+       Removed rather than repointed, because the honest alternatives are both worse: an
+       `og:image` naming the 32x32 favicon gives crawlers a 32px square to scale into a
+       1200x630 card, and inventing a share image is a design asset, not a metadata fix.
+       With no image declared, Facebook and LinkedIn fall back to a text card that renders
+       correctly. Restore this pair the moment a real 1200x630 asset lands in `public/`. -->
   <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="VyomQuant" />
   <meta property="og:url" content="https://vyomquant.in/" />
-  <meta property="og:title" content="VyomQuant — Institutional Quantitative Trading Terminal" />
-  <meta property="og:description" content="Build, backtest, and deploy quantitative trading strategies with visual DAG builder, vectorized backtesting, and institutional risk management." />
-  <meta property="og:image" content="https://vyomquant.in/og-image.png" />
+  <meta property="og:title" content="VyomQuant — Build, Backtest & Automate Crypto Trading Strategies" />
+  <meta property="og:description" content="Design systematic crypto trading strategies on a visual canvas, backtest them on vectorbt, rehearse in paper trading, then automate them on your own exchange account." />
 
-  <!-- Twitter -->
-  <meta property="twitter:card" content="summary_large_image" />
+  <!-- Twitter
+
+       `summary`, NOT `summary_large_image`. The large-image card REQUIRES an image, and with
+       the broken `twitter:image` above removed, declaring the large variant asks Twitter for
+       a card it cannot build and gets no card at all. `summary` renders from title and
+       description alone. This goes back to `summary_large_image` together with the og:image. -->
+  <meta property="twitter:card" content="summary" />
   <meta property="twitter:url" content="https://vyomquant.in/" />
-  <meta property="twitter:title" content="VyomQuant — Institutional Quantitative Trading Terminal" />
-  <meta property="twitter:description" content="Build, backtest, and deploy quantitative trading strategies with visual DAG builder, vectorized backtesting, and institutional risk management." />
-  <meta property="twitter:image" content="https://vyomquant.in/og-image.png" />
+  <meta property="twitter:title" content="VyomQuant — Build, Backtest & Automate Crypto Trading Strategies" />
+  <meta property="twitter:description" content="Design systematic crypto trading strategies on a visual canvas, backtest them on vectorbt, rehearse in paper trading, then automate them on your own exchange account." />
 
-  <!-- JSON-LD Structured Metadata -->
+  <!-- JSON-LD Structured Metadata
+
+       `operatingSystem` was "Web, Windows, macOS". For schema.org/SoftwareApplication that
+       field names the operating systems the application RUNS ON as an installable program,
+       so it was a machine-readable claim of native Windows and macOS applications — fed
+       straight to search engines as structured data. No desktop build is published: measured
+       in `algo22-terminal/releases/`, the macOS DMG is a 69-byte text placeholder, and the
+       one real artifact (the 112 MB Windows installer) is a sibling of `public/` that Vite
+       never copies into `dist/`, so it is not served either. `design/pageFields.js` records
+       all four as unavailable and `components/landing/DownloadSection.jsx` says so on the
+       page. It also listed only two of the three platforms the page itself names.
+
+       `"Web"` is the accurate value, and `browserRequirements` states the real constraint.
+       Add Windows/macOS/Linux here when a signed installer is actually downloadable.
+
+       `priceCurrency` was USD. `backend_app/core/subscription_engine.py` sets
+       `PRICE_BASE_CURRENCY = "INR"` and publishes one rupee price list; every other currency
+       is an FX conversion of it (`price_source: "fx"`). The Free plan really is 0, so the
+       figure was right and the currency named a price list that does not exist. -->
   <script type="application/ld+json">
     {
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
       "name": "VyomQuant",
-      "operatingSystem": "Web, Windows, macOS",
+      "operatingSystem": "Web",
+      "browserRequirements": "Requires a current desktop browser and a viewport at least 768px wide",
       "applicationCategory": "FinanceApplication",
       "offers": {
         "@type": "Offer",
-        "price": "0.00",
-        "priceCurrency": "USD"
+        "price": "0",
+        "priceCurrency": "INR",
+        "description": "Free plan — visual strategy builder, vectorbt backtesting, paper trading and one active strategy."
       },
-      "description": "Institutional-grade algorithmic trading platform featuring visual strategy DAG design, backtesting, and live execution."
+      "description": "Algorithmic crypto trading platform: visual strategy graph design, vectorbt backtesting, paper trading and automated execution on your own exchange account."
     }
   </script>
 
-  <script>
-    // Local-development detection. Gates development-only telemetry shims so
-    // they never emit console output in production builds.
-    window.__VQ_LOCAL__ = (function () {
-      var h = location.hostname;
-      return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h.slice(-6) === ".local";
-    })();
-  </script>
-  
-  <!-- Native Lightweight Telemetry for Beta -->
-  <script type="text/javascript">
-    (function () {
-      var sentryDsn = "%VITE_SENTRY_DSN%";
-      var isDummy = function (val) {
-        if (!val || val === "%" + "VITE_SENTRY_DSN" + "%") return true;
-        return val.toLowerCase().indexOf("dummy") !== -1;
-      };
-
-      if (!isDummy(sentryDsn)) {
-        var script = document.createElement("script");
-        script.src = "https://js.sentry-cdn.com/browser.min.js";
-        script.crossOrigin = "anonymous";
-        script.onload = function() {
-          if (window.Sentry) {
-            window.Sentry.init({
-              dsn: sentryDsn,
-              tracesSampleRate: 1.0,
-            });
-            console.log("Telemetry: Sentry initialized in browser.");
-          }
-        };
-        document.head.appendChild(script);
-      } else {
-        if (window.__VQ_LOCAL__) {
-          window.onerror = function (msg, url, lineNo, columnNo, error) {
-            console.error("[DEV Telemetry] ", msg, url, lineNo, columnNo, error);
-            return false;
-          };
-        }
-      }
-    })();
-  </script>
-  
-  <!-- Dynamic Analytics Loader -->
-  <script type="text/javascript">
-    (function () {
-      var gaId = "%VITE_GA_TRACKING_ID%";
-      var clarityId = "%VITE_CLARITY_PROJECT_ID%";
-
-      var isDummy = function (val) {
-        if (!val || val === "%" + "VITE_GA_TRACKING_ID" + "%" || val === "%" + "VITE_CLARITY_PROJECT_ID" + "%") return true;
-        var lower = val.toLowerCase();
-        return lower.indexOf("dummy") !== -1 || lower.indexOf("placeholder") !== -1 || lower.indexOf("test") !== -1;
-      };
-
-      if (!isDummy(gaId)) {
-        var script = document.createElement("script");
-        script.async = true;
-        script.src = "https://www.googletagmanager.com/gtag/js?id=" + gaId;
-        document.head.appendChild(script);
-
-        window.dataLayer = window.dataLayer || [];
-        window.gtag = function () { window.dataLayer.push(arguments); };
-        window.gtag('js', new Date());
-        window.gtag('config', gaId);
-      } else {
-        window.gtag = function () {
-          if (window.__VQ_LOCAL__) console.log("[DEV] GA Event:", arguments);
-        };
-      }
-
-      if (!isDummy(clarityId)) {
-        (function (c, l, a, r, i, t, y) {
-          c[a] = c[a] || function () { (c[a].q = c[a].q || []).push(arguments) };
-          t = l.createElement(r); t.async = 1; t.src = "https://www.clarity.ms/tag/" + i;
-          y = l.getElementsByTagName(r)[0]; y.parentNode.insertBefore(t, y);
-        })(window, document, "clarity", "script", clarityId);
-      } else {
-        window.clarity = function () {
-          if (window.__VQ_LOCAL__) console.log("[DEV] Clarity Event:", arguments);
-        };
-      }
-    })();
-  </script>
+  <!-- FE-02: local-dev detection, Sentry and GA/Clarity wiring now live in /src/bootstrap.js,
+       a same-origin module loaded in body ahead of main.jsx -- see that file's header
+       comment for why these are no longer inline script blocks. -->
+  <!-- THEME-01: applies the stored theme BEFORE the first paint.
+       CLASSIC and SYNCHRONOUS, in <head>, which is the whole point and is why it is not
+       part of bootstrap.js: module scripts are deferred, so they run after the document is
+       parsed and the browser may already have painted <body class="bg-surface-canvas"> in
+       the DARK canvas colour. For a user whose stored theme is light, that paint is the
+       flash this file exists to remove, and no amount of ordering among module scripts
+       fixes it.
+       It is also not inline, because script-src here carries no 'unsafe-inline' (see the
+       CSP comment above and bootstrap.js's header): the resolution for this build is that
+       every script is a same-origin FILE, which 'self' already covers. It lives in public/
+       rather than src/ because Vite copies public/ verbatim to the dist root — a file under
+       src/ would be bundled as a module and lose the synchronous property.
+       Placed BEFORE the stylesheet link deliberately: the attribute it sets is what the
+       token overrides key off, so it must exist before any CSS is applied. -->
+  <script src="/theme-boot.js"></script>
 </head>
 
-<body class="bg-[#0a0e17] text-[#f1f5f9] antialiased selection:bg-[#00d4ff]/20 selection:text-[#00d4ff]">
+<!-- Token utilities, not hex literals. These four arbitrary values were a fifth palette:
+     `#0a0e17` is not `--color-surface-canvas` (#080A0E) and `#f1f5f9` is not
+     `--color-content-primary` (#F0F2F5), so the frame painted before React mounted was a
+     different near-black and a different off-white from the app that replaced it — a visible
+     settle on every cold load. `src/styles/tokens.css` is the one place a colour is written
+     down (Requirement 1.1), and every class below resolves to it. -->
+
+<body class="bg-surface-canvas text-content-primary antialiased selection:bg-brand/20 selection:text-brand">
   <div id="root"></div>
+  <script type="module" src="/src/bootstrap.js"></script>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 

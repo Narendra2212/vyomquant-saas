@@ -652,6 +652,41 @@ def install_world(monkeypatch) -> World:
         module = importlib.import_module(module_path)
         monkeypatch.setattr(module, "get_strategy_audit_logger", lambda: audit)
 
+    # RT-24's bot-slot reservation and live-trading check, stood down.
+    #
+    # `deploy_marketplace_strategy` now reserves a bot slot against the subscriber before its
+    # insert. `SubscriptionEngine.reserve_quota` reaches a Redis this harness does not provide,
+    # answers `(False, 0, 0)`, and the route returns `402 DEPLOYMENT_QUOTA_EXCEEDED`. That broke
+    # `test_the_subscriber_can_deploy_the_listing_they_are_entitled_to`, which is the POSITIVE
+    # control of this whole file -- the one assertion that the subscriber can still do the thing
+    # they paid for. A billing refusal standing in for it would have left every "the subscriber
+    # is refused" test green while the file no longer proved anything was reachable, which is the
+    # failure mode a positive control exists to catch.
+    #
+    # Quota is this file's subject nowhere; it is asserted on its own in
+    # `tests/test_rt24_marketplace_deployment_starts.py`. The same four seams, named the same way,
+    # as `tests/test_marketplace_deployment_subscriber_safe.py::_quota_and_entitlement_seams`.
+    from backend_app.core import subscription_dependencies as _sub_deps
+    from backend_app.core.subscription_engine import \
+        SubscriptionEngine as _SubEngine
+
+    async def _plan(*_a: Any, **_k: Any) -> str:
+        return "pro"
+
+    async def _reserve(*_a: Any, **_k: Any) -> Any:
+        return (True, 1, 10)
+
+    async def _entitled(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    async def _release(*_a: Any, **_k: Any) -> int:
+        return 0
+
+    monkeypatch.setattr(_sub_deps, "get_user_plan", _plan, raising=False)
+    monkeypatch.setattr(_SubEngine, "reserve_quota", _reserve, raising=False)
+    monkeypatch.setattr(_SubEngine, "check_feature_entitlement", _entitled, raising=False)
+    monkeypatch.setattr(_SubEngine, "decrement_quota_usage", _release, raising=False)
+
     # The request-scoped client dependency is installed HERE rather than in `_overrides` so that
     # installing a second world re-points it too. Left in `_overrides` it would keep answering
     # with the first world's row store while the module seams answered with the second's — one

@@ -969,8 +969,19 @@ class SubscriptionEngine:
 
         Returns ``(allowed, usage_after_the_decision, limit)``. The increment happens FIRST and
         is reverted on overflow, so two concurrent requests cannot both observe the last unit as
-        free — the classic check-then-increment race. The reverted value is reported rather than
-        the inflated one, so a refusal never tells a user they have consumed more than they have.
+        free — the classic check-then-increment race.
+
+        **The returned usage is bounded by ``[0, limit]``.** A refusal reports the settled
+        figure, never the mid-contention transient: ``DECRBY`` answers with the meter as it
+        stood after this caller's decrement, which concurrent refusals can still have inflated,
+        so the raw reading is clamped and the transient logged instead. Before that clamp, a
+        refused caller could be told it had consumed 35 — or 36, in a second job of the same
+        CI run ``38061973739`` — against a limit of 10, even though the meter settled at
+        exactly 10 both times.
+
+        **An unmeasurable quota refuses.** If the increment does not land — the cache proxy
+        returns 0 and logs on a connection fault — this refuses rather than admitting, so a
+        broken cache cannot silently disable the limit.
         """
         config = cls.get_plan_config(plan_key)
         if not config:
@@ -991,20 +1002,66 @@ class SubscriptionEngine:
             return False, current, effective
 
         new_usage = await redis_manager.incrby(cache_key, amount)
+
+        # A HEALTHY ``INCRBY`` OF A POSITIVE AMOUNT CANNOT RETURN LESS THAN THAT AMOUNT.
+        #
+        # This meter only ever grows through this branch, and every revert below is matched
+        # to the increment that caused it, so the key never holds a negative figure. A
+        # smaller answer therefore means the increment did not land --
+        # ``redis_manager.incrby`` returns 0 when its proxy swallows a connection error and
+        # logs a warning (``cache/redis_manager.py``). Without this check that 0 flows into
+        # the ``new_usage > effective`` comparison, which is false, and the reservation is
+        # ADMITTED: a quota that cannot be measured would stop enforcing exactly when the
+        # cache is broken. A limit nobody can read must refuse, not wave traffic through.
+        if amount > 0 and new_usage < amount:
+            logger.error(
+                "Monthly meter for %s could not be incremented (INCRBY returned %s for "
+                "amount %s); refusing user %s plan %s because the quota is unmeasurable",
+                resource,
+                new_usage,
+                amount,
+                user_id,
+                plan_key,
+            )
+            return False, 0, effective
+
         if new_usage == amount:
             await redis_manager.expire(cache_key, cls._METER_TTL_SECONDS)
 
         if new_usage > effective:
             reverted = await redis_manager.decrby(cache_key, amount)
+
+            # ``reverted`` is the meter as it stood after THIS caller's decrement, not this
+            # caller's own position. Concurrent refusals have incremented and not yet
+            # reverted, so it is a transient that can sit far above the limit. CI run
+            # 38061973739 observed it twice at different magnitudes -- 35 in the blocking
+            # `Unit & Integration Tests` job and 36 in the non-blocking diagnostics job of
+            # the SAME run -- while the meter settled at exactly 10 in both. That the figure
+            # is not reproducible is itself the evidence: it is a race snapshot, not a
+            # reading. A refused caller consumed nothing, so the only figure true for it is
+            # the capacity it was denied -- clamp into [0, effective].
+            # The transient is logged rather than returned, so the contention stays visible
+            # without telling a user they have spent more than they can.
+            settled = min(max(reverted, 0), effective)
+            if settled != reverted:
+                logger.info(
+                    "Monthly meter for %s read %s mid-contention; reporting the settled "
+                    "figure %s/%s to user %s",
+                    resource,
+                    reverted,
+                    settled,
+                    effective,
+                    user_id,
+                )
             logger.info(
                 "Monthly meter exhausted for %s: %s/%s user %s plan %s",
                 resource,
-                reverted,
+                settled,
                 effective,
                 user_id,
                 plan_key,
             )
-            return False, reverted, effective
+            return False, settled, effective
 
         return True, new_usage, effective
 

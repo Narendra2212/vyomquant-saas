@@ -114,6 +114,11 @@ class TradeValidationReport:
         }
 
 
+#: RT-21: risk-reducing control actions. Honoured by ExecutionGuard.validate_trade only
+#: when the caller also passes reduce_only=True.
+CONTROL_SIDES = frozenset({"cancel", "cancel_all", "close_all"})
+
+
 class ExecutionGuard:
     """
     STEP 7.1: CENTRAL EXECUTION GUARD (MANDATORY)
@@ -154,6 +159,12 @@ class ExecutionGuard:
         self.max_order_size_usd = Decimal("1000000")  # $1M max order
         self.min_order_size_usd = Decimal("10")  # $10 min order
         self.max_spread_pct = Decimal("0.01")  # 1% max spread
+        # GUARD-01: a spot buy's required funding, as a fraction of notional on top of
+        # the full notional itself -- covers the exchange's own trading fee so a balance
+        # check that just barely clears the notional does not then fail at the venue
+        # over the fee. Matches the default fee rate used elsewhere in this codebase
+        # (e.g. paper_trading_service's default_fee_rate).
+        self.fee_buffer_pct = Decimal("0.001")  # 0.1%
         
         # Statistics
         self.total_validations = 0
@@ -248,7 +259,26 @@ class ExecutionGuard:
             self._validate_risk_engine_status(),
         ]
 
-        if not reduce_only:
+        # RT-21: CONTROL ACTIONS (cancel / cancel_all / close_all) ARE NOT ORDERS.
+        # Their signal carries side='cancel'..., size 0, price 0. `_validate_signal_basic`
+        # accepts only buy/sell/long/short and `_validate_order_size` blocks size <= 0, so
+        # the guard itself refused every cancel ("Invalid side: 'cancel'") before any route
+        # logic ran -- and the circuit breakers (which include the kill switch) would have
+        # refused it during a halt, the one time a user most needs to cancel. A control
+        # action only REDUCES risk, so it gets exactly one check -- its own shape -- and is
+        # still recorded in the audit trail below. It is honoured ONLY together with
+        # reduce_only=True: a caller that did not assert reduce-only gets the full
+        # order checks, which reject these sides.
+        is_control = bool(reduce_only) and str(side).lower().strip() in CONTROL_SIDES
+        if is_control:
+            for coro in capital_dependent + checks:
+                coro.close()
+            checks = [self._validate_control_signal(signal)]
+            logger.info(
+                "Control action %s on %s: validated for shape only (risk-reducing; "
+                "allowed during a halt).", side, symbol,
+            )
+        elif not reduce_only:
             checks.extend(capital_dependent)
         else:
             for coro in capital_dependent:
@@ -791,25 +821,49 @@ class ExecutionGuard:
     ) -> ValidationResult:
         """
         STEP 7.4: Balance Validation
-        
+
         Check:
         available_balance >= required_margin
-        
+
         IF not: BLOCK
+
+        GUARD-01. SPOT REQUIRES THE FULL NOTIONAL, NOT 10% "MARGIN"
+        -------------------------------------------------------------
+        This used to assume a flat 10% margin requirement (10x leverage) for every
+        market, unconditionally. There is no margin/leverage trading anywhere on this
+        platform -- RT-21's own investigation of ``BotRunner.recovered_exposure_coins``
+        established the exposure model is spot-only, always non-negative, no short
+        side, let alone a leveraged one -- so that 10% figure would have passed this
+        check with as little as 1/10th of what buying the asset actually costs. A
+        ``market_type`` other than ``"spot"`` is refused outright rather than guessed at:
+        this guard has no correct way to price a feature that does not exist here.
         """
         # Get available balance
         available_balance = Decimal(str(portfolio_state.get("available_balance", 0)))
         free_margin = Decimal(str(portfolio_state.get("free_margin", portfolio_state.get("available_balance", 0))))
-        
+
         # Calculate required margin for this trade
         size = Decimal(str(signal.get("size", 0)))
         price = Decimal(str(signal.get("price", 0)))
         notional = size * price
-        
-        # Assume 10% margin requirement (adjustable)
-        margin_requirement_pct = Decimal("0.10")
-        required_margin = notional * margin_requirement_pct
-        
+
+        market_type = str(signal.get("market_type") or "spot").strip().lower()
+        if market_type != "spot":
+            return ValidationResult(
+                check_name="balance_validation",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=(
+                    f"Unsupported market_type={market_type!r}: this platform supports "
+                    "spot trading only, so a margin/leverage requirement cannot be "
+                    "correctly computed for it."
+                ),
+                details={"market_type": market_type},
+            )
+
+        # Spot: the full notional, plus a buffer for the venue's own trading fee.
+        required_margin = notional * (Decimal("1") + self.fee_buffer_pct)
+
         # Use the more conservative of available_balance or free_margin
         effective_balance = min(available_balance, free_margin)
         
@@ -824,7 +878,8 @@ class ExecutionGuard:
                     "free_margin": str(free_margin),
                     "required_margin": str(required_margin),
                     "notional_value": str(notional),
-                    "margin_requirement_pct": str(margin_requirement_pct),
+                    "market_type": market_type,
+                    "fee_buffer_pct": str(self.fee_buffer_pct),
                     "shortfall": str(required_margin - effective_balance),
                 },
             )
@@ -928,6 +983,34 @@ class ExecutionGuard:
                 message=f"Failed to check for duplicates: {e}",
                 details={"client_order_id": client_order_id, "error": str(e)},
             )
+
+    async def _validate_control_signal(self, signal: Dict[str, Any]) -> ValidationResult:
+        """RT-21: shape check for cancel / cancel_all / close_all. Nothing else applies."""
+        side = str(signal.get("side", "")).lower().strip()
+        symbol = str(signal.get("symbol", "")).strip()
+        if side not in CONTROL_SIDES:
+            return ValidationResult(
+                check_name="control_signal",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=f"Invalid control action: '{side}'. Must be one of: {sorted(CONTROL_SIDES)}",
+                details={"side": side},
+            )
+        if not symbol:
+            return ValidationResult(
+                check_name="control_signal",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message="Control action requires a symbol (or 'ALL')",
+                details={"side": side},
+            )
+        return ValidationResult(
+            check_name="control_signal",
+            passed=True,
+            severity=ValidationSeverity.PASS,
+            message=f"Control action valid: {side} {symbol}",
+            details={"side": side, "symbol": symbol},
+        )
 
     async def _validate_signal_basic(self, signal: Dict[str, Any]) -> ValidationResult:
         """
@@ -1429,44 +1512,72 @@ class ExecutionGuard:
         )
     
     async def _validate_risk_engine_status(self) -> ValidationResult:
-        """Validate risk engine is operational."""
+        """Validate risk engine is operational.
+
+        GUARD-01. FAILS CLOSED ON A GENUINE READ OR PARSE FAILURE
+        -----------------------------------------------------------
+        The whole ``try`` used to span the Redis read AND the parse, with one
+        ``except Exception`` treating EVERY failure - a dropped Redis connection, a
+        corrupted status payload, this guard's own `self.redis` being `None` - exactly
+        like "no status has ever been recorded", and answering PASS either way. That
+        conflates two different facts: "nothing has reported unhealthy" (a real absence,
+        legitimately PASS) and "the evidence could not be read" (a failure, which a
+        safety gate must not silently resolve to its own claim that things are fine).
+
+        A missing key is still the first case and still PASS. A Redis error or an
+        unparseable payload is now the second, and BLOCKs.
+        """
+        risk_key = "risk:engine:status"
         try:
-            risk_key = "risk:engine:status"
             status = await self.redis.get(risk_key)
-            
-            if status:
-                # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
-                # Fallback to ast.literal_eval for backward compatibility during migration
-                try:
-                    status_data = json.loads(status.decode())
-                except (json.JSONDecodeError, ValueError):
-                    # During migration, some data may still be stored as Python literals
-                    # This fallback will be removed once all data is migrated to JSON
-                    status_data = ast.literal_eval(status.decode())
-                if not status_data.get("operational", True):
-                    return ValidationResult(
-                        check_name="risk_engine",
-                        passed=False,
-                        severity=ValidationSeverity.BLOCK,
-                        message="Risk engine not operational",
-                        details=status_data,
-                    )
-            
-            return ValidationResult(
-                check_name="risk_engine",
-                passed=True,
-                severity=ValidationSeverity.PASS,
-                message="Risk engine operational",
-            )
-            
         except Exception as e:
-            # If no status set, assume operational (default)
+            return ValidationResult(
+                check_name="risk_engine",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=f"Risk engine status could not be read: {e}",
+            )
+
+        if not status:
             return ValidationResult(
                 check_name="risk_engine",
                 passed=True,
                 severity=ValidationSeverity.PASS,
-                message=f"Risk engine status unknown (assumed OK): {e}",
+                message="Risk engine status not recorded (nothing has reported unhealthy)",
             )
+
+        try:
+            # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
+            # Fallback to ast.literal_eval for backward compatibility during migration
+            try:
+                status_data = json.loads(status.decode())
+            except (json.JSONDecodeError, ValueError):
+                # During migration, some data may still be stored as Python literals
+                # This fallback will be removed once all data is migrated to JSON
+                status_data = ast.literal_eval(status.decode())
+        except Exception as e:
+            return ValidationResult(
+                check_name="risk_engine",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=f"Risk engine status payload is unreadable: {e}",
+            )
+
+        if not status_data.get("operational", True):
+            return ValidationResult(
+                check_name="risk_engine",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message="Risk engine not operational",
+                details=status_data,
+            )
+
+        return ValidationResult(
+            check_name="risk_engine",
+            passed=True,
+            severity=ValidationSeverity.PASS,
+            message="Risk engine operational",
+        )
 
     async def _validate_composite_risk_score(
         self,

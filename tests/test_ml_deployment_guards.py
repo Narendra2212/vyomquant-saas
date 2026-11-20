@@ -374,11 +374,31 @@ class TestMLDeploymentGuards:
         ``connection_layer`` is not the app ``startup.sh`` launches, but its router is
         mountable and its ``POST /train-ml`` body was a complete bypass with its own
         contradictory ``ML_BUILD_LIMITS`` table. It now refuses.
+
+        ``connection_layer/`` IS NOT TRACKED BY GIT -- `.gitignore` excludes the whole
+        directory (see ``ML_TRAINING_GOVERNANCE_IMPLEMENTATION_REPORT.md``'s own note on why
+        the file this test reads could not be included in that task's diff). It is a local,
+        vendored duplicate source tree, the same as ``aerora_quant_platform/`` --
+        ``tests/test_no_unused_jwt_library.py`` and
+        ``tests/test_execution_paths_that_claim_an_exchange.py`` both already carry it in their
+        own "trees to skip" lists for exactly this reason. A fresh checkout -- this session's,
+        and every CI run there has ever been, since CI clones the git tree and nothing else --
+        therefore never has this path, by construction, not by regression: the route's
+        retirement was verified once, on whichever machine had the directory, and recorded in
+        that report; it was never something a CI run could keep re-proving. Skipped rather than
+        failed when the path is absent, so the check still runs for anyone who does have the
+        directory locally, and a CI run that can never have it stops being told it is broken.
         """
         import inspect
         from pathlib import Path
 
         path = Path(__file__).resolve().parents[1] / "connection_layer" / "routers" / "strategies.py"
+        if not path.exists():
+            pytest.skip(
+                "connection_layer/ is gitignored (a local, vendored duplicate source tree, "
+                "never committed) and therefore absent from this checkout, as it is from every "
+                "CI run -- see this test's own docstring."
+            )
         source = path.read_text(encoding="utf-8")
 
         marker = '@router.post("/train-ml")'

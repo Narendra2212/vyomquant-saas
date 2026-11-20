@@ -116,7 +116,9 @@ def source_address(request: Any) -> str:
     if both limits agree on how an address is spelled.
     """
     try:
-        address = get_remote_address(request)
+        from backend_app.core.client_address import trusted_client_address
+
+        address = trusted_client_address(request)
     except Exception:  # noqa: BLE001 - a key function that raises turns a 429 into a 500
         logger.warning("could not resolve a client address for rate limiting", exc_info=True)
         address = None

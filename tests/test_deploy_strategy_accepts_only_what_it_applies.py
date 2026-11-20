@@ -105,8 +105,10 @@ from __future__ import annotations
 import inspect
 import os
 import sys
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -353,58 +355,123 @@ class TestTheRefusalsAreRefusalsAndNotSubstitutions:
 class TestTheRouteMapsBothRefusals:
     """Both new exceptions are plain ``Exception`` subclasses.
 
-    Without an explicit branch they fall through to the route's
-    ``except Exception -> 500``, which would report a caller-correctable request as a
-    server fault. They must not fall into the ``except ValueError`` branch either: that
-    one answers 400, or 403 when the message happens to contain "quota", and neither
-    describes what happened.
+    Without an explicit branch they fall through to a generic handler, which would
+    report a caller-correctable request as a server fault. They must not fall into the
+    ``except ValueError`` branch either: that one answers 403/404, and does not describe
+    what happened.
+
+    HISTORY. ``strategy_operations.deploy_strategy`` -- the route these tests used to
+    inspect by source -- was deleted by API-01 (commit 396d210) as a permanently shadowed
+    duplicate: ``routers/strategies.py`` was mounted first and always won the same path,
+    so the handler had been dead code since the day both were added. That deletion was
+    correct. But tracing where a deploy request actually goes today --
+    ``routers.strategies.deploy_bot`` / ``resume_strategy`` ->
+    ``_deploy_current_version_paper`` -> ``StrategyService.deploy_version`` -- found that
+    the parameter refusal had not travelled with it: ``deploy_version``'s own request
+    model has no field for ``capital``/``trade_size_pct``/``stop_loss_pct``/
+    ``max_drawdown_pct`` at all, and nothing read them out of ``deploy_bot``'s raw
+    ``body`` dict either, so a caller setting a stop-loss on deploy had it silently
+    dropped -- the exact defect this file exists to catch, just one layer up from where
+    it used to live. Fixed by wiring ``assert_deploy_params_applicable`` into
+    ``_deploy_current_version_paper`` (called before anything else, same as the deleted
+    route) and having ``deploy_bot`` forward its body to it. These tests now exercise
+    that function directly instead of grepping a route's source, because the behaviour
+    that matters is what actually happens when it runs, not what literal exception name
+    the code mentions.
+
+    The blueprint-incomplete half never had this problem: ``deploy_version`` already
+    calls ``assert_blueprint_startable`` (``strategy_service.py:1858``) and converts a
+    ``DeployBlueprintIncomplete`` into ``DeployRejected(..., http_status=422)``, which
+    ``_deploy_current_version_paper`` already maps through ``e.http_status`` -- a
+    different wrapper and status (422, not the original route's 409) but the same
+    guarantee: no silent deploy of a blueprint that cannot start a bot, and no 500.
     """
 
     def test_an_unapplicable_parameter_is_a_422(self):
-        source = inspect.getsource(_deploy_route())
-        assert "DeployParameterNotApplicable" in source, (
-            "the deploy route does not handle DeployParameterNotApplicable, so it "
-            "becomes a 500"
-        )
-        assert "DEPLOY_PARAMETER_NOT_APPLICABLE" in source
+        with pytest.raises(HTTPException) as caught:
+            _run(_deploy_route()({"id": "u1"}, "strat-1", supplied_params={"stop_loss_pct": 0.02}))
+        assert caught.value.status_code == 422
+        assert caught.value.detail["error"] == "DEPLOY_PARAMETER_NOT_APPLICABLE"
+        assert "stop_loss_pct" in caught.value.detail["message"]
 
-    def test_an_incomplete_blueprint_is_a_409(self):
-        source = inspect.getsource(_deploy_route())
-        assert "DeployBlueprintIncomplete" in source, (
-            "the deploy route does not handle DeployBlueprintIncomplete, so it "
-            "becomes a 500"
-        )
-        assert "DEPLOY_BLUEPRINT_INCOMPLETE" in source
-
-    def test_both_branches_precede_the_generic_handlers(self):
-        """Ordering decides which handler wins, so it is asserted rather than assumed."""
-        source = inspect.getsource(_deploy_route())
-        specific = max(
-            source.find("except DeployParameterNotApplicable"),
-            source.find("except DeployBlueprintIncomplete"),
-        )
-        generic = source.find("except ValueError")
-        assert specific != -1 and generic != -1
-        assert specific < generic, (
-            "a specific refusal is declared after `except ValueError`, so it would be "
-            "reported as a validation failure instead"
-        )
-
-    def test_the_route_still_forwards_all_four_parameters(self):
-        """The refusal lives in the service, so the route must keep passing them.
-
-        If the route stopped forwarding them the service would never see them and the
-        refusal would silently stop firing - the original defect, one layer up.
-        """
-        source = inspect.getsource(_deploy_route())
-        for name in UNAPPLIED_DEPLOY_PARAMS:
-            assert f"{name}=body.{name}" in source.replace(" ", ""), (
-                f"the deploy route no longer forwards {name}, so the service cannot "
-                f"refuse it"
+    def test_the_refusal_runs_before_the_service_is_even_reached(self):
+        """Ordering is the point: a refused parameter must not cost a service call."""
+        with patch(
+            "backend_app.backend.strategy_service.get_strategy_service", new=AsyncMock()
+        ) as mock_get_service:
+            with pytest.raises(HTTPException):
+                _run(_deploy_route()({"id": "u1"}, "strat-1", supplied_params={"capital": 500}))
+            assert mock_get_service.call_count == 0, (
+                "get_strategy_service was called before the parameter refusal ran"
             )
+
+    def test_an_incomplete_blueprint_is_refused_not_a_500(self):
+        """The service-level guarantee this route relies on, exercised at its own seam.
+
+        ``_deploy_current_version_paper`` does not itself inspect the blueprint --
+        ``deploy_version`` does, and already turns the refusal into a ``DeployRejected``
+        this route maps through ``e.http_status``. This proves that mapping holds for
+        the status code the service actually uses (422), not the original route's 409.
+        """
+        from backend_app.backend.deployment_binding import DeployRejected
+
+        mock_service = AsyncMock()
+        mock_service.get_strategy = AsyncMock(
+            return_value={"version": {"version": "v1.0"}}
+        )
+        mock_service.deploy_version = AsyncMock(
+            side_effect=DeployRejected(
+                "RUNTIME_BLUEPRINT_NOT_STARTABLE",
+                "missing ['exchange_id', 'buy_logic', 'sell_logic', 'risk']",
+                http_status=422,
+            )
+        )
+        with patch(
+            "backend_app.backend.strategy_service.get_strategy_service",
+            new=AsyncMock(return_value=mock_service),
+        ):
+            with pytest.raises(HTTPException) as caught:
+                _run(_deploy_route()({"id": "u1"}, "strat-1"))
+        assert caught.value.status_code == 422
+        assert caught.value.status_code != 500
+
+    def test_omitting_the_parameters_is_fine(self):
+        """The normal case: no risk/capital controls supplied, nothing refused."""
+        mock_service = AsyncMock()
+        mock_service.get_strategy = AsyncMock(return_value=None)
+        with patch(
+            "backend_app.backend.strategy_service.get_strategy_service",
+            new=AsyncMock(return_value=mock_service),
+        ):
+            with pytest.raises(HTTPException) as caught:
+                _run(_deploy_route()({"id": "u1"}, "strat-1", supplied_params=None))
+        # Reaches the NO_SAVED_VERSION 409, proving the refusal did not fire and the
+        # call actually reached the service.
+        assert caught.value.status_code == 409
+        assert caught.value.detail["error"] == "NO_SAVED_VERSION"
+
+    def test_the_deploy_bot_route_forwards_its_body_for_validation(self):
+        """The route must keep passing the body through, or the refusal above is inert."""
+        source = inspect.getsource(_live_deploy_bot_route())
+        assert "supplied_params=body" in source.replace(" ", ""), (
+            "deploy_bot no longer forwards its body to _deploy_current_version_paper, "
+            "so a supplied risk/capital parameter can no longer be refused"
+        )
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
 
 
 def _deploy_route():
-    from backend_app.routers import strategy_operations as so
+    from backend_app.routers.strategies import _deploy_current_version_paper
 
-    return so.deploy_strategy
+    return _deploy_current_version_paper
+
+
+def _live_deploy_bot_route():
+    from backend_app.routers.strategies import deploy_bot
+
+    return deploy_bot

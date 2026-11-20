@@ -24,7 +24,7 @@
  * alongside the rest, so the shared-client rule is unaffected.
  */
 
-import { get, post, patch, publicGet } from '../../apiClient';
+import { get, post, patch, put, publicGet } from '../../apiClient';
 
 /**
  * @typedef {Object} BrowseParams
@@ -126,6 +126,20 @@ const submissions = {
    * @returns {Promise<{submission_id: string, submission_state: string, message: string}>}
    */
   create: (body) => post('/api/library/submissions', body),
+
+  /**
+   * The caller's own Submissions, newest first, optionally for one source strategy.
+   *
+   * `GET /api/library/submissions` (`list_own_submissions`, MKT-03). Owner-scoped in the query;
+   * this is how the strategy page learns a Submission's state after a reload.
+   *
+   * @param {string} [strategyId]
+   * @returns {Promise<{submissions: Object[], count: number}>}
+   */
+  list: (strategyId) =>
+    get(
+      `/api/library/submissions${strategyId ? `?strategy_id=${encodeURIComponent(strategyId)}` : ''}`,
+    ),
 
   /**
    * One of the caller's own Submissions.
@@ -471,6 +485,45 @@ export const libraryApi = {
   clone: (listingId) => post(`/api/library/${encodeURIComponent(listingId)}/clone`),
 
   /**
+   * Deploy a Listing the caller is entitled to, without copying its logic (MKT-05).
+   *
+   * `POST /api/library/{library_id}/deploy` (`deploy_marketplace_strategy`, rate-limited
+   * 10/60s). The subscriber-safe path: the server binds a new `strategy_deployments` row to
+   * the OWNER's current version and never copies `buy_logic`/`sell_logic`/`risk`/
+   * `indicators` into a row the caller owns.
+   *
+   * `mode` selects the Execution_Environment and defaults to `'paper'`, so an existing
+   * caller that omits it is unaffected.
+   *
+   * `mode: 'live'` PLACES REAL ORDERS, and is permitted only for the duration of the
+   * subscribed period. It requires `exchange_account_id` — the caller's OWN exchange
+   * account, which is the `account_id` field of an `api.exchange.list()` entry, NOT its
+   * `id` (that one is a synthesised `{user_id}_{exchange_id}` composite kept for the
+   * existing exchange UI). `risk_config_id` is optional. Naming an account the caller does
+   * not own is a 404, never a 403, so the response cannot be used to discover whether an
+   * id exists for somebody else.
+   *
+   * The server stamps the deployment with the subscription that authorises it and the
+   * instant that authorisation ends, and refuses to create a live marketplace deployment
+   * without both (`chk_sd_marketplace_live_is_bounded`, migration 056). A live deployment
+   * stops placing orders the moment the paid period ends — enforced on the order path
+   * every tick, not by a background sweep.
+   *
+   * `body` accepts only `symbol`, `timeframe`, `capital`, `session_options`, `mode`,
+   * `exchange_account_id` and `risk_config_id`; any other key is a 422 that names the
+   * field but never echoes the value. A paper request carrying an account or risk config
+   * is also a 422 rather than a silently ignored field.
+   *
+   * @param {string} listingId
+   * @param {{symbol?: string, timeframe?: string, capital?: number,
+   *          session_options?: Object, mode?: 'paper'|'live',
+   *          exchange_account_id?: string, risk_config_id?: string}} [body]
+   * @returns {Promise<Object>} `{deployment_id, library_id, granted_via, message}`.
+   */
+  deploy: (listingId, body = {}) =>
+    post(`/api/library/${encodeURIComponent(listingId)}/deploy`, body),
+
+  /**
    * Submit or update the caller's rating for a Listing.
    *
    * `POST /api/library/{library_id}/rate` (`rate_strategy`, rate-limited 20/minute). Only a
@@ -508,6 +561,35 @@ export const libraryApi = {
    * @returns {Promise<Object>}
    */
   creatorAnalytics: () => get('/api/library/creator/analytics'),
+
+  /**
+   * The caller's OWN `marketplace_creator_payouts` rows (MKT-06/MKT-07), most recent first.
+   *
+   * `GET /api/library/creator/payouts` (`creator_payout_history`). These rows are created on
+   * a weekly, platform-initiated cadence — a creator never requests one, they only read what
+   * the platform already created and whether an operator has settled it. Each row carries
+   * `id`, `amount_minor` (integer Minor_Units, never a float), `currency`, `status`
+   * (`pending`|`completed`|`rejected`), `period_start`, `period_end`, `created_at`,
+   * `settled_at`, `reference` and `reason` — the last two `null` until an operator settles it.
+   *
+   * @returns {Promise<{payouts: Object[], count: number}>}
+   */
+  creatorPayouts: () => get('/api/library/creator/payouts'),
+
+  /**
+   * Operator-only: settle a pending creator payout as completed or rejected (MKT-06).
+   *
+   * `PUT /api/library/creator-payouts/{payout_id}/settle` (`settle_creator_payout_endpoint`).
+   * Admin-gated server-side (`get_admin_user`); a non-admin caller is refused there, not here.
+   * No page in this app calls this yet — there is no admin marketplace-moderation surface —
+   * but the binding is added so one can be wired to it without inventing the path again.
+   *
+   * @param {string} payoutId
+   * @param {{status: 'completed'|'rejected', reference?: string, reason?: string}} body
+   * @returns {Promise<{status: string, payout_id: string, settled_as: string}>}
+   */
+  settleCreatorPayout: (payoutId, body) =>
+    put(`/api/library/creator-payouts/${encodeURIComponent(payoutId)}/settle`, body),
 
   /**
    * The caller's own Subscriptions and what they are committed to paying, per currency.

@@ -27,9 +27,12 @@
  * WHAT CAME OFF THE CLAIMS
  * ------------------------
  *   * "over 50+ global cryptocurrency exchanges" → CCXT.pro reaches many venues, but
- *     `backend_app/core/exchange_certification.py` registers exactly ONE at
- *     LEVEL_5_PRODUCTION_READY. The honest form names the library's reach and the certified
- *     venue separately.
+ *     `backend_app/core/exchange_certification.py` registered exactly ONE at
+ *     LEVEL_5_PRODUCTION_READY at the time this section was written. CLAIM-02 later found
+ *     even that one claim was unmeasured and corrected the registry: no venue is Level 5
+ *     today, since none has ever had a sandbox or live order placed against it. The honest
+ *     form here names the library's reach and (per `ProofStrip.jsx`) the one venue with
+ *     measured sandbox routing, not a production certification nobody has earned.
  *   * "Run millions of backtest iterations in seconds" → nothing measures backtest throughput.
  *   * "institutional" as a bare adjective, four uses. Replaced by the mechanism in each case.
  *

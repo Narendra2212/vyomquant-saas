@@ -41,6 +41,7 @@ from backend_app.routers.notifications import (
     create_notification,
     _in_memory_notifications,
     _notifications_lock,
+    _idempotency_index,
 )
 from backend_app.core.notification_dispatcher import dispatch_user_notification
 
@@ -50,9 +51,11 @@ def clean_notifications_state():
     """Ensure clean notification memory state between test runs."""
     with _notifications_lock:
         _in_memory_notifications.clear()
+        _idempotency_index.clear()
     yield
     with _notifications_lock:
         _in_memory_notifications.clear()
+        _idempotency_index.clear()
 
 
 @pytest.mark.asyncio
@@ -359,8 +362,19 @@ async def test_support_ticket_status_resolution_generates_notification():
 
 @pytest.mark.asyncio
 async def test_exchange_connection_lifecycle_generates_notifications():
-    """Verify exchange connection and disconnection produce real user notifications."""
-    user = {"id": "usr_exch_trader_01", "email": "exch@quant.io", "role": "user"}
+    """Verify exchange connection and disconnection produce real user notifications.
+
+    ``aal: "aal2"`` is required because AUTH-01 wired ``require_aal2`` to
+    POST /api/exchanges/keys and DELETE /api/exchanges/{id}; without it this caller gets
+    403 and never reaches the notification dispatch this test is about. The claim is
+    supplied on the user rather than by overriding ``require_aal2``, so the real control
+    still runs -- stubbing it out would let this test keep passing if AUTH-01 were
+    reverted.
+    """
+    user = {
+        "id": "usr_exch_trader_01", "email": "exch@quant.io", "role": "user",
+        "aal": "aal2",
+    }
     mock_vault = MagicMock()
     mock_vault.store_exchange_keys = MagicMock(return_value=None)
     mock_redis = MagicMock()
@@ -697,18 +711,42 @@ async def test_strategy_lifecycle_generates_notifications():
             assert res_create.status_code == 200, res_create.text
 
             # 2. Strategy deployment
+            #
+            # RT-03: /api/strategies/{id}/deploy no longer starts a bot off a raw
+            # `strategies` row itself; it is a thin paper-only entry point onto
+            # StrategyService.deploy_version (the same canonical deploy RT-02's own
+            # 30-test suite exercises in full: prerequisite gate, binding gates, quota,
+            # the deployment INSERT). Re-deriving all of that through raw `mock_sb`
+            # table-call mocks here would duplicate that coverage for no benefit to
+            # THIS test, whose actual subject is notification dispatch across the
+            # lifecycle. So the service call itself is mocked at its own boundary,
+            # the same way `mock_fleet`/`mock_ws` already stand in for their
+            # dependencies below.
             mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock(
                 data=[{"id": "strat_alpha_123", "name": "Alpha Trend Rider", "symbol": "BTC/USDT", "status": "stopped"}]
             ))
             mock_sb.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock(data=[{"status": "running"}]))
 
-            with patch("backend_app.routers.strategies.SubscriptionEngine.reserve_quota", return_value=(True, 1, 5)):
-                with patch("backend_app.routers.strategies.require_live_trading", return_value=True):
-                    res_deploy = client.post(
-                        "/api/strategies/strat_alpha_123/deploy",
-                        json={"symbol": "BTC/USDT"}
-                    )
-                    assert res_deploy.status_code == 200
+            with patch(
+                "backend_app.backend.strategy_service.StrategyService.get_strategy",
+                AsyncMock(return_value={
+                    "strategy": {"id": "strat_alpha_123", "status": "stopped"},
+                    "version": {"version": "1.0"},
+                }),
+            ), patch(
+                "backend_app.backend.strategy_service.StrategyService.deploy_version",
+                AsyncMock(return_value={
+                    "success": True,
+                    "message": "deployed",
+                    "deployment": {"id": "dep_alpha_123"},
+                    "binding": {"binding_stored": True},
+                }),
+            ):
+                res_deploy = client.post(
+                    "/api/strategies/strat_alpha_123/deploy",
+                    json={"symbol": "BTC/USDT"}
+                )
+                assert res_deploy.status_code == 200
 
             # 3. Strategy stop
             mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock(
@@ -734,3 +772,8 @@ async def test_strategy_lifecycle_generates_notifications():
         app.dependency_overrides.clear()
 
 
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

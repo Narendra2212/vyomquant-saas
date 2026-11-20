@@ -26,6 +26,7 @@ Watchdog Logic:
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -42,6 +43,93 @@ from backend_app.core.models.execution_record import (ExecutionRecordModel,
 # STEP 1: Connection layer imports for executor and credential management
 
 logger = logging.getLogger(__name__)
+
+#: W-2. Appended to an alert when the state change that alert describes could NOT be
+#: committed. Without it an operator reads "this order is now UNKNOWN" from an alert whose
+#: database write failed, and the row is still in its previous status -- the alert would be
+#: reporting a recovery that did not happen.
+_UNPERSISTED_SUFFIX = (
+    " WARNING: this status change could NOT be committed to the database, so the "
+    "execution row still carries its previous status. The row has not been recovered."
+)
+
+
+def _record_venue_fee(order: Any, status: Any) -> None:
+    """LIVE-FEE-01: write the venue's commission onto the execution's ``trade_result``.
+
+    An order the venue first ACCEPTED is filled here, and its ``trade_result`` still holds the
+    submission's placeholder (``fee: "0"``, no currency, ``fill_state: accepted``), which
+    Trade History cannot tell from a real zero. The fee the venue charged replaces it; with
+    none reported the placeholder is cleared to ``None`` so it never reads as free.
+    """
+    fee = getattr(status, "fee", None)
+    currency = getattr(status, "fee_currency", None)
+    result = dict(getattr(order, "result", None) or {})
+    trade = dict(result.get("trade_result") or {})
+    if fee is None and trade.get("fill_state") != "accepted" and trade.get("fee") not in (None, "0"):
+        return
+    trade["fee"] = fee
+    trade["fee_currency"] = currency
+    trade["fee_source"] = "venue" if fee is not None else None
+    trade["fill_state"] = "filled"
+    if status.avg_price is not None:
+        trade["executed_price"] = str(status.avg_price)
+    if status.filled_size is not None:
+        trade["size"] = str(status.filled_size)
+    result["trade_result"] = trade
+    order.result = result
+
+
+#: RECON-EQ-01: the local status each venue status means. A venue status absent here is
+#: compared as-is, so anything unexpected still surfaces as a discrepancy.
+_VENUE_STATUS_AS_LOCAL = {
+    "open": "executing",
+    "new": "executing",
+    "partially_filled": "executing",
+    "partial": "executing",
+    "filled": "completed",
+    "closed": "completed",
+    "completed": "completed",
+}
+
+
+def _qty(value: Any) -> Optional[Decimal]:
+    """A quantity as a number, or None when absent/unparseable (compared as such)."""
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def venue_identifier(order: Any) -> Optional[str]:
+    """The id the EXCHANGE knows this order by, from whichever column carries it.
+
+    RT-16 / TRADE-12. Every venue call in this file passed ``order.order_id``, and every
+    population query required ``order_id IS NOT NULL``. But TRADE-12 split the two
+    identifiers apart precisely because they are not the same thing:
+    ``execution_records.order_id`` carries ``FOREIGN KEY (order_id) REFERENCES orders(id)``
+    and holds THIS platform's order, while ``venue_order_id`` holds the exchange's and has
+    no foreign key. The live engine therefore writes the venue id to ``venue_order_id`` and
+    leaves ``order_id`` NULL.
+
+    The consequence was that **every row the live execution engine created was invisible to
+    this watchdog**, on both counts: the filter excluded it for a NULL ``order_id``, and
+    had it got through, the venue would have been asked about ``None``. That did not show
+    up while the engine marked everything ``COMPLETED`` on accept, because a completed row
+    is not in the population anyway. The moment accepted orders correctly stay
+    ``EXECUTING``, this is what decides whether they are ever reconciled or simply sit
+    there forever -- so it is part of the same fix, not a follow-up.
+
+    Prefers ``venue_order_id``; falls back to ``order_id`` for rows written by the older
+    recovery paths that still populate it.
+    """
+    for attr in ("venue_order_id", "order_id"):
+        value = getattr(order, attr, None)
+        if value:
+            return str(value)
+    return None
 
 
 @dataclass
@@ -109,6 +197,35 @@ def _position_lock_sql(dialect: str) -> str:
     )
 
 
+#: WATCH-01. The lease key for THIS subsystem, and its own rather than shared.
+#:
+#: `startup.sh:102` runs `gunicorn --workers ${WORKERS:-2}` and `main.py` constructs this
+#: watchdog and awaits `.start()` in the lifespan unconditionally, so before this every
+#: worker process ran both loops: each one querying the venue for the same open orders and
+#: each one able to adjudicate the same row.
+#:
+#: Distinct from `RECONCILIATION_LEADER_LOCK_KEY` and from `ReconciliationScheduler`'s for
+#: the reason `core.leader_lease` spells out: two different subsystems sharing one key
+#: would make whichever process won suppress the other entirely, which presents as "the
+#: loop is running" while half the work silently never happens. This watchdog talks to the
+#: venue about open orders; those two do different work.
+#:
+#: Both of THIS module's loops share this one key deliberately, which is the opposite
+#: case: they are one subsystem reading one population, they run in one process off one
+#: object, and they pass the same `instance_id` -- so the leader runs both and a
+#: non-leader runs neither. Giving them separate keys would let two different workers each
+#: run half the watchdog, which is the outcome the election exists to prevent.
+ORDER_WATCHDOG_LEADER_LOCK_KEY = "vyomquant:leader:order_watchdog"
+
+#: Lease duration. Must exceed the LONGER of the two loops' intervals, or the holder keeps
+#: losing a lease it is still actively using -- `core.leader_lease` says so in as many
+#: words. The monitoring loop's interval is `WatchdogConfig.check_interval_seconds` (30s by
+#: default) and the reconciliation loop's is 5-10s, so the figure is derived from the
+#: former with headroom for a cycle that runs long rather than hardcoded beside it.
+ORDER_WATCHDOG_LEADER_LOCK_TTL_FACTOR = 3
+ORDER_WATCHDOG_LEADER_LOCK_TTL_FLOOR_SECONDS = 90
+
+
 def _watchdog_session_dialect(db: Any) -> str:
     """The bound dialect's name, or ``"sqlite"`` when it cannot be determined.
 
@@ -141,11 +258,65 @@ class OrderWatchdog:
         self.config = config or WatchdogConfig()
         self._running = False
         self._watchdog_task: Optional[asyncio.Task] = None
-        
+
+        #: WATCH-01. One id per process, stable for its whole lifetime and distinct from
+        #: every other worker's -- the identity a renewable lease needs to tell "still me,
+        #: renew" apart from "someone else, back off". Same source and same reasoning as
+        #: `ExchangeReconciliationService._instance_id`.
+        self._instance_id = str(uuid.uuid4())
+
+        #: Derived, not hardcoded beside the interval it has to exceed. See the module
+        #: constants.
+        self._leader_lease_ttl_seconds = max(
+            ORDER_WATCHDOG_LEADER_LOCK_TTL_FLOOR_SECONDS,
+            self.config.check_interval_seconds * ORDER_WATCHDOG_LEADER_LOCK_TTL_FACTOR,
+        )
+
         # Metrics
         self.checks_run = 0
         self.orders_fixed = 0
         self.alerts_triggered = 0
+        #: Cycles skipped because another worker holds the lease. Counted separately from
+        #: `checks_run` so "this worker is idle because it is not the leader" is
+        #: distinguishable from "the loop is not running", which is the failure mode an
+        #: election introduces if it ever goes wrong.
+        self.cycles_skipped_not_leader = 0
+
+    # ── Leader election (WATCH-01) ──────────────────────────────────────────────
+
+    async def _try_become_leader(self) -> bool:
+        """``True`` iff THIS process may run a watchdog cycle right now.
+
+        `gunicorn` runs N workers and every one of them started this watchdog, so N
+        processes queried the venue for the same open orders each interval and each could
+        adjudicate the same row. `ExchangeReconciliationService` and
+        `ReconciliationScheduler` both already elect a leader through
+        `core.leader_lease.try_acquire_or_renew`; this loop had no election at all.
+
+        Delegates to that shared primitive rather than copying it, so the three cannot
+        drift. Fails CLOSED -- an unreachable Redis means no leadership and no cycle,
+        because assuming leadership on a failed check is exactly the N-workers behaviour
+        being removed.
+
+        WHY THIS IS NOT REDUNDANT WITH THE POSITION ROW LOCK. The thing standing between
+        two concurrent adjudications and a double-applied delta was the
+        `SELECT ... FOR UPDATE` in `_apply_status_update`. That statement is correct now
+        (see `_position_lock_sql` -- it used to name a `symbol` column `positions` does not
+        have, so PostgreSQL rejected it and the lock was never taken), and on the happy
+        path it does serialise and is held through `_update_position` to the commit. But
+        BOTH of its call sites still answer a failed lock by rolling the transaction back
+        and applying the delta ANYWAY -- "Continue with update even if lock fails
+        (non-blocking fallback)". So the lock is not an unconditional guarantee, and an
+        election that removes the concurrency is not a second belt on a working one.
+        """
+        from backend_app.core.leader_lease import try_acquire_or_renew
+
+        return await try_acquire_or_renew(
+            lock_key=ORDER_WATCHDOG_LEADER_LOCK_KEY,
+            instance_id=self._instance_id,
+            ttl_seconds=self._leader_lease_ttl_seconds,
+            subsystem="OrderWatchdog",
+        )
     
     async def start(self):
         """Start watchdog monitoring loop."""
@@ -183,9 +354,55 @@ class OrderWatchdog:
         
         while self._running:
             try:
+                # WATCH-01. Everything below adjudicates orders and queries the venue, so
+                # exactly one process may do it. Checked per cycle rather than once at
+                # start: a lease is renewable and transferable, so a worker that loses it
+                # must stop and a worker that gains it must start, without a restart.
+                #
+                # The guard is in the LOOP and not inside `_check_stale_orders` /
+                # `recover_unsubmitted_executions` / `recheck_unresolved_submissions`,
+                # deliberately. Those three stay directly callable -- their own tests drive
+                # them without a Redis, and a one-shot operator invocation should not have
+                # to win an election to do a single pass. Same placement
+                # `ExchangeReconciliationService` uses.
+                if not await self._try_become_leader():
+                    self.cycles_skipped_not_leader += 1
+                    await asyncio.sleep(self.config.check_interval_seconds)
+                    continue
+
                 await self._check_stale_orders()
+
+                # TRADE-07. The OTHER stale population: EXECUTING rows with NO venue
+                # order id, which `_check_stale_orders` filters out by design (it
+                # reconciles by venue order id, and there isn't one). Before this call
+                # nothing adjudicated them, so a crash during submission left a row
+                # EXECUTING forever -- and because `check_idempotent_execution` returns
+                # `skip_already_running` for EXECUTING with no age test, it also blocked
+                # that strategy/symbol/bucket permanently.
+                #
+                # Driven from the SAME loop rather than a new background task, so there is
+                # one schedule to reason about and no second lifecycle to start, stop and
+                # cancel. The cost is bounded: `classify_stale_executions` is one indexed
+                # query that returns nothing in the normal case, and it only considers
+                # rows older than `RECOVERY_STALE_AFTER_SECONDS` (900s) -- far longer than
+                # this loop's 30s interval, so the work is rare rather than per-tick.
+                await self.recover_unsubmitted_executions()
+
+                # DUP-01. The population `recover_unsubmitted_executions` could not
+                # close out: rows it already moved to UNKNOWN because the venue could
+                # not be asked at all, which `classify_stale_executions` cannot see a
+                # second time -- it only selects `EXECUTING` rows, and these left that
+                # status on their first pass. Without this call such a row sat UNKNOWN
+                # forever, silently, with no further attempt and no escalation beyond
+                # the one alert already raised. Same bounded-cost reasoning as above:
+                # `classify_unresolved_submissions` is one indexed query that returns
+                # nothing in the normal case, and it only considers rows whose
+                # `submitted_at` is older than `CONFIRMATION_LOST_AFTER_SECONDS` (24h).
+                await self.recheck_unresolved_submissions()
+
                 self.checks_run += 1
-                
+                self._end_cycle_transaction()
+
                 # Wait before next check
                 await asyncio.sleep(self.config.check_interval_seconds)
                 
@@ -198,7 +415,41 @@ class OrderWatchdog:
                 break
             except Exception as e:
                 logger.error(f"Watchdog error: {e}", exc_info=True)
+                self._reset_session_after_error()
                 await asyncio.sleep(5)  # Short wait on error
+
+    def _end_cycle_transaction(self) -> None:
+        """TXN-IDLE-01. Close the shared session's transaction at the end of every cycle.
+
+        Found in production 2026-11-19: a cycle that only READ never committed, so the one
+        session both loops share for the life of the process held a single transaction open
+        for hours ("idle in transaction", 2 h 27 m, re-reading execution_records each
+        second). It blocked ``ALTER TABLE execution_records`` (migration 079 queued behind
+        it and every later query on the table queued behind that) and pinned a snapshot that
+        stops autovacuum reclaiming the table. A commit here persists whatever the cycle
+        meant to keep (its writes commit on their own already) and lets the next cycle start
+        a fresh transaction. A failure is handled like a failed cycle.
+        """
+        try:
+            self.db.commit()
+        except Exception:  # noqa: BLE001
+            logger.warning("Watchdog: ending the cycle's transaction failed", exc_info=True)
+            self._reset_session_after_error()
+
+    def _reset_session_after_error(self) -> None:
+        """POS-TXN-01. Roll the long-lived session back after a cycle failed.
+
+        Both loops share ONE session for the life of the process. A cycle that failed
+        mid-transaction left it aborted, and nothing rolled it back, so every later cycle
+        raised ``PendingRollbackError`` from its first query: in production the watchdog
+        was dead from 15:35 to the next deploy, logging ~3,000 "Watchdog error" events and
+        adjudicating nothing. Rolling back discards only the failed cycle's unsaved
+        changes; the next cycle re-reads the rows and re-applies them from the venue.
+        """
+        try:
+            self.db.rollback()
+        except Exception:  # pragma: no cover - rollback of an already-dead connection
+            logger.warning("Watchdog session rollback after an error failed", exc_info=True)
     
     async def _reconciliation_loop(self):
         """
@@ -215,8 +466,19 @@ class OrderWatchdog:
         
         while self._running:
             try:
+                # WATCH-01. Its own check rather than inheriting the monitoring loop's:
+                # this runs as a SEPARATE task created at `_monitoring_loop`'s top, so a
+                # `continue` there does not pause this one. Same key and same
+                # `instance_id`, so the leader renews one lease from whichever loop ticks
+                # first and a non-leader skips both.
+                if not await self._try_become_leader():
+                    self.cycles_skipped_not_leader += 1
+                    await asyncio.sleep(self.config.check_interval_seconds)
+                    continue
+
                 await self._reconcile_open_orders()
-                
+                self._end_cycle_transaction()
+
                 # Wait 5-10 seconds before next reconciliation
                 # Randomize slightly to prevent thundering herd
                 wait_time = 5 + (hash(asyncio.get_event_loop().time()) % 5)
@@ -227,6 +489,7 @@ class OrderWatchdog:
                 break
             except Exception as e:
                 logger.error(f"STEP 9: Reconciliation loop error: {e}", exc_info=True)
+                self._reset_session_after_error()
                 await asyncio.sleep(5)  # Wait before retry
     
     async def _reconcile_open_orders(self):
@@ -253,9 +516,10 @@ class OrderWatchdog:
             
             for order in open_orders:
                 try:
-                    # Get executor for this order
+                    # RT-16: a real, per-tenant executor; see the invariant recorded at
+                    # _get_executor_for_order's definition.
                     executor = await self._get_executor_for_order(order)
-                    
+
                     if not executor:
                         logger.warning(
                             f"STEP 9: No executor for order {order.execution_id}, "
@@ -263,9 +527,13 @@ class OrderWatchdog:
                         )
                         continue
                     
-                    # Fetch latest status from exchange
+                    # Fetch latest status from exchange.
+                    # RT-16 / TRADE-12: ask about the id the VENUE assigned, which the
+                    # live engine stores in `venue_order_id`. This passed
+                    # `order.order_id` -- this platform's own id, NULL on every row the
+                    # engine created. See `venue_identifier`.
                     result = await executor.get_order_status(
-                        exchange_order_id=order.order_id,
+                        exchange_order_id=venue_identifier(order),
                         symbol=order.symbol
                     )
                     
@@ -290,7 +558,7 @@ class OrderWatchdog:
                         
                         # Update order from exchange status
                         await self._update_order_from_status(order, result)
-                        
+
                         # Trigger alert for fill
                         res_filled_dec = Decimal(result.filled_size or "0")
                         order_filled_dec = Decimal(order.filled_size or "0")
@@ -301,7 +569,14 @@ class OrderWatchdog:
                                 f"STEP 9: Order fill detected via reconciliation. "
                                 f"Filled {fill_amount} @ {result.avg_price}"
                             )
-                        
+
+                        # RT-16: this is the discrepancy ReconciliationScheduler exists to
+                        # escalate, and until now nothing ever wrote one for it to find.
+                        self._record_reconciliation_mismatch(
+                            order, order_status_val, res_status_val,
+                            order_filled_dec, res_filled_dec,
+                        )
+
                         discrepancy_count += 1
                     
                     reconciled_count += 1
@@ -320,7 +595,61 @@ class OrderWatchdog:
                 
         except Exception as e:
             logger.error(f"STEP 9: Reconciliation batch error: {e}", exc_info=True)
-    
+
+    def _record_reconciliation_mismatch(
+        self,
+        order: ExecutionRecordModel,
+        local_status: str,
+        exchange_status: str,
+        local_filled: Decimal,
+        exchange_filled: Decimal,
+    ) -> None:
+        """RT-16: feed ``ReconciliationScheduler`` the discrepancy it exists to escalate.
+
+        Until this call existed, ``core/models/reconciliation.py``'s
+        ``ReconciliationMismatchRepository.record_mismatch`` had no caller anywhere in the
+        application -- the scheduler was polling a table nothing ever wrote to. This is the
+        write side, placed at the one spot ``_reconcile_open_orders`` already proved a
+        genuine local/venue divergence (``_has_order_changed`` was true), not a guess at a
+        different one.
+
+        Severity MEDIUM ("status or fill-price divergence" -- this file's own taxonomy;
+        see ``core/models/reconciliation.MismatchSeverity``), never CRITICAL: CRITICAL is
+        the scheduler's own trigger for a global kill switch, and this function has no
+        basis to claim this is a SIZE or SYMBOL mismatch (CRITICAL's definition) -- only
+        that the venue's status or fill figure moved since the DB was last told. A failure
+        to record never blocks or alters reconciliation itself; this is additive visibility,
+        not a new control.
+        """
+        try:
+            from backend_app.core.models.reconciliation import (
+                MismatchSeverity, ReconciliationMismatchCreate,
+                ReconciliationMismatchRepository)
+
+            field = "filled_size" if local_filled != exchange_filled else "status"
+            repo = ReconciliationMismatchRepository(self.db)
+            repo.record_mismatch(ReconciliationMismatchCreate(
+                tenant_id=order.tenant_id,
+                execution_id=order.execution_id,
+                # RT-16: the venue's id is the useful one on a mismatch record -- it is
+                # what an operator needs to look the order up at the exchange, and it is
+                # the only one present on rows the live engine created.
+                order_id=venue_identifier(order),
+                symbol=order.symbol,
+                side=getattr(order, "side", None) or "unknown",
+                field=field,
+                local_value=f"status={local_status},filled={local_filled}",
+                exchange_value=f"status={exchange_status},filled={exchange_filled}",
+                severity=MismatchSeverity.MEDIUM,
+                raw_local_state={"status": local_status, "filled_size": str(local_filled)},
+                raw_exchange_state={"status": exchange_status, "filled_size": str(exchange_filled)},
+            ))
+        except Exception as exc:  # noqa: BLE001 - recording the mismatch must never break reconciliation
+            logger.error(
+                "STEP 9: could not record reconciliation mismatch for %s: %s",
+                order.execution_id, exc,
+            )
+
     def _find_open_orders(self) -> List[ExecutionRecordModel]:
         """
         STEP 9: Find all open orders that need reconciliation.
@@ -333,13 +662,29 @@ class OrderWatchdog:
         """
         open_statuses = [
             ExecutionStatus.PENDING,
-            ExecutionStatus.EXECUTING
+            ExecutionStatus.EXECUTING,
+            # UNKNOWN-VENUE-01: an UNKNOWN row that carries the venue's own order id is not
+            # unknowable -- the id names exactly one order, so asking the venue is safe. It
+            # used to be left to the 24 h DUP-01 recheck, and an UNKNOWN row freezes its
+            # symbol (RT-17), so one ambiguous submission stopped a live bot trading for a
+            # day. Found on the 2026-11-14 testnet run: two such rows (one already `closed`
+            # at the venue) refused every later order with "symbol frozen". UNKNOWN rows
+            # with NO venue id still go only through the recovery path.
+            ExecutionStatus.UNKNOWN,
         ]
         
         orders = self.db.query(ExecutionRecordModel).filter(
             and_(
                 ExecutionRecordModel.status.in_(open_statuses),
-                ExecutionRecordModel.order_id.isnot(None)  # Must have exchange order ID
+                # RT-16 / TRADE-12: either identifier qualifies. This required
+                # `order_id IS NOT NULL`, and the live engine writes the venue's id to
+                # `venue_order_id` while leaving `order_id` NULL -- so every row the
+                # engine created was excluded from this population. See
+                # `venue_identifier`.
+                or_(
+                    ExecutionRecordModel.venue_order_id.isnot(None),
+                    ExecutionRecordModel.order_id.isnot(None),
+                )
             )
         ).all()
         
@@ -351,20 +696,25 @@ class OrderWatchdog:
         
         Returns True if there are discrepancies between local state and exchange.
         """
-        # Check status change
+        # RECON-EQ-01: compare by MEANING, not spelling. The venue says `open`/`new`/
+        # `partially_filled` for an order this platform records as `EXECUTING`; a raw
+        # string compare made every resting limit order a "discrepancy" on every cycle,
+        # writing a reconciliation_mismatches row and alert each minute (production
+        # 2026-11-20: 21 rows in 21 minutes for one resting Testnet order).
         order_status_str = order.status.value if hasattr(order.status, 'value') else str(order.status)
         result_status_str = result.status.value if hasattr(result.status, 'value') else str(result.status)
-        if result_status_str.lower() != order_status_str.lower():
+        venue = str(result_status_str).lower()
+        local = str(order_status_str).lower()
+        equivalent = _VENUE_STATUS_AS_LOCAL.get(venue, venue)
+        if equivalent != local:
             return True
-        
-        # Check fill amount change
-        if str(result.filled_size) != str(order.filled_size):
+
+        # Quantities compared as numbers: "0" and "0.0" are the same fill.
+        if _qty(result.filled_size) != _qty(order.filled_size):
             return True
-        
-        # Check remaining amount change
-        if str(result.remaining_size) != str(order.remaining_size):
+        if _qty(result.remaining_size) != _qty(order.remaining_size):
             return True
-        
+
         return False
     
     async def _check_stale_orders(self):
@@ -383,6 +733,468 @@ class OrderWatchdog:
                 logger.error(
                     f"Failed to refresh order {order.execution_id}: {e}"
                 )
+
+    async def recover_unsubmitted_executions(self):
+        """Adjudicate EXECUTING rows that have NO venue order id.
+
+        TRADE-07. THE POPULATION THIS WATCHDOG COULD NOT SEE.
+        ----------------------------------------------------
+        `_find_stale_orders` and `_find_open_orders` both filter
+        `order_id IS NOT NULL`, and that filter is CORRECT for what they do -- they
+        reconcile by venue order id, and `get_order_status` has nothing else to look an
+        order up by. But `order_id` is written only at the COMPLETED transition
+        (`execution_engine.py`, after `create_order` has already returned), so a row
+        stranded by a crash during submission has `order_id IS NULL` and was invisible to
+        the one component that exists to rescue it. It then stayed EXECUTING forever, and
+        `check_idempotent_execution` returns `skip_already_running` for EXECUTING with no
+        age test -- so it also blocked that (tenant, strategy, symbol, bucket, side, qty,
+        price) permanently.
+
+        FOUR CASES, THREE OF WHICH ARE ACTED ON:
+
+        ``failed_before_submission`` -> FAILED.
+            `submitted_at IS NULL`, and `mark_submitted` commits BEFORE `create_order`,
+            so no venue order can exist. Safe.
+
+        ``ambiguous_submission`` -> ask the venue, then decide.
+            `submitted_at` set, `order_id` NULL: the order was sent and the response was
+            lost. Resolved by `find_order_by_client_order_id`, using the deterministic
+            `execution_id` the venue received as `clientOrderId`.
+              * venue has it, with a real id  -> COMPLETED with that id
+              * venue definitively does not   -> FAILED
+              * venue could not be asked      -> UNKNOWN + alert, left unresolved
+            **It is never resubmitted.** Nothing in this method places an order.
+
+        ``submitted_with_order_id`` -> left alone.
+            Already `_find_stale_orders`' population. Acting here too would mean two
+            paths moving one row.
+
+        WHY IT NEVER RESUBMITS, STATED PLAINLY. The ambiguous case is ambiguous about
+        whether real money is already committed. Resubmitting would double a position;
+        failing would orphan a live resting order and let the next signal duplicate it.
+        UNKNOWN is the only honest third option, and it is a real enum label the watchdog
+        already uses for exactly this purpose ("DO NOT ASSUME FILLED").
+        """
+        from backend_app.core.models.execution_record import (
+            ExecutionRecordRepository, ExecutionStatus)
+
+        repo = ExecutionRecordRepository(self.db)
+        try:
+            candidates = repo.classify_stale_executions()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("TRADE-07: could not classify stale executions: %s", exc)
+            return
+
+        actionable = [
+            c for c in candidates
+            if c["classification"] != repo.RECOVERY_SUBMITTED_WITH_ORDER_ID
+        ]
+        if not actionable:
+            return
+
+        logger.warning(
+            "TRADE-07: %d stale execution(s) with no venue order id require "
+            "adjudication.", len(actionable),
+        )
+
+        for row in actionable:
+            try:
+                if row["classification"] == repo.RECOVERY_FAILED_BEFORE_SUBMISSION:
+                    repo.resolve_stale_execution(
+                        row["execution_id"], row["tenant_id"],
+                        status=ExecutionStatus.FAILED,
+                        classification=row["classification"],
+                        detail=(
+                            f"no submission evidence after {row['age_seconds']:.0f}s; "
+                            f"the order never reached a venue"
+                        ),
+                    )
+                    continue
+
+                # Ambiguous: the venue may hold this order.
+                await self._adjudicate_ambiguous_execution(repo, row)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "TRADE-07: adjudication of %s failed (%s); the row stays EXECUTING "
+                    "and will be re-examined.", row["execution_id"], exc,
+                )
+
+    async def recheck_unresolved_submissions(self):
+        """Give a SECOND chance -- and only once, a defined terminal one -- to rows
+        `recover_unsubmitted_executions` already gave up on once.
+
+        DUP-01. THE POPULATION THAT WAS INVISIBLE TO EVERY LATER WATCHDOG CYCLE.
+        -------------------------------------------------------------------------
+        `_adjudicate_ambiguous_execution`'s "cannot ask" and "venue lookup failed"
+        branches move a row from `EXECUTING` to `UNKNOWN` when NOTHING was learned from
+        the venue. Once there, `classify_stale_executions` can never select it again --
+        its query is `WHERE status = 'EXECUTING'` -- so nothing in this module ever
+        looked at it a second time. For coinbase and kraken specifically, where
+        `clientOrderId` is not honoured at all (`exchange_executor.py`'s venue mapping),
+        a transient lookup failure and a structural inability to ever confirm the order
+        are indistinguishable from one attempt, so that one UNKNOWN write was frequently
+        this platform's LAST word on an execution that might still be live, or might
+        never have reached the venue at all -- with nothing to tell the two apart and
+        nothing scheduled to ever try again.
+
+        THIS METHOD IS THE RETRY LOOP THAT WAS MISSING, nothing else. It re-runs the
+        exact same venue lookup (`_adjudicate_ambiguous_execution`, with
+        `from_status=UNKNOWN` so a real answer can still persist) against
+        `classify_unresolved_submissions`' population -- `UNKNOWN`, no venue order id,
+        `submitted_at` older than `CONFIRMATION_LOST_AFTER_SECONDS`. Most of the time
+        this finds nothing (the query is empty) or gets the same "still cannot ask"
+        answer and, because enough time has NOW passed, that answer becomes the DUP-01
+        give-up transition to `FAILED`/`confirmation_lost` -- a defined terminal state
+        in place of a silence with no further action scheduled against it. If the venue
+        is reachable this time, the real answer (a fill, a `not_found`, a resting order)
+        is recorded instead, exactly as it would have been on the first attempt.
+
+        NEVER RESUBMITS, for the same reason `recover_unsubmitted_executions` never does:
+        `_adjudicate_ambiguous_execution` is the single adjudicator for this population
+        and it only ever reads the venue by `clientOrderId`, never places an order.
+        """
+        from backend_app.core.models.execution_record import (
+            ExecutionRecordRepository, ExecutionStatus)
+
+        repo = ExecutionRecordRepository(self.db)
+        try:
+            candidates = repo.classify_unresolved_submissions()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("DUP-01: could not classify unresolved submissions: %s", exc)
+            return
+
+        if not candidates:
+            return
+
+        logger.warning(
+            "DUP-01: %d unresolved submission(s) have exceeded the confirmation-lost "
+            "window; re-adjudicating before giving up on any of them.", len(candidates),
+        )
+
+        for row in candidates:
+            try:
+                await self._adjudicate_ambiguous_execution(
+                    repo, row, from_status=ExecutionStatus.UNKNOWN,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "DUP-01: re-adjudication of %s failed (%s); the row stays UNKNOWN "
+                    "and will be re-examined on a later pass.", row["execution_id"], exc,
+                )
+
+    async def _adjudicate_ambiguous_execution(
+        self, repo, row: dict, *, from_status: Any = None,
+    ):
+        """Resolve one `ambiguous_submission` row against the venue. Never resubmits.
+
+        DUP-01. `from_status` tells `repo.resolve_stale_execution` which population this
+        row came from -- `classify_stale_executions`' `EXECUTING` rows on a first attempt
+        (the default, unchanged), or `classify_unresolved_submissions`' `UNKNOWN` rows on
+        a renewed one, via `recheck_unresolved_submissions`. Every branch that gets a
+        venue ANSWER forwards it so it persists regardless of which population called
+        this; only the two branches below that get NO answer at all additionally weigh
+        `row["age_seconds"]` against `CONFIRMATION_LOST_AFTER_SECONDS` to decide between
+        staying `UNKNOWN` (there is still time to try again) and giving up
+        (`give_up_on_unresolved_submission`, which only ever transitions FROM `UNKNOWN`
+        and so is unaffected by `from_status`).
+        """
+        from backend_app.core.models.execution_record import (
+            CONFIRMATION_LOST_AFTER_SECONDS, ExecutionStatus)
+
+        if from_status is None:
+            from_status = ExecutionStatus.EXECUTING
+
+        execution_id = row["execution_id"]
+
+        class _Shim:
+            """`_get_executor_for_order` expects a record-like object."""
+            pass
+
+        shim = _Shim()
+        for attr in ("execution_id", "tenant_id", "symbol", "exchange_id", "order_id"):
+            setattr(shim, attr, row.get(attr))
+        shim.user_id = row.get("tenant_id")
+
+        executor = None
+        try:
+            # RT-16: a real, per-tenant executor built from this tenant's stored keys.
+            # Regression: tests/test_d5_watchdog_adjudication_repair.py,
+            # tests/test_rt16_watchdog_executor_is_real.py
+            executor = await self._get_executor_for_order(shim)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "TRADE-07: could not build an executor to adjudicate %s: %s",
+                execution_id, exc,
+            )
+
+        if executor is None or not hasattr(executor, "find_order_by_client_order_id"):
+            # Cannot ask at all. This is the genuinely-no-signal case: DUP-01's give-up
+            # path applies here once enough time has passed (see
+            # `_stay_unknown_or_give_up`); until then it is UNKNOWN, not FAILED, because
+            # credentials being unavailable right now is not evidence the order does not
+            # exist.
+            await self._stay_unknown_or_give_up(
+                repo, row, from_status=from_status,
+                unknown_detail=(
+                    "submitted but unacknowledged, and no venue connection was available "
+                    "to establish whether the order exists"
+                ),
+                unknown_alert=(
+                    "Order was SUBMITTED to the venue and never acknowledged, and the "
+                    "venue could not be queried. It may be resting or filled. Manual "
+                    "reconciliation required; the execution has been left UNKNOWN and "
+                    "was NOT resubmitted."
+                ),
+                give_up_detail=(
+                    "no venue connection was ever available to establish whether the "
+                    "order exists, across repeated attempts"
+                ),
+                give_up_alert=(
+                    "DUP-01: no venue connection could be established for this ambiguous "
+                    "submission across repeated attempts spanning the confirmation-lost "
+                    "window. Moved to FAILED/confirmation_lost. This is NOT a claim the "
+                    "order never reached the venue -- manual reconciliation is required "
+                    "before this symbol can trade again for this tenant."
+                ),
+            )
+            return
+
+        result = await executor.find_order_by_client_order_id(
+            execution_id, row.get("symbol") or ""
+        )
+
+        if not result.success:
+            # The venue genuinely could not be asked (unreachable, rate-limited,
+            # authentication failure, ...) -- as opposed to `not_found` below, which is
+            # the venue ANSWERING that it holds no such order. This is the other
+            # genuinely-no-signal case DUP-01's give-up path applies to.
+            await self._stay_unknown_or_give_up(
+                repo, row, from_status=from_status,
+                unknown_detail=f"venue lookup failed: {result.error_message}",
+                unknown_alert=(
+                    f"Order was SUBMITTED and never acknowledged, and the venue lookup "
+                    f"failed ({result.error_message}). Left UNKNOWN; NOT resubmitted."
+                ),
+                give_up_detail=(
+                    f"the venue lookup kept failing across repeated attempts spanning "
+                    f"the confirmation-lost window (most recent error: "
+                    f"{result.error_message})"
+                ),
+                give_up_alert=(
+                    f"DUP-01: the venue lookup for this ambiguous submission kept "
+                    f"failing across repeated attempts spanning the confirmation-lost "
+                    f"window (most recent error: {result.error_message}). Moved to "
+                    f"FAILED/confirmation_lost. This is NOT a claim the order never "
+                    f"reached the venue -- manual reconciliation is required before this "
+                    f"symbol can trade again for this tenant."
+                ),
+            )
+            return
+
+        if result.status == "not_found":
+            # A definite negative from the venue: it ANSWERED and has no such order. This
+            # is an actual signal, not an absence of one, so it is immediate and does not
+            # go through the age-gated give-up path above.
+            repo.resolve_stale_execution(
+                execution_id, row["tenant_id"],
+                status=ExecutionStatus.FAILED,
+                classification=row["classification"],
+                detail=(
+                    "the venue was queried by clientOrderId and has no such order, so "
+                    "the submission did not take effect"
+                ),
+                from_status=from_status,
+            )
+            return
+
+        venue_order_id = result.venue_order_id
+        if not venue_order_id:
+            # The venue knows something but gave us no id. Not enough to record a fill,
+            # and NOT eligible for the give-up path: a status without an id is partial
+            # POSITIVE evidence the order exists, which is the opposite of "no signal".
+            repo.resolve_stale_execution(
+                execution_id, row["tenant_id"],
+                status=ExecutionStatus.UNKNOWN,
+                classification=row["classification"],
+                detail=(
+                    f"the venue reported status {result.status!r} but returned no order "
+                    f"id, so a fill cannot be attributed"
+                ),
+                from_status=from_status,
+            )
+            await self._trigger_recovery_alert(
+                row,
+                f"Venue reports {result.status!r} for this clientOrderId but returned no "
+                f"order id. Left UNKNOWN; NOT resubmitted.",
+            )
+            return
+
+        if result.status in ("closed", "filled", "completed"):
+            repo.resolve_stale_execution(
+                execution_id, row["tenant_id"],
+                status=ExecutionStatus.COMPLETED,
+                classification=row["classification"],
+                detail=f"recovered from the venue by clientOrderId ({result.status})",
+                order_id=venue_order_id,
+                from_status=from_status,
+            )
+            logger.critical(
+                "TRADE-07: execution %s was FILLED at the venue and the platform did not "
+                "know. Recovered as order %s. Position accounting for this fill must be "
+                "reconciled.", execution_id, venue_order_id,
+            )
+            await self._trigger_recovery_alert(
+                row,
+                f"Order was filled at the venue ({venue_order_id}) while the platform "
+                f"had no record of it. The execution is now COMPLETED; position and PnL "
+                f"accounting for this fill require reconciliation.",
+            )
+            return
+
+        if result.status in ("canceled", "cancelled", "expired", "rejected"):
+            repo.resolve_stale_execution(
+                execution_id, row["tenant_id"],
+                status=ExecutionStatus.FAILED,
+                classification=row["classification"],
+                detail=f"the venue reports the order as {result.status}",
+                order_id=venue_order_id,
+                from_status=from_status,
+            )
+            return
+
+        # Still open at the venue. This is live exposure the platform had lost track of.
+        # The order id is now recorded, which moves the row into `_find_stale_orders`'
+        # population so the ordinary reconciliation loop takes it from here. NEVER
+        # eligible for the give-up path, however long this has been ambiguous: a resting
+        # order IS positive evidence of life, the opposite of "no signal".
+        repo.resolve_stale_execution(
+            execution_id, row["tenant_id"],
+            status=ExecutionStatus.UNKNOWN,
+            classification=row["classification"],
+            detail=(
+                f"the order is {result.status!r} at the venue; its id has been recorded "
+                f"so the ordinary reconciliation path can follow it"
+            ),
+            order_id=venue_order_id,
+            from_status=from_status,
+        )
+        await self._trigger_recovery_alert(
+            row,
+            f"Order is still {result.status!r} at the venue as {venue_order_id} and the "
+            f"platform had no record of it. This is live exposure. Its id is now "
+            f"recorded; it was NOT resubmitted and NOT cancelled.",
+        )
+
+    async def _stay_unknown_or_give_up(
+        self,
+        repo,
+        row: dict,
+        *,
+        from_status: Any,
+        unknown_detail: str,
+        unknown_alert: str,
+        give_up_detail: str,
+        give_up_alert: str,
+    ) -> None:
+        """DUP-01: the only two branches with genuinely NO signal from the venue.
+
+        Called exclusively from the "no executor" and "venue lookup failed" branches of
+        `_adjudicate_ambiguous_execution` -- the cases where nothing was learned, as
+        opposed to a partial or definite answer. Every other branch in that function
+        either got a real answer (`not_found`, a fill, a cancellation) or got a status
+        with no attributable id, which is partial POSITIVE evidence of life and must
+        never be treated as "no signal".
+
+        Stays `UNKNOWN` (the pre-DUP-01 behaviour, unchanged) on a row's FIRST
+        adjudication attempt (`from_status` is `EXECUTING`, i.e. this was reached from
+        `classify_stale_executions`) -- unconditionally, regardless of `age_seconds`.
+        That guard matters: `age_seconds` there is the row's age since `created_at`, and
+        a watchdog outage could let that exceed `CONFIRMATION_LOST_AFTER_SECONDS` before
+        this row was ever looked at even once. Giving up on a first look would skip the
+        state `give_up_on_unresolved_submission` requires (`UNKNOWN`) entirely and its
+        `WHERE` clause would then match nothing, silently leaving the row EXECUTING
+        forever -- worse than the defect this exists to fix. "Enough time has passed"
+        can only be measured from a row that has ALREADY been through at least one
+        exhausted lookup attempt.
+
+        Only once `from_status` is `UNKNOWN` (this was reached from
+        `classify_unresolved_submissions`, i.e. at least one prior attempt already
+        happened) does `row["age_seconds"]` -- there, time since `submitted_at`, spanning
+        every renewed attempt -- get weighed against `CONFIRMATION_LOST_AFTER_SECONDS`.
+        Under it, there is still a realistic chance a later renewed attempt resolves this
+        with an actual answer. Over it, gives up via `give_up_on_unresolved_submission` --
+        which transitions the row to `FAILED`/`confirmation_lost` only from `UNKNOWN` with
+        no venue order id, so it cannot clobber a row a concurrent worker just attached
+        positive evidence to.
+
+        If the give-up write itself did not apply (another worker already resolved the
+        row, or it raced ahead of this one), the row is left exactly as the give-up
+        method already decided -- re-asserting UNKNOWN here would just be a second,
+        redundant opinion on a row this function no longer owns.
+        """
+        from backend_app.core.models.execution_record import (
+            CONFIRMATION_LOST_AFTER_SECONDS, ExecutionStatus)
+
+        age_seconds = row.get("age_seconds") or 0
+        if (
+            from_status == ExecutionStatus.UNKNOWN
+            and age_seconds >= CONFIRMATION_LOST_AFTER_SECONDS
+            and hasattr(repo, "give_up_on_unresolved_submission")
+        ):
+            gave_up = repo.give_up_on_unresolved_submission(
+                row["execution_id"], row["tenant_id"], detail=give_up_detail,
+            )
+            if gave_up:
+                await self._trigger_recovery_alert(row, give_up_alert)
+                return
+            # The write did not apply (raced, or the row already moved). Leave it: a
+            # second UNKNOWN write below would not be re-asserting anything true about a
+            # row this attempt no longer has current information about.
+            return
+
+        repo.resolve_stale_execution(
+            row["execution_id"], row["tenant_id"],
+            status=ExecutionStatus.UNKNOWN,
+            classification=row["classification"],
+            detail=unknown_detail,
+            from_status=from_status,
+        )
+        await self._trigger_recovery_alert(row, unknown_alert)
+
+    async def _trigger_recovery_alert(self, row: dict, reason: str):
+        """Alert for an adjudicated stale execution.
+
+        Separate from `_trigger_alert`, which takes an ORM record; this path works from
+        the classification dict and must not require one.
+        """
+        self.alerts_triggered += 1
+        logger.critical(
+            "TRADE-07 RECOVERY ALERT: execution %s | symbol=%s | age=%.0fs | %s",
+            row.get("execution_id"), row.get("symbol"),
+            row.get("age_seconds") or 0, reason,
+        )
+        try:
+            from backend_app.backend.alert_system import get_alert_system
+
+            alert_system = get_alert_system()
+            await alert_system.send_critical_alert(
+                title="Stale Execution Requires Reconciliation",
+                message=f"Execution {row.get('execution_id')}: {reason}",
+                metadata={
+                    "execution_id": row.get("execution_id"),
+                    "symbol": row.get("symbol"),
+                    "side": row.get("side"),
+                    "size": row.get("size"),
+                    "classification": row.get("classification"),
+                    "submitted_at": (
+                        row["submitted_at"].isoformat()
+                        if row.get("submitted_at") else None
+                    ),
+                    "age_seconds": row.get("age_seconds"),
+                },
+            )
+        except Exception:  # noqa: BLE001 - alerting must never decide execution state
+            logger.warning("TRADE-07: recovery alert dispatch failed", exc_info=True)
     
     def _find_stale_orders(self) -> List[ExecutionRecordModel]:
         """
@@ -408,7 +1220,12 @@ class OrderWatchdog:
                     ExecutionRecordModel.last_exchange_sync < threshold,
                     ExecutionRecordModel.last_exchange_sync.is_(None)
                 ),
-                ExecutionRecordModel.order_id.isnot(None)  # Must have exchange order ID
+                # RT-16 / TRADE-12: either identifier qualifies -- see `venue_identifier`
+                # and the matching comment in `_find_open_orders`.
+                or_(
+                    ExecutionRecordModel.venue_order_id.isnot(None),
+                    ExecutionRecordModel.order_id.isnot(None),
+                )
             )
         ).all()
         
@@ -418,11 +1235,11 @@ class OrderWatchdog:
         """Fetch and update order status from exchange."""
         logger.info(
             f"Refreshing order: {order.execution_id} | "
-            f"exchange_order={order.order_id} | "
+            f"exchange_order={venue_identifier(order)} | "
             f"last_sync={order.last_exchange_sync}"
         )
         
-        # STEP 1: Get exchange executor for this order
+        # STEP 1: Get exchange executor for this order. RT-16: a real, per-tenant one.
         executor = await self._get_executor_for_order(order)
         
         # STEP 3: FAIL-SAFE - If no executor (credentials unavailable), mark as UNKNOWN
@@ -434,24 +1251,43 @@ class OrderWatchdog:
             
             # Mark order as UNKNOWN - DO NOT ASSUME FILLED
             order.status = ExecutionStatus.UNKNOWN
-            order.exchange_status_message = "Order status unknown - executor unavailable (credential/connection failure)"
+            # `exchange_status`, not `exchange_status_message`. The latter is NOT a column
+            # on ExecutionRecordModel -- the model declares `exchange_status` -- so this
+            # assignment created a transient attribute on the instance and was silently
+            # discarded at commit. Measured during the TRADE-07 work: the UNKNOWN status
+            # persisted, but the reason an operator needs in order to act on it never did.
+            order.exchange_status = "unknown: executor unavailable (credential/connection failure)"
             
-            # Persist the UNKNOWN status
-            await self._persist_order_update(order)
+            # Persist the UNKNOWN status.
+            #
+            # W-2. `_persist_order_update` had NO DEFINITION anywhere in the application,
+            # and both call sites awaited it, so each raised AttributeError into
+            # `_check_stale_orders`' handler. The two assignments above dirtied the ORM
+            # instance on this watchdog's long-lived session and whether they ever
+            # reached the database depended on an unrelated later commit.
+            #
+            # W-2b. The alert below read `order.user_id`, and `ExecutionRecordModel`
+            # declares no such column -- so once persistence was fixed this branch would
+            # have raised AttributeError inside the f-string instead. `tenant_id` is the
+            # column that exists, and it is the same substitution
+            # `_adjudicate_ambiguous_execution` already makes on its shim.
+            persisted = self._persist_order_update(order)
             
             # TRIGGER ALERT
             await self._trigger_alert(
                 order,
                 f"CRITICAL: Cannot reconcile order {order.execution_id} - no executor available. "
-                f"Verify exchange credentials for user {order.user_id}, exchange {order.exchange_id}."
+                f"Verify exchange credentials for tenant {order.tenant_id}, exchange {order.exchange_id}."
+                + ("" if persisted else _UNPERSISTED_SUFFIX)
             )
             return
         
         # Fetch status from exchange
         for attempt in range(self.config.max_retries):
             try:
+                # RT-16 / TRADE-12: the venue's own id -- see `venue_identifier`.
                 result: OrderStatusResult = await executor.get_order_status(
-                    exchange_order_id=order.order_id,
+                    exchange_order_id=venue_identifier(order),
                     symbol=order.symbol
                 )
                 
@@ -478,16 +1314,19 @@ class OrderWatchdog:
         
         # Mark order as UNKNOWN - DO NOT ASSUME FILLED
         order.status = ExecutionStatus.UNKNOWN
-        order.exchange_status_message = "Order status unknown - exchange communication failed"
+        # Same column correction as the no-executor branch above: the model declares
+        # `exchange_status`, so the `_message` variant never persisted.
+        order.exchange_status = "unknown: exchange communication failed after retries"
         
-        # Persist the UNKNOWN status to database
-        await self._persist_order_update(order)
+        # Persist the UNKNOWN status to database. W-2, as above.
+        persisted = self._persist_order_update(order)
         
         # STEP 3: TRIGGER ALERT - Critical failure requires human attention
         await self._trigger_alert(
             order,
             f"CRITICAL: Order status UNKNOWN after {self.config.max_retries} failed reconciliation attempts. "
             f"Order ID: {order.execution_id}. Manual intervention required."
+            + ("" if persisted else _UNPERSISTED_SUFFIX)
         )
         
         # Check if order is stuck for too long (additional alert)
@@ -526,6 +1365,15 @@ class OrderWatchdog:
             order.filled_size = status.filled_size
             order.remaining_size = "0"
             order.avg_price = status.avg_price or order.avg_price
+            # FILL-TS-01: a market order the venue first acknowledged as NEW reaches
+            # COMPLETED here, not at submission, and kept `exchange_status='NEW'` and no
+            # `filled_at` -- a filled trade with no fill time, which trade history and the
+            # portfolio's timestamps read. The venue's own status is recorded, and the fill
+            # time is the moment this reconciliation observed it (never earlier than true).
+            order.exchange_status = status.status
+            if getattr(order, "filled_at", None) is None:
+                order.filled_at = datetime.utcnow()
+            _record_venue_fee(order, status)
             
             logger.info(
                 f"Order marked FILLED by watchdog: {order.execution_id} | "
@@ -564,6 +1412,7 @@ class OrderWatchdog:
             order.filled_size = status.filled_size
             order.remaining_size = status.remaining_size
             order.avg_price = status.avg_price or order.avg_price
+            order.exchange_status = status.status  # FILL-TS-01
             
             logger.info(
                 f"Order partial fill updated: {order.execution_id} | "
@@ -591,6 +1440,16 @@ class OrderWatchdog:
                 
                 await self._update_position(order, fill_delta=fill_delta)
             
+        elif exchange_status in ["open", "new"] and order.status == ExecutionStatus.UNKNOWN:
+            # UNKNOWN-VENUE-01: the venue confirms the order exists and is resting. It is no
+            # longer unknown: it is an ordinary working order, followed from here on.
+            order.status = ExecutionStatus.EXECUTING
+            order.exchange_status = status.status
+            logger.warning(
+                f"Order {order.execution_id} was UNKNOWN; the venue reports it {exchange_status}. "
+                "Tracking it as EXECUTING."
+            )
+
         elif exchange_status in ["canceled", "cancelled", "expired"]:
             order.status = ExecutionStatus.FAILED
             
@@ -610,28 +1469,113 @@ class OrderWatchdog:
         
         self.db.commit()
     
-    async def _update_position(self, order: ExecutionRecordModel, fill_delta: Optional[Any] = None):
-        """Update position from order fill (idempotent with delta tracking)."""
+    def _persist_order_update(self, order: ExecutionRecordModel) -> bool:
+        """Commit status/reason changes already assigned to *order*. Returns success.
+
+        W-2. THIS METHOD DID NOT EXIST.
+        -------------------------------
+        `_refresh_order_status` called it twice -- on the "no executor" branch and on the
+        "all retries exhausted" branch -- and a repository-wide search for
+        `def _persist_order_update` returned ZERO definitions. `OrderWatchdog` has no base
+        class, so both calls raised `AttributeError`, which `_check_stale_orders` swallows
+        at its `except Exception` and logs as "Failed to refresh order".
+
+        What that cost: the two branches assign `order.status = UNKNOWN` and
+        `order.exchange_status = <reason>` immediately before calling this. Assigning an
+        ORM attribute is NOT a commit -- it dirties the instance on this watchdog's
+        long-lived session, and whether it ever reached the database depended on some
+        later unrelated `self.db.commit()` elsewhere in the class. The UNKNOWN fail-safe
+        the surrounding comments describe as "DO NOT ASSUME FILLED" was therefore not
+        durable, and the operator-facing reason was the part most likely to be lost.
+
+        NO NEW ABSTRACTION. `_update_order_from_status` in this same class already
+        persists by calling `self.db.commit()` on the session the watchdog was
+        constructed with, and `ExecutionRecordRepository` is not used by that path. This
+        method does exactly what that one does, so there is one persistence convention in
+        this class rather than two.
+
+        SYNCHRONOUS, and the call sites do not await it. `Session.commit()` is a blocking
+        call; declaring this `async` would have described work that does not exist and
+        would have re-created the shape of W-1 in a second place.
+
+        FAILURE IS RETURNED, NOT SWALLOWED. A failed commit leaves the transaction needing
+        a rollback on PostgreSQL -- without one, every later statement on this session
+        inherits the aborted transaction, which is how one failure becomes a dead
+        watchdog. The rollback is taken, the failure is logged `critical`, and `False` is
+        returned so the caller can say so in its alert (`_UNPERSISTED_SUFFIX`) instead of
+        announcing a recovery that did not happen. The row is left in its previous status,
+        which is the safe direction: it stays in the stale population and is re-examined.
+
+        Regression: tests/test_d5_watchdog_adjudication_repair.py
+        """
+        execution_id = getattr(order, "execution_id", "unknown")
         try:
+            self.db.commit()
+            return True
+        except Exception as exc:  # noqa: BLE001 - the caller must learn this failed
+            try:
+                self.db.rollback()
+            except Exception:  # pragma: no cover - rollback of an already-dead session
+                logger.warning(
+                    "W-2: rollback after a failed persist also failed for %s",
+                    execution_id, exc_info=True,
+                )
+            logger.critical(
+                "W-2: could not persist the status change for execution %s (%s: %s). "
+                "The row keeps its previous status and has NOT been recovered; it "
+                "remains in the stale population and will be re-examined.",
+                execution_id, exc.__class__.__name__, exc,
+            )
+            return False
+
+    async def _update_position(self, order: ExecutionRecordModel, fill_delta: Optional[Any] = None):
+        """Update position from order fill (idempotent with delta tracking).
+
+        POS-TXN-01. The position update runs inside a SAVEPOINT, and a failure rolls back
+        only that savepoint. Before this the exception was logged and swallowed with the
+        transaction still aborted, so the caller's ``self.db.commit()`` raised
+        ``PendingRollbackError``: the order's own COMPLETED status was never persisted, the
+        row stayed in the stale population, and the next cycle failed the same way. In
+        production (positions table missing ``position_id``) that was ~2,000 Sentry events
+        within hours and live orders that never left ``executing`` in the ledger.
+
+        ``begin_nested()`` flushes the order's pending status first, so rolling back the
+        savepoint cannot take the order's change with it. If the position path itself
+        committed (the repository commits by default) the savepoint is no longer active and
+        the order was committed with it; a later failure then needs a plain rollback.
+
+        Regression: tests/test_pos_txn01_position_failure_keeps_the_order_update.py
+        """
+        size_to_apply = str(fill_delta) if fill_delta is not None else order.filled_size
+        if not size_to_apply or Decimal(size_to_apply) <= 0:
+            return
+
+        savepoint = None
+        try:
+            savepoint = self.db.begin_nested()
             position_engine = get_position_engine(self.db)
-            
-            size_to_apply = str(fill_delta) if fill_delta is not None else order.filled_size
-            if not size_to_apply or Decimal(size_to_apply) <= 0:
-                return
-                
             position = await position_engine.update_position_from_fill(
                 execution_record=order,
                 fill_size=size_to_apply,
                 fill_price=order.avg_price
             )
-            
+            if savepoint.is_active:
+                savepoint.commit()
+
             if position:
                 logger.info(
                     f"Position updated by watchdog: {position.position_id} | delta={size_to_apply}"
                 )
-                
+
         except Exception as e:
             logger.error(f"Failed to update position from watchdog: {e}")
+            try:
+                if savepoint is not None and savepoint.is_active:
+                    savepoint.rollback()
+                else:
+                    self.db.rollback()
+            except Exception:  # pragma: no cover - rollback of an already-dead session
+                logger.warning("Position update rollback failed", exc_info=True)
     
     async def _trigger_alert(self, order: ExecutionRecordModel, reason: str):
         """Trigger alert for stuck order."""
@@ -664,25 +1608,45 @@ class OrderWatchdog:
         except Exception as e:
             logger.error(f"Failed to send alert: {e}")
     
-    def _get_executor_for_order(
+    async def _get_executor_for_order(
         self,
         order: ExecutionRecordModel
     ) -> Optional[Any]:
-        """Get exchange executor for this order based on exchange_id and tenant_id."""
+        """Get a real exchange executor for this order's tenant, via the account vault.
+
+        RT-16 / W-1b. THIS METHOD IS NOW ASYNC; EVERY CALL SITE MUST `await` IT.
+        --------------------------------------------------------------------------
+        Previously neither dependency this reached for existed (`app_state.exchange_router`
+        was never set anywhere in the application; `vault.get_exchange_client` was never a
+        method `APIKeyVault` defines) -- see W-1's own history, and git blame on this
+        docstring for the full account of why it was deliberately left synchronous and
+        returning ``None`` until an executor could legitimately be built.
+
+        That became possible once RT-21's `order_control._executor_for` existed: a real,
+        per-tenant executor built from the SAME decrypted keys the manual cancel path uses
+        (`APIKeyVault.load_decrypted_keys` -> `get_exchange_executor` -> `.connect()`).
+        Reused here rather than re-implemented, so there is exactly one place that builds an
+        executor from a tenant's stored keys, not two that could drift.
+
+        Still returns ``None`` -- not an exception -- for every unreachable case the callers
+        already treat as "cannot ask" (no stored keys for this tenant+exchange, vault
+        unavailable, connect failure), which is the existing fail-safe behaviour at all
+        three call sites: no executor means UNKNOWN, with an alert, never a resubmission.
+
+        Regression: tests/test_d5_watchdog_adjudication_repair.py,
+        tests/test_rt16_watchdog_executor_is_real.py
+        """
         try:
             exchange_id = getattr(order, "exchange_id", None) or "binance"
+            tenant_id = getattr(order, "tenant_id", None)
+            if not tenant_id:
+                return None
             from backend_app.core.state import app_state
-            if hasattr(app_state, "exchange_router") and app_state.exchange_router:
-                return app_state.exchange_router.get_executor(
-                    tenant_id=str(order.tenant_id),
-                    exchange_id=exchange_id
-                )
-            elif hasattr(app_state, "vault") and app_state.vault:
-                return app_state.vault.get_exchange_client(
-                    user_id=str(order.tenant_id),
-                    exchange=exchange_id
-                )
-            return None
+            vault = getattr(app_state, "vault", None)
+            if vault is None:
+                return None
+            from backend_app.backend.order_control import _executor_for
+            return await _executor_for(str(tenant_id), str(exchange_id), vault)
         except Exception as e:
             logger.warning(f"Could not route executor for order {getattr(order, 'execution_id', 'unknown')}: {e}")
             return None

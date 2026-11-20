@@ -5,6 +5,12 @@ on:
   pull_request:
     branches: [main, master]
     types: [opened, synchronize, reopened]
+  # CI-01: ALSO run on the commit that lands on main. 03 Deploy refuses a commit that has no
+  # passing "01 PR Check" run (scripts/require_tests_passed.py); a squash/merge commit has a
+  # new SHA that no pull_request run ever saw, so without this trigger every deploy would be
+  # refused for lack of a run - and a deploy without one would be ungated.
+  push:
+    branches: [main, master]
 
 env:
   PYTHON_VERSION: '3.11'
@@ -62,10 +68,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -97,10 +103,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -145,10 +151,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -267,10 +273,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -388,10 +394,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -406,6 +412,29 @@ jobs:
           pip install -r requirements-cpu.txt
           pip install -r requirements-dev.txt
           pip install pytest pytest-asyncio
+
+      # `auth.users`/`auth.uid()` are Supabase platform tables this job's bare
+      # postgres:17-alpine container does not have. None of this repo's alembic
+      # revisions create them -- in real Supabase they already exist -- but
+      # `tests/test_atomic_order_cancellation_fix.py`'s `_seeded_tenant` fixture (and
+      # `profiles`'s own FK to `auth.users`) needs them before any INSERT.
+      #
+      # `--also-step0` is the second half of that same fixture: it also inserts into
+      # `public.profiles`, which -- like `auth.users` -- predates this repository's
+      # alembic history in real production and so is declared (not created by any
+      # revision) in `020_declare_pre_existing_tables.sql`. Confirmed via a real CI run
+      # (job 117474514312) that --only-substrate alone was not enough: the fixture's
+      # first INSERT (auth.users) succeeded but its second (profiles) failed with
+      # `relation "public.profiles" does not exist`, the next layer of the same gap.
+      #
+      # Using `--only-substrate --also-step0` here (rather than the Provisioning job's
+      # full `--create-substrate` run) creates exactly these two things and nothing
+      # else -- it does not touch this job's own target revision below, which
+      # deliberately stops at the branchpoint rather than going to head.
+      - name: Create auth substrate + declare pre-existing tables (auth.users, profiles)
+        run: |
+          python scripts/provision_database.py \
+            --dsn "$DATABASE_URL" --apply --create-substrate --also-step0 --only-substrate
 
       # `backend_app/alembic/env.py` reads DATABASE_URL from the environment and feeds it
       # to `sqlalchemy.url`, so no ini edit is needed. Stops at the branchpoint -- see the
@@ -492,6 +521,281 @@ jobs:
                  -v --tb=short \
                  --deselect tests/test_atomic_order_cancellation_fix.py::test_transaction_isolation_for_cancellation
 
+  # ───────────────────────────────────────────────────────────────────────────────
+  # WHY THIS JOB EXISTS, AND WHY IT IS SEPARATE FROM `database-tests`
+  #
+  # `database-tests` above runs `alembic upgrade d97ffff9c3bb` -- the branchpoint, not
+  # head -- against a bare `postgres:17-alpine`, and the long comment above it explains
+  # why a from-scratch provision was out of scope at the time: 020's SECTION 0 preflight
+  # RAISE EXCEPTIONs on a database with no `authenticated`/`service_role` roles and no
+  # `auth.uid()`, which vanilla PostgreSQL has none of. That obstacle is now gone.
+  # `scripts/provision_database.py --create-substrate` creates exactly that shim, and the
+  # full order it uses is documented in DATABASE_PROVISIONING_RUNBOOK.md.
+  #
+  # It is a separate job rather than extra steps in `database-tests` so that a failure
+  # here cannot be confused with a failure of the four database-backed test files, which
+  # are a different claim about a different thing.
+  #
+  # WHAT IT GATES. Three things that were verified by hand and by nothing automatic:
+  #   1. the migration set still applies to an EMPTY database, in one command;
+  #   2. the three `RAISE EXCEPTION` backstops in
+  #      `migrations/hardening/999_privilege_hardening.sql` -- which abort on a
+  #      per-customer table readable by `anon`, on a browser role holding TRUNCATE, and
+  #      on a policy predicate that is the constant TRUE;
+  #   3. the resulting schema matches `staging/provisioning_snapshot.json`, the committed
+  #      baseline. Drift means either a missing migration or a stale baseline, and those
+  #      have opposite fixes -- which is why a human should see it before merge.
+  # Then every behavioural probe, including the two cross-tenant read sweeps that seed a
+  # row owned by one customer and try to read it as another.
+  #
+  # WHAT HAS AND HAS NOT BEEN VERIFIED, stated because the comment above this one
+  # rightly objects to unverified structural claims about jobs that have never run.
+  # VERIFIED locally, repeatedly: the whole sequence against a vanilla PostgreSQL with
+  # no Supabase substrate, which is the same starting condition as this container --
+  # `staging/reprovision.py` passes `--create-substrate` and that is the only path used.
+  # NOT VERIFIED: the PostgreSQL major version. Local runs are 16.2, from the `pgserver`
+  # wheel; this container is 17 to match production's reported `server_version 17.6`.
+  # The first run of this job on a pull request is what closes that gap. It is wired in
+  # this state deliberately -- a provisioner verified by hand that nothing ever runs is
+  # documentation, not a control.
+  # ───────────────────────────────────────────────────────────────────────────────
+  provisioning-and-isolation:
+    name: Provisioning, Privilege Hardening & Tenant Isolation
+    runs-on: ubuntu-latest
+    needs: static-audit
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # `DATABASE_URL` is read by `backend_app/alembic/env.py`; `AERORA_TEST_DATABASE_URL`
+      # is what `tests/conftest.py` requires before it will let a DATABASE_URL survive
+      # into the test process. Both are needed, for the reasons spelled out in the
+      # `database-tests` env block above.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      AERORA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      PROVISION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      ENV: test
+      VYOMQUANT_MODE: safe
+      PYTHONPATH: .
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements-cpu.txt
+            requirements-base.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+          pip install -r requirements-dev.txt
+          pip install pytest pytest-asyncio psycopg2-binary
+
+      # `--dry-run` is the provisioner's default, so `--apply` is required. The DSN is
+      # localhost, so the non-localhost refusal does not trigger and
+      # `--i-understand-this-is-remote` is deliberately NOT passed: if this URL ever
+      # stops being loopback, this step must fail rather than proceed.
+      - name: Provision the full schema from repository source
+        run: |
+          python scripts/provision_database.py \
+            --dsn "$PROVISION_DATABASE_URL" --apply --create-substrate
+
+      # Re-running must be safe AND must not re-grant anything. This is the regression
+      # guard for the defect where a `GRANT ALL ON ALL TABLES` in the substrate re-granted
+      # 787 privilege rows on the second run while the migrations' own REVOKEs were
+      # correctly skipped -- leaving run 2 less secure than run 1, silently.
+      - name: Provision again -- idempotency, including the privilege direction
+        run: |
+          python scripts/provision_database.py \
+            --dsn "$PROVISION_DATABASE_URL" --apply --create-substrate
+
+      - name: Fail on schema drift from the committed baseline
+        run: python scripts/verify_schema_drift.py --dsn "$PROVISION_DATABASE_URL"
+
+      # `if: always()` so this still runs when the step above FAILED, which is the only
+      # time it is wanted. The database here was just provisioned from repository source
+      # twice over, so its shape is by definition what the repository produces -- the one
+      # kind of database allowed to define the baseline. No local PostgreSQL is needed to
+      # refresh a stale baseline any more: download this artifact, diff it against
+      # staging/provisioning_snapshot.json, and commit it if the delta is accounted for by
+      # the migrations added since.
+      #
+      # Deliberately an ARTIFACT and not a commit. A stale baseline and a missing
+      # migration produce an identical report with opposite fixes, so a job that
+      # auto-refreshed the baseline would silently convert every missing migration into a
+      # new expectation -- it would answer the question this check exists to ask.
+      - name: Upload a refreshed baseline candidate for comparison
+        if: always()
+        run: |
+          python scripts/verify_schema_drift.py \
+            --dsn "$PROVISION_DATABASE_URL" \
+            --write-baseline reports/provisioning_snapshot.candidate.json
+
+      - name: Attach the baseline candidate
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: provisioning-snapshot-candidate
+          path: reports/provisioning_snapshot.candidate.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Run every database security and integrity probe
+        run: python staging/run_all_probes.py
+
+      # DB-04: scripts/post_migration_validation.py existed, was tested, and was
+      # correct, but nothing in CI ever actually called it -- its catalog-driven
+      # privilege-hardening check (broader than 999_privilege_hardening.sql's own
+      # narrower, already-wired backstop above) was written and inert. Wired in here,
+      # against the same fully-provisioned real Postgres this job already set up; the
+      # script also re-checks table/column/RPC existence and re-exports schema
+      # metadata, none of which this session found reason to doubt when run manually
+      # against a real replica with the same provisioning this job performs.
+      - name: Run the catalog-driven privilege-hardening and schema validation script
+        run: |
+          mkdir -p reports
+          python scripts/post_migration_validation.py
+
+      - name: Run the PostgreSQL-only test lane
+        run: |
+          pytest tests/test_tenant_isolation_rls_postgres.py \
+                 tests/test_cross_tenant_read_sweep_postgres.py \
+                 tests/test_billing_data_isolation_postgres.py \
+                 tests/test_tenant_referential_integrity_postgres.py \
+                 tests/test_pgcrypto_preflight_postgres.py \
+                 tests/test_signup_integration_postgres.py \
+                 tests/test_position_lifecycle_postgres.py \
+                 tests/test_referral_money_lifecycle_postgres.py \
+                 tests/test_orm_models_match_provisioned_schema.py \
+                 tests/test_bug049_identity_types_postgres.py \
+                 tests/test_schema_drift_checker_is_read_only_postgres.py \
+                 tests/test_production_security_probe_rolls_back_postgres.py \
+                 tests/test_pos_txn01_position_failure_keeps_the_order_update.py \
+                 -v --tb=short
+
+      # WHY THIS STEP EXISTS.
+      #
+      # Both PostgreSQL jobs in this workflow name their files EXPLICITLY -- neither runs
+      # `pytest tests/`. So a test file that gates itself on AERORA_TEST_DATABASE_URL and
+      # is not named in one of those lists runs against a real server NOWHERE, and nothing
+      # reports it:
+      #
+      #   * the `unit-tests` lane deliberately has no DATABASE_URL (see its own comment),
+      #     so each such test SKIPS there -- and a skip is not a failure, so it is invisible
+      #     in a green run; and
+      #   * neither PostgreSQL lane lists the file, so the gate never opens.
+      #
+      # Measured against the real CI log for run 39695784610 (HEAD dfd9ca24, all 8 jobs
+      # green): 49 test files gate on that variable, the two lanes above between them ran
+      # 11 of them, and the remaining 35 contributed 432 SKIPPED results to that run's
+      # "790 skipped" and not one assertion against PostgreSQL.
+      #
+      # Those 35 files are not peripheral. They include the regression test for SEC-07
+      # (a P0: any signed-in user could grant themselves a paid plan and raise their own
+      # limits), the cross-tenant isolation matrix, fee_records RLS, the paper-trading
+      # ledger and fill-atomicity suites, concurrent-exposure and stale-execution recovery,
+      # referral-commission idempotence and single-currency enforcement, and WORK-03's
+      # cross-process single-owner bot lock. Every one of those is an RLS, privilege,
+      # trigger, constraint or transaction-isolation guarantee that SQLite cannot express,
+      # which is exactly why each file gates itself instead of asserting something weaker.
+      #
+      # This step runs them here, in the job that has already provisioned the full schema
+      # from repository source (twice, for idempotency) and therefore has the anon /
+      # authenticated / service_role substrate they need, rather than in the lighter
+      # `database-tests` job which only alembic-upgrades to a pinned revision.
+      #
+      # It is deliberately a SEPARATE step from the lane above so that a failure here is
+      # attributable on sight, and deliberately has no `continue-on-error`: these
+      # assertions have never run against a real server, so whatever they find is new
+      # information and must be allowed to red the pipeline rather than be absorbed.
+      #
+      # tests/test_every_postgres_gated_file_runs_in_a_postgres_lane.py parses this file
+      # and fails if a newly added PostgreSQL-gated test file is missing from these lists,
+      # so this gap cannot silently reopen.
+      - name: Run every remaining PostgreSQL-gated test file
+        run: |
+          pytest tests/test_aud01_signal_audit_log.py \
+                 tests/test_aud02_order_audit_trail_is_durable.py \
+                 tests/test_bill01_razorpay_plans_expire.py \
+                 tests/test_bill07_billing_invoices_postgres.py \
+                 tests/test_bug056_library_subscriptions_updated_at_postgres.py \
+                 tests/test_bug057_listing_moderation_authz_postgres.py \
+                 tests/test_d5_watchdog_adjudication_repair.py \
+                 tests/test_db03_privilege_hardening_detects_untracked_tables_postgres.py \
+                 tests/test_deploy03_hardening_is_live_applicable.py \
+                 tests/test_dup01_confirmation_lost_postgres.py \
+                 tests/test_fee01_tenant_is_validated_not_sentinel_postgres.py \
+                 tests/test_fee_third_asset_pct_is_nullable_postgres.py \
+                 tests/test_json_extract_dialect_portability.py \
+                 tests/test_kill03_authoritative_global_halt.py \
+                 tests/test_lib01_clone_strategy_postgres.py \
+                 tests/test_mkt01_entitlement_tables_postgres.py \
+                 tests/test_mkt06_creator_payout_atomic_postgres.py \
+                 tests/test_mkt07_listing_eligibility_gates.py \
+                 tests/test_money01_referral_commission_idempotence_postgres.py \
+                 tests/test_money04_referral_ledger_is_single_currency_postgres.py \
+                 tests/test_money06_referral_obligations_postgres.py \
+                 tests/test_notif01_durable_dedupe_postgres.py \
+                 tests/test_notif02_mandatory_alert_floor.py \
+                 tests/test_p10d_fee_summary_does_not_mix_denominations_postgres.py \
+                 tests/test_p10d_referral_settlement_lifecycle_postgres.py \
+                 tests/test_p10j_probe_pg_ready_uses_shared_classification.py \
+                 tests/test_paper01_botrunner_fills_reach_the_ledger_postgres.py \
+                 tests/test_paper02_unfunded_order_state_postgres.py \
+                 tests/test_paper03_write_service_role_only_postgres.py \
+                 tests/test_paper05_apply_fill_atomic_postgres.py \
+                 tests/test_paper05_lane_preserves_the_paper_schema_postgres.py \
+                 tests/test_ref01_payout_atomic_postgres.py \
+                 tests/test_mkt06_creator_payout_atomic_postgres.py \
+                 tests/test_referral_payout_schema_contract_postgres.py \
+                 tests/test_sec07_profiles_platform_columns_postgres.py \
+                 tests/test_sec09_marketplace_evidence_service_role_only_postgres.py \
+                 tests/test_sec_def01_definer_functions_check_the_caller_postgres.py \
+                 tests/test_sec16_strategy_deployments_guard_postgres.py \
+                 tests/test_sup02_support_columns_postgres.py \
+                 tests/test_dbalm02_identity_coverage_postgres.py \
+                 tests/test_tenant01_cross_tenant_matrix_postgres.py \
+                 tests/test_tenant01_restricted_payment_methods_role_postgres.py \
+                 tests/test_tenant02_fee_records_rls_postgres.py \
+                 tests/test_tenant_db_context_postgres.py \
+                 tests/test_trade01_concurrent_exposure_postgres.py \
+                 tests/test_trade07_stale_execution_recovery_postgres.py \
+                 tests/test_work03_bot_ownership_claims_postgres.py \
+                 -v --tb=short
+
+      # The two gates that must pass before either production verifier is pointed at a
+      # live database. They need no server of their own -- they parse the scripts -- so
+      # they run here as well as in the lane above, where a missing PostgreSQL would
+      # skip them and the structural guarantees would go unchecked.
+      - name: Prove the production verifiers are safe to run against production
+        run: |
+          pytest tests/test_bug049_sql_and_alembic_agree.py \
+                 tests/test_production_security_probe_rolls_back_postgres.py \
+                 -v --tb=short \
+                 -k "source or autocommit or finally or pooler or agree or decision or cascade or convention or backstop or explicit_step or missing"
+
   docker-check:
     name: Docker Build Validation
     runs-on: ubuntu-latest
@@ -499,7 +803,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free Disk Space on GitHub Runner
         run: |
@@ -510,7 +814,7 @@ jobs:
           sudo docker image prune --all --force || true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -540,7 +844,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the base commit of the pull request is available to diff against.
           fetch-depth: 0
@@ -557,8 +861,13 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- \
-            'algo22-terminal' '.github/workflows/01-pr-check.yml')
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # CI-01: no base/head pair on a push; the commit being deployed is always tested.
+            CHANGED="push-to-default-branch"
+          else
+            CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- \
+              'algo22-terminal' '.github/workflows/01-pr-check.yml')
+          fi
           if [ -n "$CHANGED" ]; then
             echo "Frontend-relevant changes detected:"
             echo "$CHANGED"
@@ -570,7 +879,7 @@ jobs:
 
       - name: Set up Node.js
         if: steps.changes.outputs.frontend == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -638,7 +947,7 @@ jobs:
       # `asyncio`, `os`, `pytest` and `warnings`. Nothing here needs the backend dependency set.
       - name: Set up Python for the bundle secret sweep
         if: steps.changes.outputs.frontend == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 

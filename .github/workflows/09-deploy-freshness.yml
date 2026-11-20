@@ -1,0 +1,133 @@
+# 09-deploy-freshness.yml — is what is deployed what `main` says should be deployed?
+#
+# WHY THIS WORKFLOW EXISTS
+#
+# On 2026-11-17 the backend went stale at `b44628cd` and stayed there for a day while
+# `main` moved 13 commits ahead — including #309, after which support tickets were being
+# silently discarded in production. Nothing reported it.
+#
+# The deploy was not failing. It was REFUSING, correctly: `01 PR Check` went red on
+# `main` (#309 merged without re-recording `surface_support.json`), and `03 Deploy`'s
+# pre-deployment gate declines a commit whose test workflow did not pass —
+# `REFUSING: 01 PR Check concluded 'failure' for 00d7e3fc`. A gate working as designed
+# emits no alert. The only reason anyone found out is that someone went looking.
+#
+# `06 Frontend Deploy` carries the same gate and is additionally `paths`-filtered, so its
+# version of that outage is quieter still: no run, no red X, nothing to notice.
+#
+# Every existing check asks "did this deploy succeed?". None asked "is production
+# currently running what it should be?". That is the gap, and it is the one that cost a
+# day. This workflow asks it on a schedule, from outside, against the running system.
+#
+# WHY IT IS ITS OWN WORKFLOW AND NOT A STEP IN `04 Nightly Audit`
+# `04` runs every step with `continue-on-error: true` — it is informational by
+# construction, so a failure there is not a signal. "09 Deploy Freshness is red" has
+# exactly one meaning, which is the property worth having.
+
+name: 09 Deploy Freshness
+
+on:
+  schedule:
+    # Hourly. The outage lasted a day; an hour of detection latency turns that into a
+    # bounded annoyance. Cheap enough to run often (two HTTP GETs and some git), and
+    # deliberately NOT every few minutes, because a check people learn to ignore is
+    # worse than no check.
+    - cron: '17 * * * *'
+
+  # After either deploy pipeline finishes, confirm the thing actually landed rather than
+  # trusting that a green deploy means a new artifact is live. The grace window below
+  # absorbs the case where the *other* tier is still mid-rollout.
+  workflow_run:
+    workflows: ['03 Deploy', '06 Frontend Deploy']
+    types: [completed]
+
+  workflow_dispatch:
+    inputs:
+      grace_minutes:
+        description: 'A gap younger than this is reported as in-flight, not stale.'
+        type: string
+        default: '45'
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: Compare deployed artifacts against main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # FULL history, deliberately. The frontend's expected commit is
+          # `git log -1 -- algo22-terminal/ ...`, and the default shallow clone
+          # (depth 1) cannot answer that: it would report main head for every path and
+          # the frontend check would then be comparing against the wrong commit — which
+          # is the precise bug this workflow exists to detect, reintroduced inside the
+          # detector. `git rev-list --count` and `merge-base --is-ancestor` need it too.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+
+      # No pip install: the script uses only the standard library, on purpose. A
+      # freshness alarm that depends on a dependency resolver can fail for reasons that
+      # have nothing to do with freshness, and an alarm with false positives is an alarm
+      # that gets muted.
+      - name: Check deployed versions against main
+        id: freshness
+        env:
+          GRACE: ${{ inputs.grace_minutes || '45' }}
+        run: |
+          set +e
+          python scripts/check_deploy_freshness.py \
+            --ref HEAD \
+            --grace-minutes "$GRACE" \
+            | tee freshness.txt
+          # `--ref HEAD`, not `origin/main`: this job checks out the default branch, so
+          # HEAD *is* main's head, and it resolves without depending on how
+          # actions/checkout happens to arrange remote-tracking refs.
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Summarise
+        run: |
+          {
+            echo '### Deploy freshness'
+            echo
+            echo '```'
+            cat freshness.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The two non-zero outcomes are treated DIFFERENTLY, because conflating them is
+      # how the original outage hid: "I could not tell" must never read as "it is fine",
+      # but it must also not be the same alarm as "it is definitely stale".
+      #
+      #   1 = measured stale            -> FAIL. This is the signal.
+      #   2 = could not determine       -> WARN. A single unreachable release endpoint is
+      #                                   usually a network blip, and failing on it would
+      #                                   train people to ignore this workflow. It is
+      #                                   surfaced as a warning annotation and in the run
+      #                                   summary; a persistent one shows up as a run of
+      #                                   consecutive warnings.
+      - name: Report
+        env:
+          STATUS: ${{ steps.freshness.outputs.status }}
+        run: |
+          case "$STATUS" in
+            0)
+              echo "Both tiers are serving the commit main says they should."
+              ;;
+            2)
+              echo "::warning title=Deploy freshness undetermined::Could not read a release endpoint. This is NOT a pass -- see the run summary. Repeated warnings here mean the check itself is broken or production is unreachable."
+              ;;
+            *)
+              echo "::error title=Production is stale::A deployed tier is not running what main says it should. Check whether a deploy is REFUSING rather than failing: '01 PR Check' red on main makes both pipelines decline to ship, and 06 Frontend Deploy may not even produce a run to notice."
+              cat freshness.txt
+              exit 1
+              ;;
+          esac

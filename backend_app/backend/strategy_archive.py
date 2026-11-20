@@ -86,6 +86,8 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from backend_app.backend.deployment_binding import DeployRejected
 from backend_app.backend.strategy_lifecycle import (
+    BINDING_DEPLOYING,
+    BINDING_RUNNING,
     STOPPABLE_BINDING_STATES,
     binding_report,
     binding_state,
@@ -420,6 +422,11 @@ async def load_owned_strategy(
     return rows[0] if rows else None
 
 
+#: ARCH-01: the legacy ``strategies.status`` spellings that mean a bot is TRADING. PAUSED is
+#: not one: pausing stops every deployment before the flag is written.
+LEGACY_TRADING_STATES: Tuple[str, ...] = (BINDING_DEPLOYING, BINDING_RUNNING)
+
+
 async def load_blocking_deployments(
     sb: Any, *, user_id: str, strategy_id: str, strategy_row: Optional[Mapping[str, Any]] = None
 ) -> List[Dict[str, Any]]:
@@ -449,18 +456,6 @@ async def load_blocking_deployments(
         outcome Requirement 3.1 forbids.
     """
     blocking: List[Dict[str, Any]] = []
-
-    if is_active_binding_status((strategy_row or {}).get("status")):
-        blocking.append(
-            binding_report(
-                {
-                    "id": None,
-                    "strategy_id": strategy_id,
-                    "status": (strategy_row or {}).get("status"),
-                },
-                extra={"source": "strategies.status"},
-            )
-        )
 
     try:
         rows = _rows(
@@ -492,6 +487,27 @@ async def load_blocking_deployments(
     for row in rows:
         if binding_state(row) in STOPPABLE_BINDING_STATES:
             blocking.append(binding_report(row, extra={"source": "strategy_deployments"}))
+
+    # ARCH-01: the strategy's OWN status is consulted only for a strategy that has NO
+    # deployment row at all - the legacy case this check exists for - and only when that
+    # status says something is actually trading (running/deploying). It used to block on
+    # any "live" spelling, PAUSED included, even beside deployment rows that were all
+    # stopped/failed. ``POST /{id}/pause`` stops every deployment FIRST and then writes
+    # ``strategies.status = 'paused'``, so every paused strategy carried a flag naming a bot
+    # nothing was running, and could never be deleted ("has 1 active deployment(s)").
+    # Where deployment rows exist they are the authority on what is running.
+    status_flag = (strategy_row or {}).get("status")
+    if (
+        not rows
+        and is_active_binding_status(status_flag)
+        and binding_state({"status": status_flag}) in LEGACY_TRADING_STATES
+    ):
+        blocking.append(
+            binding_report(
+                {"id": None, "strategy_id": strategy_id, "status": status_flag},
+                extra={"source": "strategies.status"},
+            )
+        )
     return blocking
 
 

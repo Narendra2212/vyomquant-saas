@@ -359,7 +359,63 @@ def test_the_overview_endpoint_returns_503_instead_of_a_zeroed_portfolio(mock_us
     assert body["detail"]["error"] == "DASHBOARD_FETCH_FAILED"
     # The zero-state body is gone, not merely accompanied by an error.
     assert "overview" not in body
-    assert "0.0" not in json.dumps(body)
+
+    # WHY THIS IS A STRUCTURAL CHECK AND NOT `"0.0" not in json.dumps(body)`.
+    #
+    # That substring scan FAILED IN CI, on a response that was entirely correct. The error
+    # envelope carries an ISO timestamp, and
+    #
+    #     "timestamp": "2026-10-27T12:35:00.085679+00:00"
+    #                                    ^^^^
+    #
+    # contains "0.0" whenever the seconds end in a zero and the microseconds begin with
+    # one -- about 1 run in 100, independent of anything this test is about. Widening the
+    # needle would not help either: any decimal-looking substring can occur inside a
+    # timestamp.
+    #
+    # What the test actually means is "no portfolio number reached the client, and
+    # certainly not a zero". That is a statement about VALUES and KEYS, so it is asserted
+    # over the parsed body instead of its serialisation.
+    def _walk(value, path="body"):
+        """Yield (path, key, value) for every leaf, so a failure names the offender."""
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield from _walk(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                yield from _walk(child, f"{path}[{index}]")
+        else:
+            yield path, value
+
+    leaves = list(_walk(body))
+
+    # `status_code: 503` is a number and must stay; a zero is what must not appear.
+    zeroes = [
+        (path, value) for path, value in leaves
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        and value == 0
+    ]
+    assert not zeroes, (
+        f"the degraded response carries zero-valued numbers, which is the zeroed "
+        f"portfolio this endpoint must no longer render: {zeroes}"
+    )
+
+    # And none of the portfolio fields the old zero-state body carried is present at all,
+    # at any depth -- a non-zero value in one of them would be just as wrong.
+    PORTFOLIO_FIELDS = {
+        "total_value", "today_pnl", "total_pnl", "positions", "holdings",
+        "equity", "balance", "buying_power", "unrealized_pnl", "realized_pnl",
+    }
+    present = sorted(
+        {
+            path.rsplit(".", 1)[-1]
+            for path, _ in leaves
+            if path.rsplit(".", 1)[-1] in PORTFOLIO_FIELDS
+        }
+    )
+    assert not present, (
+        f"the degraded response still projects portfolio fields: {present}"
+    )
 
 
 @requires_routers

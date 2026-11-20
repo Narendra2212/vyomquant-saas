@@ -12,10 +12,43 @@
 """
 
 import asyncio
+import inspect
 import logging
-from typing import Any, Dict, Tuple
+import time
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("FleetManager")
+
+
+#: RESUME-SWEEP-01: a row written this recently may belong to a deploy still taking its
+#: claim in another process (the deploy path writes the row before ``start_bot``), so the
+#: orphan sweep leaves it for the next pass.
+SWEEP_MIN_ROW_AGE_SECONDS = 120
+
+#: STOPPING-SWEEP-01: a ``stopping`` row whose user+symbol claim is held by a live bot is
+#: still finished once it is this old. The claim's owner honours a stop on its OWN row
+#: within one heartbeat (15 s), so a row still ``stopping`` after ten minutes is not that
+#: bot's -- typically a redeploy of the same symbol took the slot.
+STOPPING_ROW_STALE_SECONDS = 600
+
+
+def _updated_within(row: Dict[str, Any], seconds: float) -> bool:
+    """True when the row's ``updated_at`` (or ``created_at``) is newer than ``seconds`` ago.
+
+    An unreadable timestamp counts as recent: when in doubt, the sweep waits.
+    """
+    from datetime import datetime, timezone
+
+    raw = row.get("updated_at") or row.get("created_at")
+    if not raw:
+        return True
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    return (datetime.now(timezone.utc) - ts).total_seconds() < seconds
 
 
 class FleetManager:
@@ -24,12 +57,40 @@ class FleetManager:
     Tracks every live BotRunner asyncio Task.
     """
 
-    def __init__(self):
+    def __init__(self, state_store: Any = None):
+        # RT-08: where this fleet reports a bot's death and reads a user's stop request.
+        # ``None`` = the platform's service-role store, created on first use.
+        self._state_store = state_store
         # { "user123_BTCUSDT": {"task": Task, "bot": BotRunner, "symbol": "BTC/USDT"} }
         self._active_fleet: Dict[str, Dict[str, Any]] = {}
         self.MAX_SYSTEM_BOTS = 3000
         self.MAX_BOTS_PER_USER = 5
         self._lock = asyncio.Lock()  # FIX FM-3
+
+    def _store(self):
+        if self._state_store is None:
+            from backend_app.backend.deployment_state import DeploymentStateStore
+
+            self._state_store = DeploymentStateStore()
+        return self._state_store
+
+    @staticmethod
+    def _deployment_id_of(bot: Any) -> Optional[str]:
+        blueprint = getattr(bot, "blueprint", None)
+        if isinstance(blueprint, dict):
+            value = blueprint.get("deployment_id")
+            return str(value) if value else None
+        return None
+
+    async def _report_failure(self, bot: Any, reason: str) -> None:
+        """RT-08: a bot that died on its own must not leave its row saying 'running'."""
+        deployment_id = self._deployment_id_of(bot)
+        if not deployment_id:
+            return    # a legacy start with no deployment row: nothing durable to update
+        try:
+            await self._store().mark_failed(deployment_id, reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("could not report failure of deployment %s: %s", deployment_id, exc)
 
     def _bot_key(self, user_id: str, symbol: str) -> str:
         return f"{user_id}_{symbol.replace('/', '_')}"
@@ -57,6 +118,19 @@ class FleetManager:
         """
         bot_key = self._bot_key(user_id, symbol)
 
+        # STOP-REDEPLOY-01: a stop is honoured by the heartbeat (RT-08), up to one interval
+        # after the row says `stopped`. A redeploy inside that window found the old bot
+        # still here and failed the NEW deployment with "Bot already running" -- a failed
+        # deployment the user never asked for, seen in the launch run 8 s after a Stop.
+        # If the bot occupying this slot is one its own row has already stopped, finish
+        # that stop now. Outside the lock: `stop_bot` takes it.
+        if bot_key in self._active_fleet:
+            try:
+                if await self._stop_requested(bot_key):
+                    await self._honour_stop_request(bot_key)
+            except Exception as exc:  # noqa: BLE001 - the refusal below still applies
+                logger.warning("could not finish the pending stop of %s: %s", bot_key, exc)
+
         async with self._lock:  # FIX FM-3
             if bot_key in self._active_fleet:
                 return False, f"Bot already running for {symbol}."
@@ -78,11 +152,52 @@ class FleetManager:
 
             limit = DEPLOYMENT_LIMITS.get(user_tier, DEPLOYMENT_LIMITS.get("free", 1))
 
+            # TIER-01: the bot is risk-checked against THIS plan. The tier was resolved
+            # here only for the bot-count limit and never reached the bot, whose risk
+            # checks read `blueprint["user_tier"]` and defaulted to "free" - so every bot,
+            # paper and live, was held to free-tier trade and exposure limits whatever the
+            # user paid for. A tier the blueprint already names is kept.
+            if isinstance(blueprint, dict) and not blueprint.get("user_tier"):
+                blueprint = {**blueprint, "user_tier": user_tier}
+
             user_bot_count = sum(
                 1 for k in self._active_fleet if k.startswith(f"{user_id}_")
             )
             if user_bot_count >= limit:
                 return False, f"Maximum {limit} bots per user reached."
+
+            # ═══════════════════════════════════════════════════════════════
+            # WORK-03: THE CROSS-PROCESS SINGLE-OWNER CLAIM
+            # ═══════════════════════════════════════════════════════════════
+            # The `bot_key in self._active_fleet` check above is a per-PROCESS dict, so
+            # two pods cannot see each other's bots and each will start its own BotRunner
+            # for the same (user, symbol). The WORK-02 XAUTOCLAIM reaper made that
+            # reachable rather than theoretical: a reclaimed `start_bot` command is
+            # delivered to a DIFFERENT consumer than the one that first took it.
+            #
+            # `claim_bot` takes a PostgreSQL claim whose PRIMARY KEY (user_id, symbol) IS
+            # the invariant -- `INSERT ... ON CONFLICT DO UPDATE ... WHERE heartbeat_at <
+            # now() - threshold`, so of two concurrent claimants exactly one matches and
+            # the loser gets zero rows. It FAILS CLOSED: an unreachable store refuses the
+            # start, because a claim we cannot establish is indistinguishable from one
+            # somebody else holds.
+            #
+            # Taken AFTER the cheap local checks so a same-process duplicate short
+            # circuits without a round trip, and BEFORE the BotRunner is constructed so
+            # no bot exists if the claim is refused.
+            # Regression: tests/test_work03_bot_ownership_claims_postgres.py
+            from backend_app.core.bot_ownership import claim_bot, release_bot
+
+            ownership = claim_bot(user_id, symbol)
+            if not ownership.granted:
+                logger.warning(
+                    "Refusing to start %s: %s (worker=%s)",
+                    bot_key, ownership.outcome, ownership.worker_name,
+                )
+                return False, (
+                    f"Another process already owns the bot for {symbol} "
+                    f"({ownership.outcome})."
+                )
 
             try:
                 bot = BotRunner(
@@ -94,6 +209,10 @@ class FleetManager:
                 )
             except Exception as e:
                 logger.error(f"Bot construction failed [{bot_key}]: {e}")
+                # WORK-03: give the claim back. Without this a construction failure
+                # strands the bot for a full stale interval -- the trader retries, is
+                # told "another process owns it", and nothing owns it at all.
+                release_bot(ownership)
                 return False, f"Bot initialisation failed: {e}"
 
             # FIX 1: Register the bot IMMEDIATELY so HTTP handler returns at once.
@@ -105,11 +224,129 @@ class FleetManager:
                 lambda t: asyncio.create_task(self._cleanup_dead_bot(bot_key, t))
             )
 
+            # WORK-03: keep the claim fresh for as long as the bot runs. WITHOUT THIS the
+            # claim goes stale after the threshold while the bot is still trading, and
+            # another process is then entitled to take ownership and start a SECOND
+            # runner for the same (user, symbol) -- the defect WORK-03 exists to prevent,
+            # merely postponed by 90 seconds rather than prevented.
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_claim(bot_key, ownership), name=f"{bot_key}:claim-hb"
+            )
+
             # FIX FM-1: Store the original slash-format symbol for clean shutdown
-            self._active_fleet[bot_key] = {"task": task, "bot": bot, "symbol": symbol}
+            # WORK-03: the ownership claim travels with the fleet record so stop_bot and
+            # _cleanup_dead_bot can release it. A claim that is never released is a
+            # stranded bot until the stale threshold expires.
+            self._active_fleet[bot_key] = {
+                "task": task, "bot": bot, "symbol": symbol, "claim": ownership,
+                "heartbeat": heartbeat_task,
+            }
             logger.info(f"Bot scheduled: {bot_key} (initializing in background)")
 
         return True, symbol
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # WORK-03: claim liveness
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _cancel_claim_heartbeat(record: Optional[Dict[str, Any]]) -> None:
+        """Stop the heartbeat task for a fleet record. Safe on a finished task."""
+        if not record:
+            return
+        task = record.get("heartbeat")
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _surrender_bot(self, bot_key: str, reason: str) -> None:
+        """Stop the local runner because this process no longer owns the bot.
+
+        Deliberately does NOT release the claim. Release is scoped to our `owner_token`,
+        so the DELETE would match zero rows anyway -- and were it not scoped, it would
+        delete the NEW owner's claim and let a third worker start yet another bot.
+        Cancelling the task is sufficient; the done-callback performs the (no-op) release.
+        """
+        logger.critical("WORK-03: surrendering %s — %s.", bot_key, reason)
+        async with self._lock:
+            record = self._active_fleet.get(bot_key)
+        if record is not None:
+            record["task"].cancel()
+
+    async def _heartbeat_claim(self, bot_key: str, claim) -> None:
+        """Refresh this process's ownership claim, and stop the bot if it is ever lost.
+
+        Two failure modes, handled oppositely on purpose:
+
+        * **Ownership lost** (the scoped UPDATE matched zero rows) -- another worker owns
+          this bot now. Stop trading at once; continuing is the two-runner bug.
+        * **Store unreachable** -- we do not know. A transient blip must not kill a live
+          bot, so we keep running. But it must not grant indefinite ownership either:
+          once we have been unable to refresh for longer than the stale threshold,
+          another worker is *entitled* to take over, so we must assume one has and stand
+          down. Fail-closed on the only axis that can produce duplicate venue writes.
+        """
+        from backend_app.core.bot_ownership import (
+            ClaimStoreUnavailable,
+            HEARTBEAT_INTERVAL_SECONDS,
+            effective_stale_seconds,
+            heartbeat_bot,
+        )
+
+        unreachable_since: Optional[float] = None
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            try:
+                # psycopg2 is blocking. Calling it directly would stall the event loop
+                # that every other bot in this process is running on.
+                still_ours = await asyncio.to_thread(heartbeat_bot, claim)
+            except asyncio.CancelledError:
+                raise
+            except ClaimStoreUnavailable as exc:
+                now = time.monotonic()
+                if unreachable_since is None:
+                    unreachable_since = now
+                    logger.warning(
+                        "WORK-03: cannot refresh the claim on %s (%s). The bot keeps "
+                        "running for up to %ss; after that another worker may own it.",
+                        bot_key, exc, effective_stale_seconds(),
+                    )
+                elif now - unreachable_since > effective_stale_seconds():
+                    await self._surrender_bot(
+                        bot_key,
+                        f"claim store unreachable for more than "
+                        f"{effective_stale_seconds()}s, so ownership can no longer be "
+                        f"established",
+                    )
+                    return
+                continue
+            except Exception as exc:  # noqa: BLE001
+                # An unexpected error here must not silently end the heartbeat loop and
+                # leave the bot running on a claim nobody is refreshing.
+                logger.error(
+                    "WORK-03: unexpected heartbeat error for %s (%s); treating it as "
+                    "store-unreachable.", bot_key, exc,
+                )
+                if unreachable_since is None:
+                    unreachable_since = time.monotonic()
+                continue
+
+            unreachable_since = None
+            if not still_ours:
+                await self._surrender_bot(
+                    bot_key, "the ownership claim was taken over by another worker"
+                )
+                return
+
+            # RT-08: a user's stop is a DURABLE request on the deployment row, so it reaches
+            # this bot even when the request was served by another process.
+            if await self._stop_requested(bot_key):
+                asyncio.create_task(self._honour_stop_request(bot_key))
+                return
+
+            # RT-21: likewise for a flatten request. Independent of stop -- a close does not
+            # end the deployment, so it does not return/stop the heartbeat loop.
+            if await self._close_requested(bot_key):
+                asyncio.create_task(self._honour_close_request(bot_key))
 
     async def _boot_and_run(self, bot, bot_key: str):
         """Background task: initialize the bot then enter the trading loop.
@@ -120,10 +357,224 @@ class FleetManager:
         except Exception as e:
             logger.error(f"Bot boot failed [{bot_key}]: {e}")
             async with self._lock:
-                self._active_fleet.pop(bot_key, None)
+                record = self._active_fleet.pop(bot_key, None)
+            await self._report_failure(bot, f"boot failed: {type(e).__name__}: {e}")
+            # WORK-03: this branch pops the record itself, so the done-callback that
+            # normally releases the claim finds nothing and the claim LEAKS -- stranding
+            # the bot for a full stale interval after a boot failure. Release here.
+            if record is not None:
+                from backend_app.core.bot_ownership import release_bot
+                self._cancel_claim_heartbeat(record)
+                release_bot(record.get("claim"))
             return
 
         await bot._run_trading_loop()
+
+    async def _stop_requested(self, bot_key: str) -> bool:
+        """Read the deployment row; apply pause/resume to the local bot; True if a stop is due.
+
+        RT-08: pause/resume used to flip the row only ("lifecycle state machine rather than the
+        in-process runtime"), so a PAUSED deployment kept trading. The owner now follows the row.
+        """
+        record = self._active_fleet.get(bot_key)
+        deployment_id = self._deployment_id_of(record.get("bot")) if record else None
+        if not deployment_id:
+            return False
+        status = await self._store().status_of(deployment_id)
+        bot = record["bot"]
+        if status == "paused":
+            bot.paused = True
+        elif status in ("running", "deploying"):
+            bot.paused = False
+        return status in ("stopping", "stopped")
+
+    async def _honour_stop_request(self, bot_key: str) -> None:
+        """Stop the local bot because its deployment row says so, then confirm it."""
+        record = self._active_fleet.get(bot_key)
+        if record is None:
+            return
+        bot, symbol = record["bot"], record["symbol"]
+        deployment_id = self._deployment_id_of(bot)
+        logger.warning("RT-08: stop requested for %s via the deployment row; stopping.", bot_key)
+        ok, _ = await self.stop_bot(getattr(bot, "user_id"), symbol)
+        if ok and deployment_id:
+            await self._store().mark_stopped(deployment_id)
+
+    async def _close_requested(self, bot_key: str) -> bool:
+        """RT-21: is this bot's position due to be flattened?"""
+        record = self._active_fleet.get(bot_key)
+        deployment_id = self._deployment_id_of(record.get("bot")) if record else None
+        if not deployment_id:
+            return False
+        return await self._store().close_requested(deployment_id)
+
+    async def _honour_close_request(self, bot_key: str) -> None:
+        """Flatten the local bot's position because its deployment row asked for it.
+
+        The request is cleared BEFORE acting (not after): ``close_position`` can itself
+        take a tick cycle or more if a fill is slow, and the next heartbeat must not
+        re-dispatch a second close for the one request already in flight. If the bot
+        turns out to hold nothing, that is success too -- "no position to close" is not a
+        failure of the request.
+        """
+        record = self._active_fleet.get(bot_key)
+        if record is None:
+            return
+        bot = record["bot"]
+        deployment_id = self._deployment_id_of(bot)
+        if not deployment_id:
+            return
+        await self._store().clear_close_request(deployment_id)
+        logger.warning("RT-21: close requested for %s via the deployment row; flattening.", bot_key)
+        ok, detail = await bot.close_position()
+        if not ok:
+            logger.error("RT-21: close for %s did not complete: %s", bot_key, detail)
+
+    async def resume_orphaned_deployments(self, rebuild) -> Dict[str, int]:
+        """RESUME-SWEEP-01: start ``running`` deployments that NO process is running.
+
+        Found in production on the 2026-11-14 rolling deploy: the new task booted while the
+        old one still ran a bot, so its boot-time :meth:`resume_deployments` correctly left
+        the row alone ("another process owns it"). The old task was then stopped -- which
+        releases the claim but leaves the row ``running`` -- and nothing ever looked again.
+        The bot stayed dead behind a row that said ``running``; with live resume on, every
+        deploy would orphan every live bot the same way.
+
+        Called periodically. Deliberately narrower than the boot pass: a row is touched only
+        when it has a symbol, is not in THIS process's fleet, and its claim reads ``False``
+        (no fresh, unreleased claim anywhere). ``True`` (owned elsewhere) and ``None``
+        (claim store unreadable) are left alone, so nothing here can fail a running bot or
+        start a second copy; ``start_bot``'s WORK-03 claim still arbitrates a race.
+        """
+        from backend_app.core.bot_ownership import claim_is_live
+
+        outcome = {"started": 0, "refused": 0, "failed": 0, "skipped": 0, "finalised_stop": 0}
+        store = self._store()
+        # STOPPING-SWEEP-01: found in production on 2026-11-15 -- a Stop landed in a worker
+        # that did not run the bot, so it wrote the durable ``stopping`` request; but NO
+        # process ran that bot (it had been lost on a rolling deploy while paused), so no
+        # heartbeat ever confirmed it and the row said ``stopping`` for good. Only a reboot
+        # finalised such rows. Finish them here: not this process's bot, old enough for the
+        # owner's heartbeat to have acted, and either no live claim or stale beyond doubt.
+        for row in await store.rows_in(("stopping",)):
+            symbol = str(row.get("exchange_symbol") or "")
+            if (
+                symbol and self._bot_key(str(row.get("user_id")), symbol) in self._active_fleet
+            ) or _updated_within(row, SWEEP_MIN_ROW_AGE_SECONDS):
+                continue
+            live = False
+            if symbol:
+                try:
+                    live = await asyncio.to_thread(
+                        claim_is_live, str(row.get("user_id")), symbol
+                    )
+                except Exception:  # noqa: BLE001
+                    live = None
+            if live is None or (live and _updated_within(row, STOPPING_ROW_STALE_SECONDS)):
+                continue
+            if await store.mark_stopped(str(row["id"])):
+                outcome["finalised_stop"] += 1
+                logger.warning(
+                    "STOPPING-SWEEP-01: deployment %s was stopping with no runtime; "
+                    "recorded as stopped.", row["id"],
+                )
+        # `running` only, never `deploying`: a deploy in flight in ANOTHER process writes its
+        # row as `deploying` a moment before its `start_bot` takes the claim, and a sweep
+        # landing in that gap must not race it. A row reaches `running` only after a start
+        # succeeded, i.e. after a claim was taken.
+        for row in await store.rows_in(("running",)):
+            symbol = str(row.get("exchange_symbol") or "")
+            if (
+                not symbol
+                or self._bot_key(str(row.get("user_id")), symbol) in self._active_fleet
+                or _updated_within(row, SWEEP_MIN_ROW_AGE_SECONDS)
+            ):
+                outcome["skipped"] += 1
+                continue
+            try:
+                live = await asyncio.to_thread(claim_is_live, str(row.get("user_id")), symbol)
+            except Exception:  # noqa: BLE001
+                live = None
+            if live is not False:
+                outcome["skipped"] += 1
+                continue
+            deployment_id = str(row["id"])
+            try:
+                built = rebuild(row)
+                if inspect.isawaitable(built):
+                    built = await built
+                blueprint, paper = built
+            except Exception as exc:  # noqa: BLE001
+                await store.mark_failed(deployment_id, f"could not resume after restart: {exc}")
+                outcome["failed"] += 1
+                continue
+            ok, msg = await self.start_bot(
+                str(row["user_id"]), symbol, blueprint, paper_trading=paper
+            )
+            outcome["started" if ok else "refused"] += 1
+            logger.warning(
+                "RESUME-SWEEP-01: deployment %s was running with no owner; %s",
+                deployment_id, "restarted here" if ok else f"not started here: {msg}",
+            )
+        return outcome
+
+    async def resume_deployments(self, rebuild) -> Dict[str, int]:
+        """RT-08: after a restart, start what the database says should be running.
+
+        ``rebuild(row) -> (blueprint, paper_trading)`` or raises. Safe on every pod at once:
+        ``start_bot`` takes the WORK-03 ownership claim, so exactly one pod wins each bot and
+        the others are refused. Rows a user had asked to stop (``stopping``) are finalised to
+        ``stopped`` rather than restarted. A row that cannot be rebuilt is marked ``failed``
+        with the reason; it is never left saying ``running``.
+        """
+        outcome = {"started": 0, "refused": 0, "failed": 0, "finalised_stop": 0}
+        store = self._store()
+        for row in await store.rows_in(("stopping",)):
+            if await store.mark_stopped(str(row["id"])):
+                outcome["finalised_stop"] += 1
+        for row in await store.rows_in(("running", "deploying")):
+            deployment_id = str(row["id"])
+            try:
+                built = rebuild(row)
+                if inspect.isawaitable(built):
+                    built = await built
+                blueprint, paper = built
+            except Exception as exc:  # noqa: BLE001
+                # RES-OWN-01: "this process cannot (or may not) resume it" is not "nothing is
+                # running it". Every worker process runs this on start-up, including a
+                # worker recycled while the bot runs happily in ANOTHER process - which
+                # marked a live, trading deployment `failed` (and its strategy with it) a
+                # minute after it was deployed, while it went on to fill an order. A fresh
+                # ownership claim, or an unreadable claim store, means leave the row alone.
+                from backend_app.core.bot_ownership import claim_is_live
+
+                symbol = str(row.get("exchange_symbol") or "")
+                try:
+                    live_elsewhere = await asyncio.to_thread(
+                        claim_is_live, str(row.get("user_id")), symbol
+                    ) if symbol else None
+                except Exception:  # noqa: BLE001
+                    live_elsewhere = None
+                if live_elsewhere is not False:
+                    logger.info(
+                        "resume: deployment %s not resumed here (%s) and %s; leaving its "
+                        "status unchanged.", deployment_id, exc,
+                        "another process owns it" if live_elsewhere else
+                        "its ownership could not be read",
+                    )
+                    outcome["owned_elsewhere"] = outcome.get("owned_elsewhere", 0) + 1
+                    continue
+                await store.mark_failed(deployment_id, f"could not resume after restart: {exc}")
+                outcome["failed"] += 1
+                continue
+            ok, msg = await self.start_bot(
+                str(row["user_id"]), str(row.get("exchange_symbol") or blueprint["symbol"]),
+                blueprint, paper_trading=paper,
+            )
+            outcome["started" if ok else "refused"] += 1
+            if not ok:
+                logger.info("resume of deployment %s not started here: %s", deployment_id, msg)
+        return outcome
 
     async def stop_bot(self, user_id: str, symbol: str) -> Tuple[bool, str]:
         bot_key = self._bot_key(user_id, symbol)
@@ -145,6 +596,14 @@ class FleetManager:
             pass
 
         await fleet_record["bot"].shutdown()
+
+        # WORK-03: release the cross-process claim so the bot can be restarted
+        # immediately rather than after the stale threshold. The heartbeat task is
+        # cancelled FIRST, so it cannot refresh a claim we are about to delete.
+        from backend_app.core.bot_ownership import release_bot
+        self._cancel_claim_heartbeat(fleet_record)
+        release_bot(fleet_record.get("claim"))
+
         logger.info(f"Bot stopped: {bot_key}")
         return True, "Bot stopped successfully."
 
@@ -170,15 +629,32 @@ class FleetManager:
         FIX FM-2: pop() is now safe — stop_bot already removed the key.
         """
         async with self._lock:
-            self._active_fleet.pop(bot_key, None)  # no-op if already removed
+            record = self._active_fleet.pop(bot_key, None)  # no-op if already removed
 
+        # WORK-03: a bot that CRASHED must also give up its claim, or the restart is
+        # refused for a full stale interval. `stop_bot` already popped the record in the
+        # clean path, so `record` is None there and this is a no-op.
+        if record is not None:
+            from backend_app.core.bot_ownership import release_bot
+            self._cancel_claim_heartbeat(record)
+            release_bot(record.get("claim"))
+
+        bot = record.get("bot") if record else None
         try:
             task.result()
-            logger.info(f"Bot exited cleanly: {bot_key}")
+            if record is not None:
+                # `stop_bot` pops the record BEFORE it cancels, so a record still present means
+                # nobody asked this bot to stop. A return that nobody asked for is a death.
+                reason = getattr(bot, "exit_reason", None) or "runtime exited without a stop request"
+                logger.error(f"Bot exited without a stop request [{bot_key}]: {reason}")
+                await self._report_failure(bot, reason)
+            else:
+                logger.info(f"Bot exited cleanly: {bot_key}")
         except asyncio.CancelledError:
-            pass  # normal stop
+            pass  # normal stop (or ownership surrendered -- the new owner reports)
         except Exception as e:
             logger.critical(f"Bot FATAL CRASH [{bot_key}]: {e}")
+            await self._report_failure(bot, f"crashed: {type(e).__name__}: {e}")
             from backend_app.core.state import app_state
 
             asyncio.create_task(

@@ -203,7 +203,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search, Users, ArrowRight, Cpu, ArrowLeft, Flame, Trophy, Info, Clock,
 } from 'lucide-react';
@@ -216,10 +216,12 @@ import { SectionHeader } from '../components/ds/SectionHeader';
 import { StatusBadge } from '../components/ds/StatusBadge';
 import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadge';
 import { LockedCommand, UpgradePrompt, useAllowance, useFeature } from '../components/gates';
-import { FEATURES, RESOURCES } from '../design/entitlements';
+import { FEATURES, RESOURCES, readRefusal } from '../design/entitlements';
+import { apiErrorMessage } from '../design/apiErrors';
 import { translateError } from '../design/errorCopy';
 import { BADGE_SUBSCRIBED, resolveSubscriptionView } from '../design/subscriptionState';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import { REFRESH } from '../hooks/useAutoRefresh';
 import {
   CheckoutOutcome,
   canOpenRazorpayCheckout,
@@ -310,6 +312,17 @@ const formatDate = (value) => {
 const errorMessage = (err, fallback) => {
   const structured = err?.data?.error?.message;
   if (typeof structured === 'string' && structured.trim()) return structured;
+  // LAUNCH AUDIT: a PLAN refusal (403 from `core/subscription_dependencies.py`) carries its
+  // sentence on `err.data.detail.message`, which neither branch here read — clone (strategy
+  // limit), subscribe (not on Free) and deploy (0 bots on Free) showed a generic line instead
+  // of the reason and the plan that allows it.
+  const refusal = readRefusal(err);
+  if (refusal && typeof refusal.message === 'string' && refusal.message.trim()) {
+    const upgrade = typeof refusal.upgrade_message === 'string' ? refusal.upgrade_message.trim() : '';
+    return upgrade ? `${refusal.message.trim()} ${upgrade}` : refusal.message.trim();
+  }
+  const detailMessage = apiErrorMessage(err, '');
+  if (detailMessage) return detailMessage;
   if (typeof err?.getUserMessage === 'function') {
     const userMessage = err.getUserMessage();
     if (typeof userMessage === 'string' && userMessage.trim()) return userMessage;
@@ -328,29 +341,46 @@ const hasAuthToken = () => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The three Execution_Environments (Requirement 6.6)
+// The Execution_Environments this page renders a section for (Requirement 6.6,
+// MKT-07)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ENVIRONMENTS = ['BACKTEST', 'PAPER', 'LIVE'];
+/**
+ * BACKTEST ONLY. PAPER and LIVE were removed by MKT-07.
+ *
+ * `paper_performance_summary` / `live_performance_summary` / `paper_risk_metrics` /
+ * `live_risk_metrics` were read here for the PAPER and LIVE sections, but
+ * `backend_app/` never wrote to any of those four fields on any Listing — there is no
+ * aggregation job, no on-read computation and no column that populates them, for any
+ * Listing, ever. So PAPER and LIVE rendered "No performance figures have been recorded"
+ * on every single Listing, unconditionally, which does not read as "not yet measured"
+ * to a subscriber: a section titled "PAPER performance" / "LIVE performance" sitting
+ * beside a real BACKTEST one reads as "we checked, and there is nothing", implying a
+ * verification step that never ran.
+ *
+ * The honest fix is this one: stop claiming the two environments exist until real
+ * subscriber paper/live execution data is aggregated per Listing (MKT-05 live/paper
+ * marketplace deployments are too new and low-volume for that aggregation to be real
+ * today) and render only the environment this page can back with persisted data —
+ * the publish-time `backtest_*` aggregate. Reintroducing PAPER/LIVE belongs with
+ * whatever task builds that aggregation, not with a front-end section pointed at
+ * fields nothing writes.
+ */
+const ENVIRONMENTS = ['BACKTEST'];
 
 /**
  * Where each environment's figures live in the Listing response.
  *
  * `BACKTEST` reads the projection's `performance_summary` / `risk_metrics` — the publish-time
- * `backtest_*` aggregate, which is BACKTEST by construction. `PAPER` and `LIVE` read the same
- * two shapes under their own prefix. Nothing is inferred from one environment for another:
- * a group whose fields are absent produces no figures and therefore no section.
+ * `backtest_*` aggregate, which is BACKTEST by construction. A group whose fields are absent
+ * produces no figures and therefore no section.
  */
 const ENVIRONMENT_FIGURE_SOURCES = {
   BACKTEST: { summary: 'performance_summary', risk: 'risk_metrics' },
-  PAPER: { summary: 'paper_performance_summary', risk: 'paper_risk_metrics' },
-  LIVE: { summary: 'live_performance_summary', risk: 'live_risk_metrics' },
 };
 
 const ENVIRONMENT_DESCRIPTIONS = {
   BACKTEST: 'Simulated on historical data.',
-  PAPER: 'Simulated execution on live market data. No real order was placed.',
-  LIVE: 'Recorded from live execution.',
 };
 
 /** The historical-results statement Requirement 6.6 requires inside the BACKTEST section. */
@@ -492,6 +522,10 @@ const priceOf = (listing) => {
 
 const StrategyMarketplace = () => {
   const navigate = useNavigate();
+  // MKT-05: `?listing_id=<id>&intent=deploy` opens that Listing's detail directly on mount,
+  // so a subscriber arriving from a "you're subscribed" redirect lands on the deploy form
+  // rather than having to search the catalogue again for the Listing they just paid for.
+  const [searchParams] = useSearchParams();
   const [view, setView] = useState('browse');
 
   // Data states
@@ -517,6 +551,20 @@ const StrategyMarketplace = () => {
   const [notice, setNotice] = useState(null);
   const [cloneLoading, setCloneLoading] = useState(false);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
+
+  // MKT-05: the deploy form's own fields. All three are optional on the request
+  // (routers/library.py's DeployMarketplaceStrategyRequest), so an empty value is sent as
+  // absent rather than coerced into a default this page would be inventing.
+  const [deploySymbol, setDeploySymbol] = useState('');
+  const [deployTimeframe, setDeployTimeframe] = useState('');
+  const [deployCapital, setDeployCapital] = useState('');
+  const [deployLoading, setDeployLoading] = useState(false);
+  // MKT-05 live deployment. `deployMode` defaults to 'paper' so the panel opens on the
+  // safe option and a trader has to choose live deliberately.
+  const [deployMode, setDeployMode] = useState('paper');
+  const [deployAccountId, setDeployAccountId] = useState('');
+  const [deployAccounts, setDeployAccounts] = useState(null);
+  const [deployAccountsError, setDeployAccountsError] = useState('');
 
   /*
     ── THE ENTITLEMENT GATES ────────────────────────────────────────────────────────────────
@@ -684,6 +732,7 @@ const StrategyMarketplace = () => {
 
   const catalogue = usePanelState(readCatalogue, {
     deps: [page, sort, searchQuery, selectedCategory],
+    intervalMs: REFRESH.SLOW,
   });
 
   const catalogueState = readState(catalogue);
@@ -807,6 +856,25 @@ const StrategyMarketplace = () => {
     loadSubscription(selectedListingId);
   }, [listingState, selectedListingId, loadSubscription]);
 
+  /**
+   * MKT-05: `?listing_id=<id>&intent=deploy` opens that Listing on mount.
+   *
+   * Read once, on mount, not re-read on every `searchParams` change: a trader who then
+   * browses elsewhere and comes back to `view === 'browse'` must not be yanked back into
+   * the Listing the URL still names. `listing_id` alone (no `intent`) is deliberately not
+   * enough to trigger this — the open-on-load behaviour is for the deploy hand-off
+   * specifically, not a general "link to any listing" feature this page does not otherwise
+   * have.
+   */
+  useEffect(() => {
+    const listingId = searchParams.get('listing_id');
+    const intent = searchParams.get('intent');
+    if (listingId && intent === 'deploy') {
+      loadDetail(listingId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Clone Flow
   const handleClone = async (strat) => {
     const listingId = strat?.listing_id;
@@ -890,6 +958,109 @@ const StrategyMarketplace = () => {
       notify('error', errorMessage(err, 'Failed to create checkout session.'));
     } finally {
       setSubscribeLoading(false);
+    }
+  };
+
+  // Deploy Flow (MKT-05)
+  //
+  // The subscriber-safe path: `api.library.deploy` binds a new `strategy_deployments` row to
+  // the OWNER's current version without copying its logic.
+  //
+  // PAPER is the default and is unchanged. LIVE places real orders and is permitted only
+  // for the duration of the subscribed period: the server stamps the deployment with the
+  // subscription that authorises it and the instant that authorisation ends, refuses to
+  // create one without both, and the order path refuses orders past that instant on every
+  // tick rather than relying on a background sweep.
+
+  // The caller's own exchange accounts, loaded only when live is actually selected.
+  //
+  // `list()` (`GET /api/exchanges/`, i.e. `exchange_keys`) because that is the table
+  // holding the credentials a live deployment actually trades with, and `account_id`
+  // rather than `id` because those are different things in that response:
+  //
+  //   * `account_id` is the real `exchange_keys.id` -- the handle
+  //     `deployment_binding.load_owned_exchange_account` resolves, and the only value
+  //     `strategy_deployments.exchange_account_id` can store. It exists because of
+  //     migration 058 (EXCH-03): before that this table had no single-column handle at
+  //     all, and EVERY live deployment, first-party included, answered 404.
+  //   * `id` is a synthesised `{user_id}_{exchange_id}` composite kept for the existing
+  //     exchange UI. Sending it would resolve to nothing.
+  //
+  // A row without a handle is filtered out rather than offered with a substituted value:
+  // a 404 at deploy time reads as "your account is missing" instead of "this app asked
+  // for the wrong thing".
+  const loadDeployAccounts = async () => {
+    setDeployAccountsError('');
+    try {
+      const rows = await api.exchange.list();
+      const usable = (Array.isArray(rows) ? rows : [])
+        .filter((row) => typeof row?.account_id === 'string' && row.account_id);
+      setDeployAccounts(usable);
+      // Only auto-select when there is exactly one. Picking one of several on the
+      // trader's behalf is choosing which account trades real money for them.
+      if (usable.length === 1) setDeployAccountId(usable[0].account_id);
+    } catch (err) {
+      console.error(err);
+      // An empty list and a failed read are different statements, and this one must not
+      // report "you have no exchange accounts" about a request that did not complete.
+      setDeployAccounts(null);
+      setDeployAccountsError(
+        errorMessage(err, 'Could not read your exchange accounts.'),
+      );
+    }
+  };
+
+  const handleDeployModeChange = (nextMode) => {
+    setDeployMode(nextMode);
+    if (nextMode === 'live' && deployAccounts === null && !deployAccountsError) {
+      loadDeployAccounts();
+    }
+  };
+
+  const handleDeploy = async (strat) => {
+    const listingId = strat?.listing_id;
+    if (!listingId) return;
+
+    const live = deployMode === 'live';
+    if (live && !deployAccountId) {
+      // Refused here as well as by the server, so the trader is told which field is
+      // missing without spending a rate-limited request to find out.
+      notify('error', 'Choose the exchange account this live deployment should trade through.');
+      return;
+    }
+
+    setDeployLoading(true);
+    try {
+      const body = {};
+      if (deploySymbol.trim()) body.symbol = deploySymbol.trim();
+      if (deployTimeframe.trim()) body.timeframe = deployTimeframe.trim();
+      if (deployCapital.trim()) {
+        const capital = Number(deployCapital);
+        if (Number.isFinite(capital) && capital >= 0) body.capital = capital;
+      }
+      // `mode` is sent only when live. The server defaults to paper, and an all-blank
+      // paper submission stays `{}` — the property this page's own tests already pin.
+      if (live) {
+        body.mode = 'live';
+        body.exchange_account_id = deployAccountId;
+      }
+
+      const result = await api.library.deploy(listingId, body);
+      const message = typeof result?.message === 'string' && result.message
+        ? result.message
+        : live
+          ? 'Live deployment created. It stops when your subscription period ends.'
+          : 'Deployment created. It runs as a paper session.';
+      notify('success', message);
+      // A live deployment is not a paper session, so sending the trader to the paper
+      // screen would be telling them to look in the wrong place for it. `/app/live-trading`
+      // and not `/app/deployments`: the latter is not a route this app has.
+      navigate(live ? '/app/live-trading' : '/app/paper-trading');
+    } catch (err) {
+      console.error(err);
+      notify('error', errorMessage(err, 'Failed to deploy this strategy.'));
+    } finally {
+      setDeployLoading(false);
     }
   };
 
@@ -1386,6 +1557,169 @@ const StrategyMarketplace = () => {
             </div>
 
             {renderSubscriptionIndicator()}
+
+            {/* MKT-05: the deploy form. Only reachable once a subscription is held -- the
+                backend's own `entitlement_resolver.resolve` is the actual gate; this is the
+                one working UI path to reach it, which this finding records had no path at
+                all before. Runs as a PAPER session (routers/library.py hard-codes
+                environment="paper" for this path today), never live. */}
+            {isSubscribed && (
+              <div
+                className="flex flex-col gap-3 pt-6 border-t border-line-default"
+                data-testid="deploy-panel"
+              >
+                <SectionHeader
+                  level={3}
+                  title="Deploy this strategy"
+                  subtitle="Runs against the owner's current version. Symbol, timeframe and capital are optional."
+                />
+
+                {/* MKT-05: the Execution_Environment choice. Paper is preselected, so
+                    live is always a deliberate act rather than a default the trader
+                    discovers after the fact. */}
+                <div
+                  className="flex flex-wrap gap-2"
+                  role="radiogroup"
+                  aria-label="Execution environment"
+                  data-testid="deploy-mode"
+                >
+                  {[
+                    { value: 'paper', label: 'Paper', hint: 'Simulated. No real orders.' },
+                    { value: 'live', label: 'Live', hint: 'Places real orders.' },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={deployMode === option.value}
+                      disabled={deployLoading}
+                      onClick={() => handleDeployModeChange(option.value)}
+                      data-testid={`deploy-mode-${option.value}`}
+                      className={`flex flex-col items-start gap-0.5 px-3 py-2 rounded-sm border text-left ${
+                        deployMode === option.value
+                          ? 'border-brand bg-surface-inset'
+                          : 'border-line-default'
+                      }`}
+                    >
+                      <span className="text-body text-content-primary">{option.label}</span>
+                      <span className="text-micro text-content-secondary">{option.hint}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {deployMode === 'live' && (
+                  <div className="flex flex-col gap-3" data-testid="deploy-live-fields">
+                    {/* Said plainly and before the control, not as small print after it.
+                        The period bound is the thing a subscriber most needs to know,
+                        because it is what makes this deployment stop. */}
+                    <div className="text-micro text-content-secondary border border-line-default rounded-sm px-3 py-2">
+                      This places <strong className="text-content-primary">real orders</strong> through
+                      your own exchange account, and runs only while your subscription to this
+                      strategy is active. When the period ends it stops placing orders and its
+                      position is closed.
+                    </div>
+
+                    {deployAccountsError ? (
+                      <div
+                        className="text-micro text-status-error"
+                        data-testid="deploy-accounts-error"
+                      >
+                        {deployAccountsError}
+                      </div>
+                    ) : deployAccounts === null ? (
+                      <div className="text-micro text-content-secondary">
+                        Loading your exchange accounts…
+                      </div>
+                    ) : deployAccounts.length === 0 ? (
+                      <div
+                        className="text-micro text-content-secondary"
+                        data-testid="deploy-no-accounts"
+                      >
+                        You have no connected exchange account to trade through. Connect one
+                        before deploying live.
+                      </div>
+                    ) : (
+                      <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                        Exchange account
+                        <select
+                          value={deployAccountId}
+                          onChange={(e) => setDeployAccountId(e.target.value)}
+                          disabled={deployLoading}
+                          data-testid="deploy-account-select"
+                          className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                        >
+                          <option value="">Select an account…</option>
+                          {deployAccounts.map((account) => (
+                            <option key={account.account_id} value={account.account_id}>
+                              {account.name || account.exchange_id}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-3">
+                  <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                    Symbol
+                    <input
+                      type="text"
+                      value={deploySymbol}
+                      onChange={(e) => setDeploySymbol(e.target.value)}
+                      placeholder="BTC/USDT"
+                      disabled={deployLoading}
+                      className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                    Timeframe
+                    <input
+                      type="text"
+                      value={deployTimeframe}
+                      onChange={(e) => setDeployTimeframe(e.target.value)}
+                      placeholder="1h"
+                      disabled={deployLoading}
+                      className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                    Capital
+                    <input
+                      type="number"
+                      min="0"
+                      value={deployCapital}
+                      onChange={(e) => setDeployCapital(e.target.value)}
+                      placeholder="10000"
+                      disabled={deployLoading}
+                      className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                    />
+                  </label>
+                </div>
+                {/* `intent="live"` is this design system's own name for a control that
+                    acts on real money (design.md §5.1), so the button carries the
+                    distinction rather than this page inventing a colour for it. */}
+                <CommandButton
+                  intent={deployMode === 'live' ? 'live' : 'primary'}
+                  icon={ArrowRight}
+                  loading={deployLoading}
+                  loadingLabel="Deploying"
+                  // Disabled rather than allowed-then-refused when live has no account
+                  // selected: a control should not look available when pressing it cannot
+                  // work. `disabledReason` is mandatory, not decoration -- CommandButton
+                  // THROWS without it (Requirement 15.3: a disabled control must say why).
+                  disabled={deployMode === 'live' && !deployAccountId}
+                  disabledReason={
+                    deployMode === 'live' && !deployAccountId
+                      ? 'Select the exchange account this live deployment should trade through'
+                      : undefined
+                  }
+                  onClick={() => handleDeploy(strat)}
+                >
+                  {deployMode === 'live' ? 'Deploy live' : 'Deploy'}
+                </CommandButton>
+              </div>
+            )}
 
             {/* Owner-supplied description, rendered as a text child */}
             <div className="text-body text-content-primary leading-relaxed max-w-4xl whitespace-pre-line">

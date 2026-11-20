@@ -139,7 +139,6 @@ export const PAGES = Object.freeze({
   STRATEGIES: 'strategies',
   BACKTESTER: 'backtester',
   LIVE_TRADING: 'live-trading',
-  PORTFOLIO: 'portfolio',
   TRADE_HISTORY: 'trade-history',
   SIGNAL_TRACE: 'signal-trace',
   DOWNLOAD: 'download',
@@ -401,10 +400,13 @@ const DASHBOARD_FIELDS = [
     inputs: ['exchange.connected_exchanges', 'exchange.can_trade', 'exchange.total_exchanges'],
     documentedIn: DASHBOARD_MODULE,
     note: 'Each item is `{exchange_id, status, latency_ms, last_sync}` built from the caller\'s '
-      + '`exchange_keys` rows. TWO of those four are constants in the aggregation service — '
-      + '`status` is always "connected" and `latency_ms` is always 35 — so neither is a '
-      + 'measurement. Render the venue and `last_sync`; take latency from '
-      + '`health.exchange_api_latency_ms`, which is nullable and honest.',
+      + '`exchange_keys` rows. `status` and `latency_ms` used to be constants in the '
+      + 'aggregation service — `status` always "connected" and `latency_ms` always 35 — but '
+      + '`get_exchange_data` now derives both from a real per-venue Redis probe '
+      + '(`venue_status`, `measured_latency_ms`), so they render as readings: `status` is '
+      + '"unknown" rather than fabricated when nothing was probed, and `latency_ms` is `null` '
+      + 'rather than invented. The account-wide `health.exchange_api_latency_ms` is a separate, '
+      + 'independently-measured figure and remains nullable and honest.',
   }),
   entry({
     page: PAGES.DASHBOARD,
@@ -499,6 +501,13 @@ const STRATEGIES_READ = 'strategiesApi.list';
 const STRATEGIES_ENDPOINT = 'GET /api/strategies';
 const STRATEGIES_MODULE = 'src/api/modules/strategies.js';
 
+// The SECOND read this page makes. Named separately because an absence from the ownership
+// read and an absence from the strategy list are different facts, and a field's `reason`
+// has to be able to say which one it means.
+const OWNERSHIP_READ = 'libraryApi.myStrategies';
+const OWNERSHIP_ENDPOINT = 'GET /api/library/my-strategies';
+const OWNERSHIP_MODULE = 'src/api/modules/library.js';
+
 const STRATEGIES_FIELDS = [
   entry({
     page: PAGES.STRATEGIES,
@@ -582,6 +591,126 @@ const STRATEGIES_FIELDS = [
       + 'change for them, so this is permanent until a listing widening is registered. The '
       + 'figures exist per BACKTEST (`GET /api/backtests`) and are declared on the backtester '
       + 'page. A zero here would read as a strategy that has never made money.',
+  }),
+  // ── Task 14's two undeclared ownership/listing facts ──────────────────────
+  //
+  // Task 14 asks the strategy card to carry ownership, subscription status and
+  // marketplace listing status. `subscription` was already declared; these two were not,
+  // so a card had two fields with no declaration to read a label or a reason from.
+  //
+  // Both come from a DIFFERENT read than the rest of this page -- the ownership read, not
+  // the strategy list -- and that distinction carries the meaning of an absence here: it
+  // means "the ownership read did not report it", which is not the same fact as "the
+  // strategy list did not carry it".
+  // ── Task 14: the venue and the bar, split out of the composite `market` ───
+  //
+  // `market` above is declared "Market / exchange" and the table rendered it as one
+  // composite cell — "BTCUSDT · binance · 1h" — because three columns would not fit. A card
+  // has room for three labelled facts, and Task 14 names them separately.
+  //
+  // The split is not cosmetic: a composite CANNOT express a partial absence. A row with a
+  // symbol and no venue renders "BTCUSDT", and the reader cannot tell whether the venue is
+  // missing or simply not part of the format. Three facts each carry their own marker and
+  // their own reason.
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'exchange',
+    label: 'Exchange',
+    requirement: '4.1',
+    read: STRATEGIES_READ,
+    endpoint: STRATEGIES_ENDPOINT,
+    path: 'strategies[].deployed_exchange',
+    documentedIn: STRATEGIES_MODULE,
+    note: 'The venue the strategy is deployed against, NOT the venue its author built it '
+      + 'for — the list projection carries only the former. Absent on a strategy that has '
+      + 'never been deployed, which is a real state and not a read failure, so the marker '
+      + 'says so rather than naming a default exchange.',
+  }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'timeframe',
+    label: 'Timeframe',
+    requirement: '4.1',
+    read: STRATEGIES_READ,
+    endpoint: STRATEGIES_ENDPOINT,
+    path: 'strategies[].timeframe',
+    documentedIn: STRATEGIES_MODULE,
+    note: 'The bar interval the strategy evaluates on. Read as `timeframe` and then `tf`, '
+      + 'because both spellings appear on the wire; neither is defaulted, since guessing '
+      + '"1h" would state a cadence the strategy may not run at.',
+  }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'subscription',
+    label: 'Subscription',
+    requirement: '4.1',
+    read: OWNERSHIP_READ,
+    endpoint: OWNERSHIP_ENDPOINT,
+    documentedIn: OWNERSHIP_MODULE,
+    // NO `path`, by the declaration's own rule: a path names where a REPORTED figure is
+    // read from, and an unavailable field has nowhere to point. The shape the server would
+    // use if it ever carried one is `items[].subscription.state`, recorded here in prose
+    // rather than as a path so the "a path exists exactly when a figure is at one" check
+    // stays meaningful.
+    //
+    // UNAVAILABLE on THIS surface, which is the owner's own strategy list. Not because the
+    // field does not exist -- a SUBSCRIBED entry carries `subscription.state` and the
+    // marketplace surfaces read it -- but because every entry reachable from a strategy
+    // row is an OWNED one, and the server sends `subscription: null` for those. So the
+    // value is absent for every row this page can render, which is what UNAVAILABLE means
+    // here, and `NEVER` is the absence kind: no backend change resolves it, because owning
+    // a strategy is precisely not subscribing to it.
+    verdict: VERDICT.UNAVAILABLE,
+    // `unmeasurable`, not `never` -- `never` means "this value is never absent", which is
+    // the opposite of the case here and makes the reason below dead copy. Not `unreported`
+    // either: the backend DOES carry `subscription.state`, and the marketplace surfaces
+    // read it. It is unmeasurable on THIS surface specifically, because every entry
+    // reachable from an owned strategy row is an OWNED one and owning a strategy is
+    // precisely not subscribing to it.
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'Not applicable: the ownership read reports no subscription for this strategy, '
+      + 'which is the expected answer for one you own rather than subscribe to.',
+    note: 'A REPORTED absence, not an unreadable one. The server sends `subscription: null` '
+      + 'for an OWNED entry — it is stating that there is no subscription, which is a '
+      + 'different fact from not knowing — so the reason says "not applicable" rather than '
+      + 'claiming the value could not be read. Nothing is defaulted to a state: inventing '
+      + '"active" would claim an entitlement nobody granted.',
+  }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'ownership',
+    label: 'Ownership',
+    requirement: '4.1',
+    read: OWNERSHIP_READ,
+    endpoint: OWNERSHIP_ENDPOINT,
+    path: 'items[].ownership',
+    documentedIn: OWNERSHIP_MODULE,
+    note: 'The server writes `OWNED` / `SUBSCRIBED` (`library_entries.py`) and the card '
+      + 'humanises whichever it receives, with no mapping table here to drift from the '
+      + 'wire -- a code this build has never seen renders as whatever the server called it '
+      + 'rather than being dropped, so the offer can never be misreported. Absent when the '
+      + 'ownership read failed or reported no entry for the strategy, and reported as '
+      + 'UNKNOWN in that case: defaulting to OWNED would claim an ownership nobody stated.',
+  }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'marketplaceListing',
+    label: 'Marketplace listing',
+    requirement: '4.1',
+    read: OWNERSHIP_READ,
+    endpoint: OWNERSHIP_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Not reported: neither the strategy list nor the ownership read carries whether '
+      + 'your own strategy is listed on the marketplace.',
+    documentedIn: OWNERSHIP_MODULE,
+    note: 'MEASURED, and the DIRECTION of the error is why this is UNAVAILABLE rather than a '
+      + 'derived "Not listed": `_LIST_COLUMNS` carries no listing key, and '
+      + '`library_entries.py`\'s OWNED entry has no `listing` either -- only a SUBSCRIBED '
+      + 'entry does, and those are OTHER AUTHORS\' listings. So "Not listed" on an owned card '
+      + 'would state a negative about the one author it would mislead: the one who HAS '
+      + 'listed. The marker says the fact is unreported, which is true. Closing this needs a '
+      + 'listing key on one of the two reads, not a frontend change.',
   }),
   entry({
     page: PAGES.STRATEGIES,
@@ -1130,217 +1259,7 @@ const LIVE_TRADING_FIELDS = [
   }),
 ];
 
-/*
- * ═══════════════════════════════════════════════════════════════════════════
- * §7.6 Portfolio (Requirement 10) — /app/portfolio
- * ═══════════════════════════════════════════════════════════════════════════
- *
- * The live positions read is re-pointed from the non-existent `/api/portfolio/positions*` to
- * `GET /api/dashboard` (task 13.1), which is the endpoint that actually serves positions to a
- * trader. `/summary`, `/equity-curve`, `/allocation` and `/heatmap` are kept as they are.
- *
- * `available_balance` is NOT on `/api/portfolio/summary` — that route returns only
- * `total_equity total_pnl pnl_pct total_exposure` — so it is read from the dashboard
- * response, and this declaration says which read each figure belongs to for exactly that
- * reason.
- */
-const PORTFOLIO_MODULE = 'src/api/modules/portfolio.js';
-
-const PORTFOLIO_FIELDS = [
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'totalValue',
-    label: 'Total value',
-    requirement: '10.1',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'overview.total_value',
-    inputs: ['overview.total_equity'],
-    documentedIn: DASHBOARD_MODULE,
-    note: '`GET /api/portfolio/summary.total_equity` reports the same quantity. One read, one '
-      + 'figure: taking it from the dashboard keeps this page\'s tier 1 consistent, since '
-      + '`available_balance` and the drawdown are only there.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'availableBalance',
-    label: 'Available',
-    requirement: '10.1',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'overview.available_balance',
-    inputs: ['overview.free_balance'],
-    documentedIn: DASHBOARD_MODULE,
-    note: 'Do NOT read this from `/api/portfolio/summary`: it is not there.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'investedCapital',
-    label: 'Invested (capital in use)',
-    requirement: '10.1',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    verdict: VERDICT.DERIVED,
-    inputs: ['overview.used_balance', 'overview.total_equity', 'overview.free_balance'],
-    derivation: '`overview.used_balance`, which the server computes as '
-      + '`total_equity − free_balance` (live) or the account\'s locked balance (paper).',
-    absence: ABSENCE.UNMEASURABLE,
-    reason: 'The balance breakdown was not reported, so capital in use cannot be shown.',
-    tooltip: 'Capital in use: your total equity minus your free balance. There is no '
-      + '"invested capital" figure on the account — this is derived from the balance '
-      + 'breakdown.',
-    documentedIn: DASHBOARD_MODULE,
-    note: 'THE LABEL AND TOOLTIP ARE PART OF THE DECLARATION (§7.6). No backend field is '
-      + 'named "invested capital"; labelling `used_balance` as one without saying so would '
-      + 'misrepresent it, because margin locked against a losing position is "in use" without '
-      + 'being "invested".',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'unrealisedPnl',
-    label: 'Unrealised P&L',
-    requirement: '10.1',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'overview.unrealized_pnl',
-    documentedIn: DASHBOARD_MODULE,
-    note: 'Summed from the open positions\' own `unrealized_pnl`.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'realisedPnlToday',
-    label: 'Realised P&L (today)',
-    requirement: '10.1',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'overview.today_realized_pnl',
-    documentedIn: DASHBOARD_MODULE,
-    tooltip: 'Closed trades since 00:00 UTC.',
-    note: 'Explicitly scoped in the label. It is today\'s window only, and it publishes `0.0` '
-      + 'for an unreadable day sum — a pre-existing behaviour BC-5 deliberately left alone. '
-      + 'The lifetime figure is `lifetimeRealizedPnl` below.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'lifetimeRealizedPnl',
-    label: 'Realised P&L (lifetime)',
-    requirement: '10.1',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'overview.realized_pnl',
-    absence: ABSENCE.UNMEASURABLE,
-    reason: 'Lifetime realised P&L could not be read from the trade ledger.',
-    backendChange: 'BC-5',
-    documentedIn: DASHBOARD_MODULE,
-    note: 'One sum over the fill ledger, distinct from BOTH of its neighbours: '
-      + '`today_realized_pnl` is the same quantity in today\'s window only, and '
-      + '`cumulative_pnl` is realised PLUS the mark-to-market on open positions, so calling '
-      + 'that one "realised" would report unbanked money as banked. `null` — never 0.0 — when '
-      + 'the executions read could not produce it.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'totalExposure',
-    label: 'Total exposure',
-    requirement: '10.1',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'overview.total_exposure',
-    documentedIn: DASHBOARD_MODULE,
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'currentDrawdown',
-    label: 'Current drawdown',
-    requirement: '10.2',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'risk.current_drawdown_pct_v2',
-    absence: ABSENCE.UNMEASURABLE,
-    reason: 'No drawdown can be measured yet — that needs an equity history with at least '
-      + 'two readable points and a positive peak.',
-    backendChange: 'BC-1',
-    documentedIn: DASHBOARD_MODULE,
-    note: 'IN TIER 1, not below it (Requirement 10.2 reads with 10.1). Same field and same '
-      + 'deprecated neighbour as the dashboard\'s `currentDrawdown`.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'openPositions',
-    label: 'Open positions',
-    requirement: '10.3',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'positions',
-    inputs: ['degraded'],
-    documentedIn: DASHBOARD_MODULE,
-    note: 'Paper keeps `api.paper.getPositions()`. The live read is re-pointed here from '
-      + '`api.portfolio.getOpenPositions()`/`getPositions()`, which both 404 — task 13.1 '
-      + 'removed them. An unreadable read renders `Panel state="error"`, never an empty table '
-      + '(Requirement 14.5), which is what `degraded` is read for.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'positionLiquidationPrice',
-    label: 'Liq. price',
-    requirement: '10.3',
-    read: DASHBOARD_READ,
-    endpoint: DASHBOARD_ENDPOINT,
-    path: 'positions[].liquidation_price',
-    absence: ABSENCE.UNMEASURABLE,
-    reason: 'Not applicable — spot positions have no liquidation price.',
-    documentedIn: DASHBOARD_MODULE,
-    note: 'A permanent `null` for spot and paper positions, and for any futures position the '
-      + 'venue did not report one for. The positions table renders the marker in the cell '
-      + 'rather than a dash that could be mistaken for zero.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'allocation',
-    label: 'Allocation',
-    requirement: '10.1',
-    read: 'portfolioApi.getAllocation',
-    endpoint: 'GET /api/portfolio/allocation',
-    path: '[]',
-    absence: ABSENCE.UNMEASURABLE,
-    reason: 'The allocation breakdown could not be read.',
-    documentedIn: PORTFOLIO_MODULE,
-    note: 'THE RESPONSE ROOT IS THE ARRAY — rows of `{asset, value_usd, pct}`, no envelope. '
-      + 'The route answers `[]` both for an account with no allocation rows and for a query '
-      + 'that returned no dataset, and it raises nothing in the second case, so an empty '
-      + 'result cannot be read as "no allocation" with confidence.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'equityCurve',
-    label: 'Equity curve',
-    requirement: '10.1',
-    read: 'portfolioApi.getEquityCurve',
-    endpoint: 'GET /api/portfolio/equity-curve',
-    path: '[]',
-    absence: ABSENCE.UNMEASURABLE,
-    reason: 'The equity history could not be read.',
-    documentedIn: PORTFOLIO_MODULE,
-    note: 'THE RESPONSE ROOT IS THE ARRAY — rows of `{timestamp, equity}` in ascending time '
-      + 'order, no envelope. This route DOES raise 503 `EQUITY_CURVE_FETCH_FAILED` on a read '
-      + 'error, so `[]` from it means no history rather than a failure.',
-  }),
-  entry({
-    page: PAGES.PORTFOLIO,
-    field: 'heatmap',
-    label: 'P&L heatmap',
-    requirement: '10.1',
-    read: 'portfolioApi.getHeatmap',
-    endpoint: 'GET /api/portfolio/heatmap',
-    path: '[]',
-    absence: ABSENCE.UNMEASURABLE,
-    reason: 'The P&L heatmap could not be read.',
-    documentedIn: PORTFOLIO_MODULE,
-    note: 'THE RESPONSE ROOT IS THE ARRAY — rows of `{date, pnl_usd}`, one per day with a '
-      + 'recorded execution, no envelope. A day with no executions has no row; it is not a '
-      + 'zero-P&L day.',
-  }),
-];
+/* §7.6 Portfolio was removed (PORTFOLIO-REMOVED-01, 2026-11-15). */
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
@@ -1476,11 +1395,22 @@ const TRADE_HISTORY_FIELDS = [
     endpoint: HISTORY_ENDPOINT,
     verdict: VERDICT.UNAVAILABLE,
     absence: ABSENCE.UNREPORTED,
-    reason: 'Fees are not recorded for live executions.',
+    reason: 'This execution predates fee recording, or nothing filled, so no fee is '
+      + 'available for this row.',
     documentedIn: ORDERS_MODULE,
-    note: 'Same seven-column row. Today\'s `toNumber(row.fees ?? row.fee ?? 0)` renders `$0` '
-      + 'for every live trade, which is a claim that the venue charged nothing — the exact '
-      + 'fabricated zero Requirement 14.5 is about. Paper rows carry `fee`.',
+    note: 'TRADE-13. `log_execution` (`backend_app/backend/telemetry_engine.py`) now writes '
+      + 'the venue\'s own fee onto the `executions` row — `master_executor.py` reads it off '
+      + '`trade_result.fee`, which `execution_engine._execute_trade_internal` already '
+      + 'extracted from the CCXT fill response — so every execution recorded AFTER that '
+      + 'change carries a real `fee`. An execution recorded before it has no `fee` key at '
+      + 'all (QuestDB is schema-on-write: the column did not exist yet), which is why the '
+      + '`verdict` here stays ❌ — this field is declared unavailable BY DEFAULT and the page '
+      + 'builder\'s own `LIVE_REPORTED_FIELDS` (`pages/tradeHistoryFilters.js`) is what turns '
+      + 'the LIVE column back on, the same way `PAPER_REPORTED_FIELDS` already does for the '
+      + 'paper read. `toNumber(row.fees ?? row.fee ?? 0)` — today\'s pre-fix code — rendered '
+      + '`$0` for every live trade regardless, which is a claim that the venue charged '
+      + 'nothing; the fix is to render the row-level not-available marker instead, never a '
+      + 'fabricated zero. Paper rows carry `fee` too, unchanged.',
   }),
   entry({
     page: PAGES.TRADE_HISTORY,
@@ -1491,11 +1421,18 @@ const TRADE_HISTORY_FIELDS = [
     endpoint: HISTORY_ENDPOINT,
     verdict: VERDICT.UNAVAILABLE,
     absence: ABSENCE.UNREPORTED,
-    reason: 'Slippage is not recorded — it needs an intended price to compare the fill '
-      + 'against, and no read reports one.',
+    reason: 'This execution predates slippage recording, or nothing filled, so no '
+      + 'slippage is available for this row.',
     documentedIn: ORDERS_MODULE,
-    note: 'Neither the telemetry row nor a paper trade row carries `slippage` or `slip`, and '
-      + 'the fill price alone cannot produce it. `0%` reads as a perfect fill.',
+    note: 'TRADE-13. `master_executor.py`\'s telemetry write now computes '
+      + '`|executed_price - decision_price| x filled_qty` — the same absolute-cost '
+      + 'definition `paper_simulator.slippage_amount` already uses for the paper path — and '
+      + '`log_execution` persists it as a new `slippage` field. An execution recorded before '
+      + 'this change has no `slippage` key, so it renders the row-level not-available '
+      + 'marker rather than `0%`, which would read as a perfect fill. UNLIKE `fees`, this '
+      + 'stays unreported on PAPER: no paper fill row carries an intended price to compare '
+      + 'against, so `pages/tradeHistoryFilters.js`\'s `LIVE_REPORTED_FIELDS` turns this '
+      + 'column on for LIVE only.',
   }),
   entry({
     page: PAGES.TRADE_HISTORY,
@@ -1833,19 +1770,38 @@ const SIGNAL_TRACE_FIELDS = [
  * same convention: `VERDICT.UNAVAILABLE` with a reason, rendered by `ds/Panel`'s
  * `unavailable` state, which `usePanelState` reaches WITHOUT issuing a request.
  *
- * WHY 403 AND NOT 404, AND WHY IT WILL NOT HEAL ON ITS OWN
- * -------------------------------------------------------
+ * WHY 403 AND NOT 404, AND HOW IT WAS ACTUALLY RESOLVED
+ * -----------------------------------------------------
  * CI's `dist/` contains no `releases/` directory, and `aws s3 sync dist/ --delete` therefore
- * *deletes* the `/releases/` prefix from the bucket on every deploy. The real 112 MB Windows
- * installer lives at `algo22-terminal/releases/`, a SIBLING of `public/` that Vite never
- * copies, so it never enters `dist/` and never survives a sync. Publishing was considered and
- * rejected: it means either committing 112 MB to the repository or adding an upload step
- * outside the `dist/` sync, and the mac and linux builds do not exist at all.
+ * *deletes* the `/releases/` prefix from the bucket on every deploy. The 112 MB Windows
+ * installer then in the tree lived at `algo22-terminal/releases/`, a SIBLING of `public/` that
+ * Vite never copies, so it never entered `dist/` and never survived a sync.
  *
- * `absence: 'unreported'` therefore reads, for these four, as "nothing published carries it".
- * It is permanent in this module's sense — no backend change resolves it — and restoring a
- * platform is additive rather than a code change to a page: produce the artifact, upload it,
- * and flip that one entry's `verdict` here. The page reads the verdict; it holds no URL.
+ * THE FOUR ARTIFACTS ARE NOW PUBLISHED, AND NOT THROUGH THIS TABLE. They are built by
+ * `07-desktop-build.yml` on all three runners and served from the frontend bucket under
+ * `downloads/desktop-v0.1.2/`. The published url, exact byte count and SHA-256 of each live
+ * in `design/desktopReleases.js`, NOT here, because `entry()`'s own contract makes this
+ * table the wrong home: `path` must be non-null exactly when the verdict is `available`, and
+ * a static file has no response path to name.
+ *
+ * THE BUCKET WAS REJECTED ONCE, FOR THE REASON ABOVE, AND THAT REASON IS NOW FIXED.
+ * Hosting in the bucket was abandoned because `aws s3 sync dist/ --delete` deletes any
+ * prefix `dist/` does not contain, and the artifacts moved to GitHub releases instead. That
+ * worked around the sync without fixing it, and it introduced a worse failure: the
+ * repository is PRIVATE, so the GitHub asset URLs returned 404 to every visitor — a dead
+ * download for everyone rather than a dead download after the next deploy.
+ *
+ * `06-frontend-deploy.yml`'s unhashed pass now carries `--exclude "downloads/*"`, verified
+ * with a `--dryrun` against the real bucket that named the probe object it would otherwise
+ * have deleted, and `guards/deployPrefixProtection.test.js` reads the prefix out of
+ * `desktopReleases.js` and fails if any `--delete` pass could reach it.
+ *
+ * SO THESE FOUR ENTRIES ARE NOW THE FALLBACK, AND THEY ARE STILL LOAD-BEARING. They supply the
+ * rendered `label` in both states, and the `reason` for any platform that has no published
+ * build. `PlatformArtifact` prefers `desktopReleases` and falls back here, so the next
+ * platform without an artifact keeps the not-available marker with its reason and no page
+ * changes. `absence: 'unreported'` continues to read, in that fallback, as "nothing published
+ * carries it".
  *
  * `field` IS THE PLATFORM KEY THE PAGE ALREADY USES
  * ------------------------------------------------
@@ -1876,11 +1832,14 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Windows installer is published for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'The one platform whose artifact EXISTS: `algo22-terminal/releases/windows/'
-      + 'VyomQuant-Setup-0.1.0.exe`, 112,117,309 bytes. It is a sibling of `public/`, so Vite '
-      + 'never copies it into `dist/` and the S3 sync never publishes it. The reason therefore '
-      + 'says "not published" and not "not built" — the two are different facts and a trader '
-      + 'reading the second would be told something untrue.',
+    note: 'PUBLISHED as `VyomQuant_0.1.2_x64-setup.exe` under `/downloads/desktop-v0.1.2/`; '
+      + 'the live '
+      + 'url, byte count and SHA-256 are in `design/desktopReleases.js` and this reason is now '
+      + 'only the fallback. History: a 112,117,309-byte `releases/windows/'
+      + 'VyomQuant-Setup-0.1.0.exe` sat in the tree as a sibling of `public/`, so Vite never '
+      + 'copied it into `dist/` and the S3 sync never published it. The current artifact is a '
+      + 'Tauri NSIS installer at 2.5 MiB rather than that Electron build — Tauri uses the OS '
+      + 'webview instead of shipping a browser engine, which is why it is ~42x smaller.',
   }),
   entry({
     page: PAGES.DOWNLOAD,
@@ -1893,8 +1852,13 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No macOS build has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'No universal DMG exists anywhere in the tree. The page previously advertised it at '
-      + '78.5 MB with a SHA-256 that is the hash of the empty string.',
+    note: 'PUBLISHED as `VyomQuant_0.1.2_universal.dmg` (arm64 + x86_64) under '
+      + '`/downloads/desktop-v0.1.2/`; url, byte count and SHA-256 in '
+      + '`design/desktopReleases.js`. It is '
+      + 'UNNOTARIZED, which is a harder problem than unsigned: Gatekeeper refuses the first '
+      + 'launch outright, so the card carries the right-click-Open step. History: no DMG '
+      + 'existed anywhere in the tree and the page advertised one at 78.5 MB with a SHA-256 '
+      + 'that is the hash of the EMPTY STRING.',
   }),
   entry({
     page: PAGES.DOWNLOAD,
@@ -1907,9 +1871,15 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Linux AppImage has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'No AppImage exists. A 64-byte text file named `.AppImage` sat under '
-      + '`public/releases/` and was publishable; task 4.2 removed it and added the deploy-time '
-      + 'size gate that rejects its return.',
+    note: 'PUBLISHED as `VyomQuant_0.1.2_amd64.AppImage` under `/downloads/desktop-v0.1.2/`; '
+      + 'url, '
+      + 'byte count and SHA-256 in `design/desktopReleases.js`. Built on ubuntu-22.04 on '
+      + 'purpose, so it does not demand a newer glibc than older desktops carry. At 79.2 MiB '
+      + 'it is much larger than the other bundles because an AppImage carries its own GTK and '
+      + 'WebKit rather than using the ones already on the host. History: a 64-byte TEXT file '
+      + 'named `.AppImage` sat under `public/releases/` and was publishable; task 4.2 '
+      + 'removed it and added the '
+      + 'deploy-time size gate that rejects its return.',
   }),
   entry({
     page: PAGES.DOWNLOAD,
@@ -1922,8 +1892,14 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Debian package has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'No .deb exists. Same provenance as the AppImage: a 67-byte placeholder on a '
-      + 'publishable path, removed by task 4.2.',
+    note: 'PUBLISHED as `VyomQuant_0.1.2_amd64.deb` under `/downloads/desktop-v0.1.2/`; url, '
+      + 'byte '
+      + 'count and SHA-256 in `design/desktopReleases.js`. An `.rpm` and an `.msi` are served '
+      + 'from the same '
+      + 'prefix but have no card here, because this table declares the four platforms the two '
+      + 'surfaces render and adding a fifth is a surface decision rather than a packaging one. '
+      + 'History: same provenance as the AppImage — a 67-byte placeholder on a publishable '
+      + 'path, removed by task 4.2.',
   }),
 ];
 
@@ -3265,8 +3241,9 @@ const BILLING_FIELDS = [
     path: 'subscription_status',
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
-    reason: 'Your subscription status could not be read. Manage billing opens the payment '
-      + 'provider\'s portal, which is the authority on whether this plan is currently paid.',
+    reason: 'Your subscription status could not be read, so neither active nor past due is '
+      + 'claimed for this account. Refresh reads it again; the entitlements endpoint is the '
+      + 'only authority on whether this plan is currently paid.',
     note: 'DEFAULTED TO "active" THREE TIMES: `useState("active")`, '
       + '`data.subscription_status || "active"`, and `…?.toUpperCase()?.replace("_", " ") '
       + '|| "ACTIVE"` at the chip. A failed read therefore rendered a green ACTIVE pill, and '
@@ -3302,8 +3279,7 @@ const BILLING_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
     reason: 'Whether a cancellation is already scheduled could not be read, so neither '
-      + 'Cancel nor Resume is offered on a guess. Manage billing opens the provider\'s '
-      + 'portal, which reports the current schedule.',
+      + 'Cancel nor Resume is offered on a guess. Refresh reads the current schedule again.',
     note: '`bool(profiles.cancel_at_period_end)`, so `false` is a reading and means the '
       + 'plan renews. It selects between the Cancel and Resume controls, which is why an '
       + 'absence has to be a state rather than a default: `|| false` offered Cancel to an '
@@ -3596,8 +3572,9 @@ const BILLING_FIELDS = [
     path: '[].id',
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
-    reason: 'This invoice carries no reference, so there is nothing to quote for it. The '
-      + 'payment provider\'s portal lists the same invoices with their own references.',
+    reason: 'This invoice carries no reference of its own, so there is nothing to quote for '
+      + 'it. The payment reference in the same row identifies the charge at the gateway '
+      + 'whenever the row carries one.',
     note: 'Rendered as `String(inv.id).slice(0, 8) + "..."` under `cursor: pointer` with no '
       + '`onClick` and no keyboard path — a truncated identifier dressed as a link. The '
       + 'truncation stays (design.md §2.5 mechanism 4 permits it for an IDENTIFIER) with '
@@ -3636,8 +3613,8 @@ const BILLING_FIELDS = [
       + 'column and is therefore an absence, not a dollar figure.**',
     reason: 'This invoice\'s amount is recorded in a currency this page has no column for, '
       + 'or was not reported at all, so no figure is shown rather than one in the wrong '
-      + 'denomination. Manage billing opens the provider\'s portal, which holds the '
-      + 'original invoice.',
+      + 'denomination. The charge on your card or bank statement is the authority on what '
+      + 'was actually taken.',
     note: '`inv.currency === "INR" ? ₹${amtINR || 0} : $${amtUSD || 0}`. Two faults in one '
       + 'expression: the else arm put a **dollar sign in front of every non-INR invoice '
       + 'whatever it was denominated in**, and both arms substituted `0`, so an unreadable '
@@ -3657,13 +3634,152 @@ const BILLING_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
     reason: 'This invoice reports no status, so neither paid nor unpaid is claimed for it. '
-      + 'The provider\'s portal is the authority on whether it settled.',
+      + 'Your card or bank statement is the authority on whether the charge settled.',
     note: 'The server defaults the column to `"unknown"`, which `design/semantic.js` '
       + 'already resolves to the neutral group — so an unknown status is a reading and is '
       + 'rendered as one rather than being coloured as a failure.',
   }),
 
+  /*
+   * ── GET /api/billing/invoices — the provider metadata (BILL-HIST-02) ──────
+   *
+   * THE FRONTEND WAS THROWING AWAY THREE FIELDS THE RESPONSE ALREADY CARRIED. BILL-HIST-01
+   * added `provider`, `providerPaymentId` and `plan` to `get_invoices`'s projection
+   * (`routers/billing.py`), and migration 070 declared the five columns the Razorpay webhook
+   * writer had always named but the schema never had — so until that migration landed the
+   * invoice write failed silently and this table held nothing at all. The columns exist in
+   * production now and the webhook populates them; `Billing.jsx`'s `invoiceRows` projected
+   * id / reference / date / amount / denomination / status and dropped the rest on the floor,
+   * so a trader could see that ₹999 was taken and not what it bought or which charge at the
+   * gateway it corresponds to.
+   *
+   * ALL THREE ARE NULLABLE BY DESIGN, AND THAT IS NOT A DEFECT. Migration 070 declines a
+   * `DEFAULT 0` on the amounts and a back-dated `'razorpay'` on the provider for the reason
+   * this whole file exists: a row that predates provider metadata genuinely does not know who
+   * captured it, and a fabricated provider on an invoice is a claim about where a trader's
+   * money went. Each of the three therefore has a reachable marker and a reason, and the
+   * reason says the row predates the metadata rather than implying the read failed.
+   */
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoicePlan',
+    label: 'Plan',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].plan',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice does not record what the payment bought. Rows written before the '
+      + 'provider metadata migration carry no plan, and naming one here would be a guess '
+      + 'about which subscription a charge paid for.',
+    note: '`billing_invoices.plan`, the `item_key` the payment bought — the same column the '
+      + 'refund path reads to decide whether a full refund should revoke the plan '
+      + '(`_revoke_plan_for_refunded_razorpay_payment`). It is the row\'s own description of '
+      + 'the charge, so it is NOT the account\'s current plan: an invoice for a tier the '
+      + 'account has since left still describes what that charge bought, and reading the '
+      + 'current plan into it would backdate today\'s subscription onto last year\'s money.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceProvider',
+    label: 'Paid via',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].provider',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice does not record which payment provider captured the charge. Rows '
+      + 'written before the provider metadata migration carry none, and "Razorpay" is not '
+      + 'filled in on their behalf — it would be a claim about where this money went.',
+    note: '`billing_invoices.provider`. Razorpay is the only gateway the platform bills '
+      + 'through today, which is exactly why a null must NOT be defaulted to it: the one '
+      + 'value it could be defaulted to is the one that looks most plausible and is least '
+      + 'checkable. The column\'s own COMMENT in migration 070 states the same rule — "NULL '
+      + 'on rows that predate provider metadata -- honest, rather than back-dated".',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoicePaymentReference',
+    label: 'Payment reference',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].providerPaymentId',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice carries no provider payment reference, so there is nothing to '
+      + 'quote to support or to match against a statement line. Rows written before the '
+      + 'provider metadata migration carry none.',
+    note: '`billing_invoices.provider_payment_id` — the gateway\'s own payment id, and the '
+      + 'single most useful value on the row for a trader who has to reconcile a charge or '
+      + 'quote it to support. It is unique per provider through '
+      + '`uq_billing_invoices_provider_payment`, which is what makes a redelivered webhook '
+      + 'collide instead of filing a second invoice for one charge. Not secret and not key '
+      + 'material: it identifies a payment, it cannot authorise one.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceInstrument',
+    label: 'Instrument',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'Which card or UPI handle paid this invoice is not recorded. Razorpay Checkout '
+      + 'collects the instrument at the moment of purchase and VyomQuant never receives it, '
+      + 'so no card network, masked number or handle exists to show for a past charge.',
+    note: 'DECLARED UNAVAILABLE RATHER THAN LEFT OUT, because the obvious way to fill this '
+      + 'column is the wrong one: `GET /api/billing/payment-methods` reports a brand and a '
+      + 'last four, and joining TODAY\'S default instrument onto a HISTORICAL invoice would '
+      + 'attribute a charge to a card that may not have existed when it was taken. '
+      + '`billing_invoices` has no instrument column at all — migration 070 added provider, '
+      + 'provider_payment_id, amount_usd, amount_inr and plan, and none of the five is an '
+      + 'instrument. Showing the gateway that captured the charge is the furthest this page '
+      + 'can honestly go.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceReceipt',
+    label: 'Receipt',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'No receipt document is published for this charge. `GET /api/billing/invoices` '
+      + 'reports no receipt or invoice URL, and Razorpay serves no self-service download for '
+      + 'it, so the payment reference beside the amount is what identifies the charge.',
+    note: 'DECLARED SO THE ABSENCE IS STATED ONCE RATHER THAN RENDERED AS A COLUMN OF '
+      + 'DASHES. The response carries nine keys — id, date, amtUSD, amtINR, status, '
+      + 'currency, provider, providerPaymentId, plan — and not one of them is a URL. '
+      + 'Composing a Razorpay dashboard link from `providerPaymentId` would be inventing a '
+      + 'destination: that console is merchant-side and a customer cannot sign in to it, '
+      + 'which is the same mistake BILLING-PORTAL-02 removed two buttons for. The billing '
+      + 'history panel renders this one reason below the table instead of a per-row marker, '
+      + 'because it is a fact about the ledger rather than about any single row.',
+  }),
+
   // ── GET /api/billing/payment-methods ──────────────────────────────────────
+  //
+  // BILL-HIST-02 REMOVED THE ONLY PAGE THAT RENDERED THESE THREE, and they are kept here
+  // rather than deleted. `pages/Billing.jsx` carried a standing *Payment methods* panel
+  // showing a brand, a masked last four and an expiry; the read behind it
+  // (`GET /api/billing/payment-methods`) answers `[]` on every Razorpay deployment, because
+  // VyomQuant stores no payment instrument at all — Razorpay Checkout collects the card or
+  // UPI handle at the moment of purchase and never hands it over. So the panel's only
+  // reachable state was its own empty arm, and the page now shows the provider metadata the
+  // invoice ledger really does carry instead.
+  //
+  // They stay declared because the ENDPOINT stays, the `PaymentMethodModel` table stays, and
+  // `deletePaymentMethod` stays: a deployment that one day stores an instrument would render
+  // these three, and a declaration deleted here would have to be rediscovered from the
+  // backend. Their `reason` copy no longer points at a provider portal — there is none, and
+  // BILLING-PORTAL-02 removed the controls that claimed otherwise.
   entry({
     page: PAGES.BILLING,
     field: 'cardBrand',
@@ -3674,8 +3790,8 @@ const BILLING_FIELDS = [
     path: '[].brand',
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
-    reason: 'The card network on this payment method was not reported. Manage via the '
-      + 'provider portal shows the stored method in full.',
+    reason: 'The card network on this payment method was not reported, so none is named. '
+      + 'The instrument is held by Razorpay and is chosen again at the next checkout.',
   }),
   entry({
     page: PAGES.BILLING,
@@ -3688,7 +3804,7 @@ const BILLING_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
     reason: 'The last four digits of this card were not reported, so the method cannot be '
-      + 'identified here. It is unchanged either way, and the provider portal shows it.',
+      + 'identified here. The stored method is unchanged either way.',
     note: 'The last four digits are the only part of a card number this application ever '
       + 'holds or renders; nothing on this page has access to the rest.',
   }),
@@ -3735,11 +3851,12 @@ const BILLING_FIELDS = [
  *     "permissions": ["Spot Trading", "Read"]  (:239) likewise
  *
  * That is the same defect `production-launch-hardening` fixed in
- * `dashboard_aggregation_service` — where `get_exchange_health` hardcoded
- * `"status": "connected"` and `"latency_ms": 35`, and `can_trade` came off "does a row
- * exist" — and this endpoint was not part of that fix. So the rule the `dashboard`
- * `exchangeHealth` entry states ("TWO of those four are constants in the aggregation service
- * … so neither is a measurement") applies here to FOUR columns, and the entries below declare
+ * `dashboard_aggregation_service` — where `get_exchange_data` (then `get_exchange_health`)
+ * hardcoded `"status": "connected"` and `"latency_ms": 35`, and `can_trade` came off "does a
+ * row exist" — and this endpoint was not part of that fix; `get_exchange_data` now derives
+ * both from a real per-venue probe (see the `dashboard` `exchangeHealth` entry), but this
+ * endpoint still has not. So the same rule applies here to FOUR columns, and the entries below
+ * declare
  * `status`, `health` and `subscription_tier` UNAVAILABLE rather than pointing a page at a
  * literal. A constant rendered as a reading is worse on this page than on the dashboard,
  * because this is the page a trader opens to decide whether a venue can be trusted with an
@@ -4107,7 +4224,6 @@ export const PAGE_FIELDS = Object.freeze([
   ...STRATEGIES_FIELDS,
   ...BACKTESTER_FIELDS,
   ...LIVE_TRADING_FIELDS,
-  ...PORTFOLIO_FIELDS,
   ...TRADE_HISTORY_FIELDS,
   ...SIGNAL_TRACE_FIELDS,
   ...DOWNLOAD_FIELDS,

@@ -240,7 +240,11 @@ from backend_app.backend.strategy_lifecycle import (
     LifecycleRejected,
     binding_state,
 )
-from backend_app.backend.strategy_service import DeployPrerequisiteError, StrategyService
+from backend_app.backend.strategy_service import (
+    DeployPrerequisiteError,
+    DeploymentConflict,
+    StrategyService,
+)
 from backend_app.backend.deployment_binding import DeployRejected
 
 
@@ -371,6 +375,19 @@ def _user() -> Dict[str, Any]:
     return {"id": USER_ID, "email": "race@example.com", "access_token": "tok_12_6"}
 
 
+# RT-02: deploy now refuses a version whose blueprint the runtime cannot start BEFORE any row
+# is written. These tests are about the lifecycle, not the blueprint, so they use the smallest
+# STARTABLE (legacy-shaped) blueprint; graph-shaped deploys are covered by
+# tests/test_rt02_builder_strategy_runs_on_deployment_runtime.py.
+_STARTABLE_BLUEPRINT = {
+    "nodes": [],
+    "edges": [],
+    "exchange_id": "binance",
+    "buy_logic": {"op": "AND", "conditions": []},
+    "sell_logic": {"op": "AND", "conditions": []},
+    "risk": {"trade_size_pct": 1.0, "stop_loss_pct": 2.0, "take_profit_pct": 4.0},
+}
+
 def _compiled_plan(dag_hash: str) -> Dict[str, Any]:
     return {
         "dag_hash": dag_hash,
@@ -419,7 +436,7 @@ def _fresh_world(*, seed_running_deployment: bool) -> _FakeSupabase:
                 "id": version_id,
                 "strategy_id": STRATEGY_ID,
                 "version": VERSION_LABEL,
-                "blueprint": {"nodes": [], "edges": []},
+                "blueprint": dict(_STARTABLE_BLUEPRINT),
                 "validation_state": "VALID",
                 "dag_hash": "d" * 16,
                 "compiled_plan": _compiled_plan("d" * 16),
@@ -499,7 +516,10 @@ def _service_on(sb: _FakeSupabase) -> StrategyService:
 # every individual call succeeds.
 # ══════════════════════════════════════════════════════════════════════════
 
-_EXPECTED = (LifecycleRejected, ArchiveRejected, DeployPrerequisiteError, DeployRejected, ValueError)
+# DEPLOY-DUP-01: a second deploy while one is active is now refused at app level
+# (DeploymentConflict, a 409) before the DB unique index would reject it.
+_EXPECTED = (LifecycleRejected, ArchiveRejected, DeployPrerequisiteError, DeployRejected,
+             DeploymentConflict, ValueError)
 
 
 async def _op_start(sb: _FakeSupabase, deployment_id: Optional[str]) -> None:
@@ -738,35 +758,25 @@ async def test_the_four_operations_can_land_running_but_deleted(_seeded_asset_un
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
-        "REQUIREMENT 2.16 IS VIOLATED TODAY AT THE APPLICATION LAYER, AND THIS TEST IS "
-        "THE PROOF -- two concurrent deploy calls racing a stop produced two "
-        "simultaneously `running` deployment rows for one strategy in 12 of 12 seeded "
-        "runs. Same absence of synchronisation as the sibling above. "
-        "THE DATABASE DOES GUARD THIS ONE. "
-        "backend_app/migrations/021_strategy_deployment_live_uniqueness.sql carries a "
-        "partial unique index that makes the losing deploy fail with 23505, and "
-        "tests/test_strategy_lifecycle_concurrency_postgres.py proves it against a real "
-        "server in the `database-tests` job. This test drives the SQLite-backed "
-        "application layer, which cannot see that index, so what it measures is the "
-        "application-level gap specifically -- real, but not the only line of defence. "
-        "Marked xfail(strict=True) for the same reason as the sibling: the `unit-tests` "
-        "lane has never run before now, and a deliberately-failing test in a lane that "
-        "gates merges is indistinguishable from a regression. Delete the marker with "
-        "the application-level guard."
+        "DEPLOY-DUP-01 added an application-level pre-check that refuses a deploy while the "
+        "strategy already has an active deployment, which closes the SEQUENTIAL case. It is "
+        "check-then-act, so two deploys that both read before either inserts (this test's "
+        "stop + deploy + deploy interleaving) can still both pass it: CI saw 11/12 double "
+        "deploys on 2026-11-15 while a local run saw 0/12. Non-strict because the outcome "
+        "depends on scheduling. The DATABASE guards this: the partial unique index "
+        "uq_strategy_deployments_one_live_per_user makes the losing insert fail with 23505, "
+        "proven in tests/test_strategy_lifecycle_concurrency_postgres.py. This test drives "
+        "the SQLite-backed layer, which cannot see that index."
     ),
 )
 async def test_deploy_can_race_itself_into_a_double_deploy(_seeded_asset_universe) -> None:
     """Two ``deploy`` attempts racing one ``stop``, on an already-running strategy, across
     12 seeds - the shape most directly named by "no double deploy".
 
-    THIS TEST IS EXPECTED TO FAIL TODAY, for the same reason as
-    :func:`test_the_four_operations_can_land_running_but_deleted` above: two concurrent
-    ``deploy_version`` calls each read the strategy's archival state once, early, and
-    reserve quota and INSERT independently with no constraint spanning the two new rows
-    (the migrations audit in the module docstring confirms no such constraint exists), so
-    both can land as ``running`` deployments for the same strategy at once.
+    Two concurrent ``deploy_version`` calls can each pass the DEPLOY-DUP-01 pre-check and
+    insert their own row; see the xfail reason. The DB unique index is the real guard.
     """
     violations: List[str] = []
     for i in range(12):
@@ -782,8 +792,7 @@ async def test_deploy_can_race_itself_into_a_double_deploy(_seeded_asset_univers
         violations.extend(_violations(sb, seed=f"double-deploy-{i}"))
 
     assert not violations, (
-        f"{len(violations)}/12 interleavings produced a double deploy (expected today - "
-        "see this test's docstring): " + " | ".join(violations)
+        f"{len(violations)}/12 interleavings produced a double deploy: " + " | ".join(violations)
     )
 
 

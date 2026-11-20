@@ -251,7 +251,7 @@
  * @module pages/LiveTrading
  */
 
-import { memo, useCallback, useId, useMemo, useState } from "react";
+import { memo, useCallback, useId, useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw, Server } from "lucide-react";
 
 import { dashboardApi } from "../api/modules/dashboard";
@@ -307,6 +307,7 @@ import { available, fromNullable, unavailable } from "../design/reported";
 import { useConnectionStatus } from "../hooks/useConnectionStatus";
 import { useLiveChannel } from "../hooks/useLiveChannel";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
+import { REFRESH } from "../hooks/useAutoRefresh";
 /*
  * `pages/Dashboard.jsx`'s two readings of the same payload, imported rather than copied.
  *
@@ -1356,7 +1357,7 @@ const DEPLOYMENT_STATUS_KEY = "status";
  * paraphrasing it shorter. So the three constants below are the paragraph's own three
  * sentences, cut at the full stops and otherwise untouched:
  *
- *     `${CLAIM} ${WHY} ${ACTION}` — the 384 characters, character for character
+ *     `${CLAIM} ${WHY} ${ACTION}` — the 306 characters since LT-01, character for character
  *
  * `liveTrading.test.jsx` asserts that join and its length, so an edit that shortens one of
  * the three fails rather than passes. {@link REGISTRY_CAVEAT_WHY} is the only piece that is
@@ -1374,10 +1375,12 @@ const REGISTRY_CAVEAT_CLAIM = "This list may be incomplete.";
  * "It" is "This list" — {@link REGISTRY_CAVEAT_CLAIM}, which is why that sentence stays on the
  * surface rather than moving in here with this one.
  */
+// LT-01: the list now reads the `strategy_deployments` records (it used to read only the
+// in-process registry, which no fleet-started deployment ever entered). What can still be
+// missing is a deployment beyond the newest 50 per strategy, so that is what this now says.
 const REGISTRY_CAVEAT_WHY =
-  "It reports the deployments the backend process currently "
-  + "holds in memory, so one started by an earlier process — before a restart, or on another "
-  + "worker — is not listed here even though it is still recorded and may still be trading.";
+  "It reads each strategy's 50 most recent deployment records, so an older one is not "
+  + "listed here even though it is still recorded and may still be trading.";
 
 /**
  * The actionable sentence, and the reason this caveat is safety-relevant rather than
@@ -2267,13 +2270,13 @@ export default function LiveTrading() {
     // against: a frame published before it is a replay, and rendering one would put a
     // superseded figure back on screen (Requirement 14.5).
     lastUpdated: exchangeSyncedAt,
-  } = usePanelState(readDashboard);
+  } = usePanelState(readDashboard, { intervalMs: REFRESH.LIVE });
   const {
     data: strategiesPayload,
     error: strategiesError,
     refetch: refetchStrategies,
     state: strategiesState,
-  } = usePanelState(readStrategies);
+  } = usePanelState(readStrategies, { intervalMs: REFRESH.LIVE });
 
   /** This browser's socket, which is not a fact about any exchange. */
   const socketStatus = useConnectionStatus();
@@ -2298,10 +2301,18 @@ export default function LiveTrading() {
    * `usePanelState` discards. `enabled` false while the list is empty is what makes "no
    * strategies" cost no requests at all.
    */
-  const strategyIds = useMemo(
+  const freshStrategyIds = useMemo(
     () => reportedAcross(strategiesBody, STRATEGY_ID_PATH),
     [strategiesBody],
   );
+  // The strategies panel now polls, so its payload is a new object every tick. The id list
+  // keeps its identity while its contents are unchanged; otherwise every poll would be a
+  // "new question" for the deployments read and blank it back to `loading`.
+  const strategyIdsRef = useRef(freshStrategyIds);
+  if (strategyIdsRef.current.join('\u0000') !== freshStrategyIds.join('\u0000')) {
+    strategyIdsRef.current = freshStrategyIds;
+  }
+  const strategyIds = strategyIdsRef.current;
 
   const readDeployments = useCallback(() => readDeploymentUnion(strategyIds), [strategyIds]);
   const {
@@ -2312,6 +2323,7 @@ export default function LiveTrading() {
   } = usePanelState(readDeployments, {
     deps: [strategyIds],
     enabled: strategyIds.length > 0,
+    intervalMs: REFRESH.LIVE,
   });
 
   const deploymentRows = useMemo(() => unionRows(deploymentsPayload), [deploymentsPayload]);
@@ -2403,7 +2415,11 @@ export default function LiveTrading() {
     // different times and gating an `orders` frame against the wrong one would discard a
     // frame that is newer than the read it would supersede.
     lastUpdated: ordersSyncedAt,
-  } = usePanelState(readOrders, { deps: [ordersVenue], enabled: ordersVenue !== null });
+  } = usePanelState(readOrders, {
+    deps: [ordersVenue],
+    enabled: ordersVenue !== null,
+    intervalMs: REFRESH.LIVE,
+  });
 
   /**
    * The market the reported open position is in — the `pnl` stream's filter, not a figure.

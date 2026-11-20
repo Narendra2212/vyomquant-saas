@@ -241,6 +241,7 @@ from backend_app.backend.paper.paper_market_feed import (
     canonical_number,
 )
 from backend_app.backend.paper.paper_order_state import (
+    LEGACY_STATUS_FOR_STATE,
     PaperOrderState,
     can_transition,
     is_terminal,
@@ -2870,173 +2871,153 @@ async def apply_fill(
                 details={"order_id": order_id, "session_id": session_id},
             ) from exc
 
-        # ── write 1: the fill row, the idempotency anchor (skipped on a resume) ──
-        if resumed_fill is None:
-            try:
-                fill_row = repo.insert_fill(
-                    supabase,
-                    order_id=order_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    fill_event_id=event_id,
-                    quantity=fill_qty,
-                    price=fill_price,
-                    fee_minor=_minor_units(fee, config, "fee_minor"),
-                    slippage_minor=_minor_units(slippage, config, "slippage_minor"),
-                    market_event_id=market_event_id,
-                    filled_at=filled_at,
-                )
-            except repo.PaperDuplicateFill:
-                # ``uq_paper_fill_event`` refused: a concurrent writer inserted this event between
-                # guard 2 and here. That writer owns the movement, so this call changes nothing -
-                # which is exactly Requirement 16.9's outcome, reached through the index rather
-                # than through the read.
-                logger.info(
-                    "[paper-simulator] fill %s on order %s was inserted concurrently; this call "
-                    "changed nothing (Requirement 16.9)",
-                    event_id,
-                    order_id,
-                )
-                return FillOutcome(FILL_DUPLICATE, order=order_row, attempts=number)
-        else:
-            fill_row = resumed_fill
+        # ── THE SEVEN WRITES, NOW ONE ATOMIC CALL (PAPER-05) ──
+        #
+        # ``paper_fills`` -> ``paper_accounts`` -> ``paper_balance_events`` ->
+        # ``paper_positions`` (up to twice) -> ``paper_orders`` -> ``paper_trades`` (when a
+        # position closed) -> ``paper_equity_snapshots``, committed together in ONE call to
+        # ``public.paper_apply_fill_atomic`` (``048_paper05_apply_fill_atomic.sql``) instead of
+        # seven separate statements. The guards above decided everything this call needs -
+        # whether to resume an existing fill row, the new account balances, the new position,
+        # the order's target state, whether a leg closed, whether a round-trip closed - and
+        # this call only commits what was decided. See the migration file's own header for
+        # what genuinely changes: the "fill row exists, ledger does not" state this module's
+        # own resume logic exists to repair becomes unreachable for a fill applied THROUGH this
+        # call, because there is no commit boundary between any two of the seven writes any
+        # more for a crash to land on. ``_NoRetryPastTheMoney`` and
+        # ``PaperConcurrencyExhausted(partial_write=True)`` remain below for the residual cases
+        # that call documents (pre-migration data; an error this function's own PA001/PA002/PA003
+        # classification does not recognise) - they are not removed, because this one call is
+        # not a transaction this module can prove is the ONLY way into this state, only the only
+        # way a NEW fill can reach it.
+        new_position = result.position
+        closed_leg_payload: Optional[Dict[str, Any]] = None
+        if (
+            existing_position is not None
+            and existing_position.is_open
+            and existing_position.side != new_position.side
+        ):
+            closed_leg_payload = {
+                "side": existing_position.side,
+                "entry_price": existing_position.entry_price,
+                "opened_at": existing_position.opened_at or filled_at,
+            }
 
-        # ── write 2: the money. Past this point nothing is retried (see the docstring). ──
-        account_after = repo.bump_version(
-            supabase,
-            user_id=user_id,
-            account_id=account_id,
-            expected_version=account_row["version"],
-            payload={
-                "available_balance": result.account.available_balance,
-                "locked_balance": result.account.locked_balance,
-                "realized_pnl": result.account.realized_pnl,
-                "total_equity": result.account.total_equity,
-                "last_price_at": filled_at,
-                "stale": False,
-            },
+        fee_minor = _minor_units(fee, config, "fee_minor")
+        slippage_minor = _minor_units(slippage, config, "slippage_minor")
+        this_fill_totals = {
+            "quantity": fill_qty,
+            "price": fill_price,
+            "fee_minor": fee_minor,
+            "slippage_minor": slippage_minor,
+        }
+        _, notional, _, _ = _fill_event_totals(
+            [row for row in fill_rows if row is not resumed_fill] + [this_fill_totals], config
         )
 
-        with _NoRetryPastTheMoney("apply_fill", order_id, session_id):
-            # write 3: the ledger row, which is also what marks this fill as settled for the
-            # resume above. It carries ``fill_id``, so the marker and the money are tied together.
-            balance_event = repo.insert_balance_event(
-                supabase,
-                account_id=account_id,
-                user_id=user_id,
-                session_id=session_id,
-                cause="FILL",
-                available_delta=result.available_delta,
-                locked_delta=result.locked_delta,
-                realized_delta=result.realized_delta,
-                available_after=result.account.available_balance,
-                locked_after=result.account.locked_balance,
-                realized_after=result.account.realized_pnl,
-                fill_id=fill_row["id"],
-                occurred_at=filled_at,
-            )
+        trade_payload: Optional[Dict[str, Any]] = None
+        if result.closed_trade is not None:
+            closed = result.closed_trade
+            trade_payload = {
+                "symbol": closed.symbol,
+                "side": closed.side,
+                "quantity": closed.quantity,
+                "entry_price": closed.entry_price,
+                "exit_price": closed.exit_price,
+                "realized_pnl": closed.realized_pnl,
+                "fee_minor": _minor_units(closed.fee, config, "fee_minor"),
+                "opened_at": closed.opened_at or filled_at,
+                "closed_at": closed.closed_at or filled_at,
+            }
 
-            # write 4: the position. A reversal through zero writes the closed leg in its own row
-            # first, so its history is not overwritten by the side that replaced it - the same two
-            # statements ``paper_trading_service._execute_fill`` issues, and for the same reason.
-            closed_row: Optional[Mapping[str, Any]] = None
-            new_position = result.position
-            if (
-                existing_position is not None
-                and existing_position.is_open
-                and existing_position.side != new_position.side
-            ):
-                closed_row = repo.upsert_position(
-                    supabase,
-                    account_id=account_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    symbol=symbol,
-                    side=existing_position.side,
-                    size=_ZERO,
-                    entry_price=existing_position.entry_price,
-                    opened_at=existing_position.opened_at or filled_at,
-                    current_price=fill_price,
-                    unrealized_pnl=_ZERO,
-                    price_at=filled_at,
-                    closed_at=filled_at,
-                )
-            position_row = repo.upsert_position(
+        try:
+            rpc_result = repo.apply_fill_atomic(
                 supabase,
+                user_id=user_id,
                 account_id=account_id,
-                user_id=user_id,
-                session_id=session_id,
-                symbol=symbol,
-                side=new_position.side,
-                size=new_position.size,
-                entry_price=new_position.entry_price,
-                opened_at=new_position.opened_at or filled_at,
-                current_price=new_position.current_price,
-                unrealized_pnl=new_position.unrealized_pnl,
-                price_at=filled_at,
-                closed_at=new_position.closed_at,
-            )
-
-            # write 5: the order state. ``target`` was decided by guard 4 - PARTIALLY_FILLED or
-            # FILLED according to whether the cumulative filled quantity equals the ordered
-            # quantity (Requirements 16.13, 16.14) - with every derived column recomputed from the
-            # fill ROWS rather than incremented. ``update_order``'s own transition check and
-            # ``trg_paper_order_transition_guard`` remain the durable guarantees; guard 4 is what
-            # makes the refusal arrive before any statement.
-            _, notional, _, _ = _fill_event_totals(
-                [row for row in fill_rows if row is not resumed_fill] + [dict(fill_row)], config
-            )
-            order_after = repo.update_order(
-                supabase,
-                user_id=user_id,
                 order_id=order_id,
-                order_state=target,
-                expected_state=state,
-                filled_quantity=filled_quantity,
-                avg_fill_price=accounting.price(notional / filled_quantity),
-                fee_minor=prior_fee_minor + _minor_units(fee, config, "fee_minor"),
-                slippage_minor=(
-                    prior_slippage_minor + _minor_units(slippage, config, "slippage_minor")
-                ),
-            )
-
-            # write 6: the closed round-trip, only when a position reached size zero
-            # (Requirement 18.10).
-            trade_row: Optional[Mapping[str, Any]] = None
-            if result.closed_trade is not None:
-                closed = result.closed_trade
-                trade_row = repo.insert_trade(
-                    supabase,
-                    account_id=account_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    symbol=closed.symbol,
-                    side=closed.side,
-                    quantity=closed.quantity,
-                    entry_price=closed.entry_price,
-                    exit_price=closed.exit_price,
-                    realized_pnl=closed.realized_pnl,
-                    fee_minor=_minor_units(closed.fee, config, "fee_minor"),
-                    opened_at=closed.opened_at or filled_at,
-                    closed_at=closed.closed_at or filled_at,
-                )
-
-            # write 7: the equity point (Requirement 18.11). One per APPLIED fill and none for a
-            # repeated fill_event_id, because guard 2 returns before reaching here
-            # (Requirement 18.13).
-            snapshot_row = repo.insert_equity_snapshot(
-                supabase,
-                user_id=user_id,
                 session_id=session_id,
-                series_index=series_index,
-                total_equity=result.account.total_equity,
-                available_balance=result.account.available_balance,
-                locked_balance=result.account.locked_balance,
-                position_market_value=result.position_market_value,
-                stale=False,
-                cause="FILL",
-                taken_at=filled_at,
+                fill_event_id=event_id,
+                expected_account_version=account_row["version"],
+                expected_order_state=state.value,
+                resume_fill_id=resumed_fill["id"] if resumed_fill is not None else None,
+                fill={
+                    "quantity": fill_qty,
+                    "price": fill_price,
+                    "fee_minor": fee_minor,
+                    "slippage_minor": slippage_minor,
+                    "market_event_id": market_event_id,
+                    "filled_at": filled_at,
+                },
+                account={
+                    "available_balance": result.account.available_balance,
+                    "locked_balance": result.account.locked_balance,
+                    "realized_pnl": result.account.realized_pnl,
+                    "total_equity": result.account.total_equity,
+                },
+                balance_event={
+                    "available_delta": result.available_delta,
+                    "locked_delta": result.locked_delta,
+                    "realized_delta": result.realized_delta,
+                    "occurred_at": filled_at,
+                },
+                order={
+                    "target_state": target.value,
+                    "legacy_status": LEGACY_STATUS_FOR_STATE[target],
+                    "filled_quantity": filled_quantity,
+                    "avg_fill_price": accounting.price(notional / filled_quantity),
+                    "fee_minor": prior_fee_minor + fee_minor,
+                    "slippage_minor": prior_slippage_minor + slippage_minor,
+                },
+                position={
+                    "symbol": symbol,
+                    "side": new_position.side,
+                    "size": new_position.size,
+                    "entry_price": new_position.entry_price,
+                    "opened_at": new_position.opened_at or filled_at,
+                    "current_price": new_position.current_price,
+                    "unrealized_pnl": new_position.unrealized_pnl,
+                    "price_at": filled_at,
+                    "closed_at": new_position.closed_at,
+                },
+                equity_snapshot={
+                    "series_index": series_index,
+                    "total_equity": result.account.total_equity,
+                    "available_balance": result.account.available_balance,
+                    "locked_balance": result.account.locked_balance,
+                    "position_market_value": result.position_market_value,
+                    "stale": False,
+                    "taken_at": filled_at,
+                },
+                closed_leg=closed_leg_payload,
+                trade=trade_payload,
             )
+        except repo.PaperDuplicateFill:
+            # PA002: a concurrent writer inserted this exact fill_event_id between guard 2 and
+            # this call. That writer owns the movement, so this call changes nothing - exactly
+            # Requirement 16.9's outcome, reached through the database's own index rather than
+            # through the read.
+            logger.info(
+                "[paper-simulator] fill %s on order %s was inserted concurrently; this call "
+                "changed nothing (Requirement 16.9)",
+                event_id,
+                order_id,
+            )
+            return FillOutcome(FILL_DUPLICATE, order=order_row, attempts=number)
+        # PaperConcurrencyConflict (PA001) is deliberately NOT caught here: it propagates
+        # unchanged, and the caller's existing retry loop (with_retries, task 25.6, via
+        # :func:`_is_retryable`) already treats it as the signal to re-read everything and
+        # recompute the whole attempt - precisely what it did for the optimistic conflict the
+        # separate bump_version/update_order calls used to raise.
+
+        fill_row = rpc_result["fill"]
+        account_after = rpc_result["account"]
+        balance_event = rpc_result["balance_event"]
+        position_row = rpc_result["position"]
+        closed_row = rpc_result.get("closed_position")
+        order_after = rpc_result["order"]
+        trade_row = rpc_result.get("trade")
+        snapshot_row = rpc_result["snapshot"]
 
         logger.info(
             "[PAPER_FILL] user=%s session=%s order=%s event=%s sym=%s side=%s qty=%s px=%s "

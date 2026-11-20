@@ -145,7 +145,11 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
     // which is what that pill claimed. The marker carries the reason instead.
     expect(screen.getByLabelText('Account status: not available')).toBeDefined();
     expect(screen.queryByText('ACCOUNT ACTIVE')).toBeNull();
-    expect(screen.getByText('Enterprise Tier')).toBeDefined();
+    // PROFILE-REORG-01: `Tier: Enterprise Tier`. Since the Subscription & Plan panel was
+    // removed the tier is reported only by the page header's meta chip, whose text node
+    // carries the `Tier:` prefix — so an exact match on the bare label no longer finds it.
+    // This is the assertion proving `getBillingPlan` is still read and still rendered.
+    expect(screen.getByText(/Tier: Enterprise Tier/)).toBeDefined();
     // Member since is real and still rendered, now with its own declared reason behind it.
     expect(screen.getByText('Jan 2026')).toBeDefined();
   });
@@ -178,10 +182,23 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
     fireEvent.click(mfaBtn);
     expect(mockNavigate).toHaveBeenCalledWith('/app/2fa');
 
-    // Verify Review All Logs navigation
-    const reviewLogsBtn = screen.getByText(/Review All Logs/i);
-    fireEvent.click(reviewLogsBtn);
-    expect(mockNavigate).toHaveBeenCalledWith('/app/security-logs');
+    /*
+      SECLOG-REMOVED-01 (2026-11-15): the *Review All Logs* assertion that stood here is
+      inverted rather than deleted.
+
+      It clicked the command and expected `navigate('/app/security-logs')`. That route is
+      withdrawn, so the control is gone too -- leaving it would have navigated to a path the
+      `/app/*` catch-all redirects to the dashboard, which is a worse answer than offering
+      nothing.
+
+      Asserting its ABSENCE, not just dropping the lines, is what stops the control being
+      reintroduced by a later pass that only reads the page and not this history.
+    */
+    expect(screen.queryByText(/Review All Logs/i)).toBeNull();
+
+    // The panel it sat on is untouched and still reports this account's access events, so the
+    // data behind the removed link is still on the page.
+    expect(screen.getByText(/Recent access/i)).toBeTruthy();
   });
 
   // 5 & 6. Automation Account Context & Contextual Navigation
@@ -195,53 +212,64 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    // Was `'Automation Account Context'`. The four figures under that title came from the
-    // PLATFORM-WIDE statistics endpoint, so the title was the claim rather than the figures.
-    expect(await screen.findByText('Platform-wide statistics')).toBeDefined();
-    expect(screen.getByText(/reports across all accounts rather than yours/i)).toBeDefined();
-    expect(screen.getByText('8')).toBeDefined(); // Active bots, platform-wide
-    // Was `/Total Strategies: 20/` — a label and a figure in one text node. They are a
-    // `ds/Metric` label and value now, and the label says whose figure it is.
-    expect(screen.getByText('Strategies (platform)')).toBeDefined();
-    expect(screen.getByText('20')).toBeDefined();
+    /*
+      PROFILE-REORG-01 INVERTED THIS CASE.
 
-    const manageExchangesBtn = screen.getByRole('button', { name: /Manage Exchanges/i });
-    fireEvent.click(manageExchangesBtn);
-    expect(mockNavigate).toHaveBeenCalledWith('/app/exchange');
+      It asserted the *Platform-wide statistics* panel and its four figures. Task 13 removes
+      that panel from Profile: the figures come from `GET /api/stats`, which reports the
+      PLATFORM rather than this account, and an account page is the wrong place to report
+      somebody else's totals. The prose this case used to match on
+      ("reports across all accounts rather than yours") was the panel admitting as much.
 
-    const manageStrategiesBtn = screen.getByRole('button', { name: /Manage Strategies/i });
-    fireEvent.click(manageStrategiesBtn);
-    expect(mockNavigate).toHaveBeenCalledWith('/app/strategies');
+      THE TWO NAVIGATION BUTTONS WENT WITH IT, because they were that panel's `actions`.
+      That is not a lost destination: `/app/exchange` and `/app/strategies` are both in the
+      account menu's "Trading setup" group, and `shell/accountMenu.test.jsx` holds them there
+      through its `DEFERRED_ROUTES` list. So the route coverage moved rather than vanished,
+      which is why this case does not try to keep a button that no longer has a panel.
+
+      Asserting ABSENCE, not just dropping the lines: that is what stops the panel being
+      reinstated by a later pass that reads the page and not this history.
+    */
+    expect(screen.queryByText('Platform-wide statistics')).toBeNull();
+    expect(screen.queryByText(/reports across all accounts rather than yours/i)).toBeNull();
+    expect(screen.queryByText('Strategies (platform)')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Manage Exchanges/i })).toBeNull();
+
+    // The panels Task 13 keeps are still here, so the removal did not take the page with it.
+    expect(screen.getByText('Account identity')).toBeDefined();
+    expect(screen.getByText('Security & Access')).toBeDefined();
   });
 
-  // 7, 8, 9. Notification Categories & Boolean Payload Safety
-  it('7, 8, 9. Categorized notifications render supported event keys and send clean boolean payloads', async () => {
+  /*
+    7, 8, 9 MOVED to tests/unit/components/notificationPreferences.test.jsx.
+
+    The categorised switches and the boolean-payload assertion were never about Profile — they
+    are about the preferences panel, which PROFILE-REORG-01 relocated to the Notifications
+    module (Task 13, and Task 10 from the other side). The assertions are unchanged in their
+    new home; only the component rendered differs.
+
+    What stays HERE is the one thing this file can still state about Profile: that the panel
+    is no longer on it.
+  */
+  it('7, 8, 9. the notification preferences are no longer on Profile', async () => {
     vi.spyOn(userModule.userApi, 'getProfile').mockResolvedValue(mockValidProfile);
     vi.spyOn(userModule.userApi, 'getBillingPlan').mockResolvedValue(mockValidBilling);
     vi.spyOn(referralModule.referralApi, 'getStats').mockResolvedValue(mockValidReferral);
-    vi.spyOn(userModule.userApi, 'getStats').mockResolvedValue(mockValidStats);
     vi.spyOn(userModule.userApi, 'getSecurityLogs').mockResolvedValue(mockValidSecurityLogs);
-    vi.spyOn(userModule.userApi, 'getNotificationSettings').mockResolvedValue(mockValidNotificationSettings);
 
-    const updateNotifSpy = vi.spyOn(userModule.userApi, 'updateNotificationSettings').mockResolvedValue({ status: 'ok' });
+    const updateNotifSpy = vi
+      .spyOn(userModule.userApi, 'updateNotificationSettings')
+      .mockResolvedValue({ status: 'ok' });
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText(/Notification Dispatch Preferences/i)).toBeDefined();
-    expect(screen.getByText('Trade Executions')).toBeDefined();
-    expect(screen.getByText('Stop Loss & Margin Alerts')).toBeDefined();
-    expect(screen.getByText('Emergency Kill Switch & Liquidations')).toBeDefined();
-    expect(screen.getByText('Email Notifications')).toBeDefined();
-
-    // Toggle Trade Executions
-    const tradeToggle = screen.getByText('Trade Executions').closest('div[style*="cursor: pointer"]');
-    fireEvent.click(tradeToggle);
-
-    await waitFor(() => {
-      expect(updateNotifSpy).toHaveBeenCalledWith(expect.objectContaining({
-        events: expect.objectContaining({ trade_executed: false })
-      }));
-    });
+    expect(await screen.findByText('Account identity')).toBeDefined();
+    expect(screen.queryByText(/Notification Dispatch Preferences/i)).toBeNull();
+    expect(screen.queryByText('Trade Executions')).toBeNull();
+    expect(screen.queryByText('Email Notifications')).toBeNull();
+    // And Profile writes no preference, which is the half that matters: two pages writing the
+    // same settings through two code paths is what the extraction exists to prevent.
+    expect(updateNotifSpy).not.toHaveBeenCalled();
   });
 
   // 10. Billing Plan Mapping & Navigation
@@ -255,13 +283,27 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Subscription & Plan')).toBeDefined();
-    expect(screen.getByText('Enterprise Tier')).toBeDefined();
-    expect(screen.getByText(/Dedicated Co-location/i)).toBeDefined();
+    /*
+      PROFILE-REORG-01 INVERTED THIS CASE TOO, and this one needs care, because the panel is
+      gone but PART of what it showed is not.
 
-    const manageSubBtn = screen.getByRole('button', { name: /Manage Subscription/i });
-    fireEvent.click(manageSubBtn);
-    expect(mockNavigate).toHaveBeenCalledWith('/app/billing');
+      The *Subscription & Plan* panel is removed: the owner confirmed it duplicated the
+      Billing & plan page, so it cost a read and a panel to restate what `/app/billing`
+      already says, and *Manage Subscription* went with it — `/app/billing` is in the account
+      menu's Account group, held there by `shell/accountMenu.test.jsx`.
+
+      BUT `getBillingPlan` IS STILL CALLED and the tier is still rendered, because Account
+      identity carries the plan as a chip and Task 13 keeps that panel. So this case asserts
+      the panel's absence AND the chip's survival — the asymmetry is the whole point, and a
+      test that only checked for absence would have been satisfied by dropping the read too.
+    */
+    expect(await screen.findByText('Account identity')).toBeDefined();
+    expect(screen.queryByText('Subscription & Plan')).toBeNull();
+    expect(screen.queryByText(/Dedicated Co-location/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Manage Subscription/i })).toBeNull();
+
+    // The header's tier chip, which reads the same billing response the removed panel did.
+    expect(screen.getByText(/Tier: Enterprise Tier/)).toBeDefined();
   });
 
   // 11. Referral Card Lowered Priority & Copy Buttons

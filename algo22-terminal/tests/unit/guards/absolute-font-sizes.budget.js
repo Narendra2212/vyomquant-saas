@@ -963,8 +963,18 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // line is not the remedy.
   // 10×1, `text-[Npx]`. RESTING.
   'components/download/DownloadPage.jsx': 1,
-  // 10×1, `text-[Npx]`. Blind spot 2 also counts 52 built-in `text-*` classes
-  // here, the largest concentration in `src/`, and those are out of scope per O1.
-  // RESTING.
-  'components/admin/AdminDashboard.jsx': 1,
+  // `components/admin/AdminDashboard.jsx: 1` stood here — 10×1, `text-[Npx]` — and
+  // reached zero as a SIDE EFFECT rather than by a typography task: commit dba2be4b
+  // (DEPLOY-05) removed the vestigial download-analytics block this page carried, and the
+  // page's last absolute size went with it. The file now has no `text-[Npx]` and no
+  // `fontSize` at all.
+  //
+  // The entry is DELETED rather than lowered to 0 (Requirement 1.5), the same discharge
+  // `components/charts/ChartTheme.jsx` took above. The file stays held at zero by
+  // `accounts for every file that still carries an absolute size`: a px size returning
+  // here fails as UNBUDGETED, and re-adding this line is not the remedy.
+  //
+  // Blind spot 2's count of 52 built-in `text-*` classes on this page is unaffected and
+  // still out of scope per O1 — that is a different measurement, and this entry never
+  // held it.
 });

@@ -213,6 +213,82 @@ class TestExistingWorkflowCheckIsGeneralisedNotReplaced:
         assert "SECURITY VIOLATION: Service role key found in frontend build" in text
 
 
+class TestThisSweepCanActuallyRun:
+    """The sweep is only as good as its ability to be collected.
+
+    ``01-pr-check.yml``'s ``frontend-build`` job runs this file with ONLY pytest
+    installed -- it scans an already-built bundle and has no business with the database.
+    ``tests/conftest.py``'s autouse fixtures therefore guard their backend imports, and
+    say so in their docstrings.
+
+    One did not. ``_no_on_demand_venue_quotes`` (added for PAPER-02) imported
+    ``backend_app.backend.paper_trading_service`` unguarded, and because autouse means
+    every collected test requests it, BOTH tests below errored at setup with
+    ``ModuleNotFoundError: No module named 'pydantic'``. The job reported
+    ``5 deselected, 2 errors`` and scanned nothing.
+
+    So a blocking check for a leaked credential in a shipped bundle was inert -- the same
+    class of failure the workflow comment above these steps describes, where the sweep was
+    gated behind something less serious and never ran. The step order was fixed; this was
+    not, because nothing asserted it.
+
+    Static analysis, deliberately: this cannot be tested by importing, since in the lane
+    where this assertion runs the backend imports fine. It reads conftest's source.
+    """
+
+    @pytest.mark.frontend_bundle
+    def test_no_autouse_fixture_imports_the_backend_unguarded(self):
+        import ast
+
+        conftest = Path(__file__).resolve().parent / "conftest.py"
+        tree = ast.parse(conftest.read_text(encoding="utf-8"))
+
+        def is_autouse(node) -> bool:
+            for deco in getattr(node, "decorator_list", []):
+                if not isinstance(deco, ast.Call):
+                    continue
+                for kw in deco.keywords:
+                    if kw.arg == "autouse" and getattr(kw.value, "value", False) is True:
+                        return True
+            return False
+
+        def backend_imports(node):
+            """(lineno, name) for every backend import, with whether a Try encloses it."""
+            found = []
+            for parent in ast.walk(node):
+                in_try = isinstance(parent, ast.Try)
+                for child in ast.walk(parent):
+                    if isinstance(child, ast.ImportFrom):
+                        name = child.module or ""
+                    elif isinstance(child, ast.Import):
+                        name = child.names[0].name if child.names else ""
+                    else:
+                        continue
+                    if name.startswith("backend_app"):
+                        found.append((child.lineno, name, in_try))
+            return found
+
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not is_autouse(node):
+                continue
+            seen = backend_imports(node)
+            # An import is guarded if ANY enclosing Try was recorded for it.
+            guarded = {(ln, nm) for ln, nm, in_try in seen if in_try}
+            for ln, nm, _ in seen:
+                if (ln, nm) not in guarded:
+                    offenders.append(f"{node.name} imports {nm} at conftest.py:{ln}")
+
+        assert not offenders, (
+            "an autouse fixture imports the backend without a try/except, so every "
+            "collected test -- including this bundle sweep, which CI runs with only "
+            "pytest installed -- fails at SETUP and scans nothing:\n  "
+            + "\n  ".join(sorted(set(offenders)))
+        )
+
+
 class TestNoSecretKeyNameInTheBundle:
     """Requirement 1.20 / 2.20, generalised name sweep."""
 

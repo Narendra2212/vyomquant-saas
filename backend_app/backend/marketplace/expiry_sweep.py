@@ -758,6 +758,88 @@ async def sweep(
 # ══════════════════════════════════════════════════════════════════════════
 
 
+#: The status a LIVE deployment is moved to when its subscription expires. NOT
+#: ``STOPPED_DEPLOYMENT_STATUS``: a live bot runs in another process, and only that process
+#: can confirm the position is flat. ``'stopping'`` is the durable request it honours; it
+#: declares ``'stopped'`` itself afterwards, via ``DeploymentStateStore.mark_stopped``.
+STOPPING_DEPLOYMENT_STATUS = "stopping"
+
+#: The marketplace deployments this sweep may signal, split by what signalling one means.
+#: Read as a pair so the live/paper distinction is a data fact rather than an ``if`` buried
+#: in the loop, and so a test can assert on it directly.
+LIVE_DEPLOYMENT_MODE = "live"
+PAPER_DEPLOYMENT_MODE = "paper"
+
+
+async def _stop_deployments_for_record(
+    record: "ExpiredSubscription",
+    *,
+    supabase: Any,
+    stamp: str,
+) -> Tuple[int, int]:
+    """Signal this purchaser's deployments of this Listing. Returns ``(live, paper)`` counts.
+
+    Two statements rather than one, because a live deployment and a paper deployment need
+    different things done to them -- see the long comment at the call site. Both are scoped
+    by the ``(marketplace_listing_id, user_id)`` pair for the reason the caller's docstring
+    gives: another subscriber's still-paid deployment of the same Listing must not be
+    touched.
+
+    BOTH BRANCHES MATCH THEIR MODE BY EQUALITY, not one by exclusion of the other, and
+    that partition is only total because ``004e_deployment_bindings.sql`` declares
+    ``chk_sd_mode CHECK (mode IN ('paper','live'))`` on a ``NOT NULL`` column -- so there
+    is no third spelling and no NULL for either ``.eq`` to miss.
+
+    Writing the paper branch as ``mode <> 'live'`` instead would be worse rather than
+    equivalent: it would sweep an unexpected future spelling into the paper branch, which
+    forces the row to ``'stopped'`` -- the one disposition that is wrong for anything that
+    might actually be running, and precisely the defect this change exists to fix. With
+    two equalities, a row the vocabulary does not cover is left untouched and keeps being
+    bounded by ``master_executor.evaluate_authorization_window`` on the order path.
+
+    ``tests/test_mkt05_subscriber_live_deployment.py`` pins the vocabulary to exactly those
+    two values, so widening ``chk_sd_mode`` fails a test that points here rather than
+    silently leaving a mode unhandled.
+    """
+    live_rows = (
+        supabase.table(DEPLOYMENTS_TABLE)
+        .update(
+            {
+                # No `stopped_at`: this deployment has not stopped yet, it has been asked
+                # to. Stamping a stop time here would make the row claim something that
+                # has not happened, and `DeploymentStateStore.mark_stopped` sets it for
+                # real when the owning process confirms.
+                "status": STOPPING_DEPLOYMENT_STATUS,
+                "close_requested_at": stamp,
+                "updated_at": stamp,
+            }
+        )
+        .eq("marketplace_listing_id", record.listing_id)
+        .eq("user_id", record.user_id)
+        .eq("mode", LIVE_DEPLOYMENT_MODE)
+        .in_("status", list(STOPPABLE_DEPLOYMENT_STATUSES))
+        .execute()
+    )
+
+    paper_rows = (
+        supabase.table(DEPLOYMENTS_TABLE)
+        .update(
+            {
+                "status": STOPPED_DEPLOYMENT_STATUS,
+                "stopped_at": stamp,
+                "updated_at": stamp,
+            }
+        )
+        .eq("marketplace_listing_id", record.listing_id)
+        .eq("user_id", record.user_id)
+        .eq("mode", PAPER_DEPLOYMENT_MODE)
+        .in_("status", list(STOPPABLE_DEPLOYMENT_STATUSES))
+        .execute()
+    )
+
+    return len(_rows(live_rows)), len(_rows(paper_rows))
+
+
 async def stop_running_sessions_and_deployments(
     rows: Sequence[ExpiredSubscription],
     *,
@@ -810,22 +892,35 @@ async def stop_running_sessions_and_deployments(
             continue
 
         # ── Deployments: fully implemented. ──
+        #
+        # MKT-05: A LIVE DEPLOYMENT IS NOT STOPPED BY WRITING ITS ROW.
+        #
+        # For a PAPER marketplace deployment the UPDATE below is the whole story, because
+        # the subscriber deploy path starts no runtime at all -- there is nothing running
+        # to signal.
+        #
+        # A LIVE deployment is different in kind. A bot running in another process reads
+        # none of this, so jumping its row straight to 'stopped' leaves it placing real
+        # orders against a row that says it is finished, holding an open position nobody
+        # is managing. `backend/deployment_state.py`'s own docstring names that exact
+        # defect as the reason it exists, and its API is status-conditioned precisely so a
+        # late runtime report cannot overwrite a stop.
+        #
+        # So the live rows go to 'stopping' (the durable request the owning process
+        # honours) and get a `close_requested_at` flatten request (RT-21), and are NOT
+        # forced to 'stopped' here -- only the owner may declare that, once it has
+        # actually closed the position. The paper rows keep today's behaviour exactly.
+        #
+        # This is belt and braces, not the primary control. The primary control is
+        # `master_executor.evaluate_authorization_window`, which refuses orders on the
+        # ORDER PATH every tick, so a live deployment stops trading at its expiry instant
+        # even if this sweep never runs. A 30-second poller must not be the only thing
+        # standing between an expired subscription and someone's money.
         try:
-            response = (
-                supabase.table(DEPLOYMENTS_TABLE)
-                .update(
-                    {
-                        "status": STOPPED_DEPLOYMENT_STATUS,
-                        "stopped_at": stamp,
-                        "updated_at": stamp,
-                    }
-                )
-                .eq("marketplace_listing_id", record.listing_id)
-                .eq("user_id", record.user_id)
-                .in_("status", list(STOPPABLE_DEPLOYMENT_STATUSES))
-                .execute()
+            live_updated, paper_updated = await _stop_deployments_for_record(
+                record, supabase=supabase, stamp=stamp
             )
-            deployments_stopped += len(_rows(response))
+            deployments_stopped += live_updated + paper_updated
         except ExpirySweepFailed as exc:
             failures.append(
                 SweepFailure(

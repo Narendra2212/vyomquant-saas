@@ -426,13 +426,27 @@ class TestTheRouteDoesNotClaimSubmittedMeansApplied:
 
         ``owned["strategy"]["risk"]`` is already loaded by ``get_strategy``'s
         ``select("*")``; the handler used it for the archive check only.
+
+        READ AS A CHAIN, because the forwarding no longer lives in the route function.
+        ``execute_backtest`` became a delegation when the asynchronous sibling
+        ``.../backtests/start`` was added, and both routes now share
+        ``_execute_version_backtest``. So this asserts BOTH links: the route goes through
+        that core, and that core is what forwards ``strategy_risk``. Asserting only the
+        second would let a route stop using the core and still pass; asserting only the
+        first would not check the forwarding at all.
         """
         import inspect
 
         from backend_app.routers import strategy_operations as so
 
-        source = inspect.getsource(so.execute_backtest)
-        assert "strategy_risk" in source, (
-            "execute_backtest does not forward a strategy_risk argument, so the "
+        route_source = inspect.getsource(so.execute_backtest)
+        assert "_execute_version_backtest" in route_source, (
+            "execute_backtest no longer goes through _execute_version_backtest, so this "
+            "test is looking at the wrong function -- find where the run is issued now"
+        )
+
+        core_source = inspect.getsource(so._execute_version_backtest)
+        assert "strategy_risk" in core_source, (
+            "the shared backtest core does not forward a strategy_risk argument, so the "
             "simulator cannot know the strategy's configured per-trade risk"
         )

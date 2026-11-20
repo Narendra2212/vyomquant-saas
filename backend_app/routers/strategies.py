@@ -42,8 +42,8 @@ from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.core.event_bus import publish_command, PublishError
 from backend_app.core.rate_limit import limiter
 import ccxt
-from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
-from backend_app.backend.backtest_runtime import get_backtest_runtime
+from backend_app.backend.optimization_engine import OptimizationEngine, get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
+from backend_app.backend.backtest_runtime import BacktestRuntime, get_backtest_runtime
 # The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). It runs
 # BESIDE the owner-scoped predicates in this module, never in place of them: each call site
 # invokes it only where the handler had already decided to refuse, so an owner's behaviour is
@@ -494,10 +494,28 @@ async def _persist_current_version(
         ``StrategyBuilder.jsx``'s ``serverVersionLabel`` finds no label and its confirmation
         says "Saved" rather than naming a version that does not exist.
     """
+    from backend_app.backend.strategy_builder import LIFECYCLE_READY, LIFECYCLE_VALIDATED
     from backend_app.backend.strategy_service import get_strategy_service
 
     try:
         service = await get_strategy_service()
+        # LAUNCH AUDIT (VERSION-READY-01). A save through this path wrote a ``VALIDATED`` DRAFT
+        # version, and nothing in the product ever turned one into anything else. Production held
+        # six versions, all drafts, none ``READY``. But every consumer wants the opposite:
+        #   * deploy (paper or live) requires ``lifecycle_state = READY`` and answered 409
+        #     ``VERSION_NOT_READY`` ("validated but has not been persisted as an immutable version
+        #     yet - save it") with no control anywhere that does that;
+        #   * a Paper_Session refuses a draft and anything outside READY/DEPLOYED/RUNNING/PAUSED;
+        #   * the Marketplace gate and the entitlement resolver count only NON-draft versions.
+        # So a strategy a trader had just built could not be deployed, paper-traded or published.
+        # ``StrategyService.create_version_and_maybe_train`` - the single save path - already says
+        # what a version with no model block is: ``READY`` (Requirement 14.10), nothing to train.
+        # The same rule is applied here, from the same plan. A graph WITH a model block keeps the
+        # old behaviour (VALIDATED draft): it is not deployable until training has run, and that
+        # transition belongs to the training worker, not to a save. Editing is unaffected - the
+        # canvas reads ``lifecycle_state`` and ``is_read_only``, and READY is neither read-only
+        # nor immutable until a deployment freezes it (migration 004c).
+        no_model_block = not getattr(getattr(compiled, "plan", None), "ml_nodes", None)
         result = await service.create_version(
             user,
             strategy_id,
@@ -508,11 +526,8 @@ async def _persist_current_version(
             compiled=compiled,
             version=version,
             make_current=True,
-            # A save produces an editable version, which is what `is_draft` means here:
-            # migration 004c's immutability trigger freezes a version once it is deployed,
-            # not once it is written, and `strategy_lifecycle.canvas_state` reads this to
-            # decide whether the Builder may open it for editing.
-            is_draft=True,
+            lifecycle_state=LIFECYCLE_READY if no_model_block else LIFECYCLE_VALIDATED,
+            is_draft=not no_model_block,
         )
     except Exception as exc:  # noqa: BLE001 - reported on the response, never swallowed
         logger.error(
@@ -777,6 +792,78 @@ async def _sb(user: dict):
     return await create_request_supabase_async(token)
 
 
+#: The partial unique index migration 068 created:
+#:     CREATE UNIQUE INDEX uq_strategies_owner_name_live
+#:         ON strategies (user_id, lower(name)) WHERE archived_at IS NULL
+#: Named here because the DATABASE is what enforces the rule and its constraint name is
+#: the only unambiguous signal that THIS is the violation, as opposed to some other
+#: unique index on the same table.
+_OWNER_NAME_INDEX = "uq_strategies_owner_name_live"
+
+#: How many "(Copy)", "(Copy 2)", ... labels a clone will try before refusing. Bounded
+#: because each attempt is a round trip, and a user with ten copies of one strategy is
+#: better served by an explicit refusal than by a slow success.
+_CLONE_NAME_ATTEMPTS = 10
+
+
+def _is_duplicate_strategy_name(exc: Exception) -> bool:
+    """Whether ``exc`` is the owner-name uniqueness violation, and nothing else.
+
+    Matched on the constraint name AND the SQLSTATE together. `strategies` carries a
+    primary key and may carry other unique indexes later; `23505` alone only says "some
+    uniqueness was violated", and answering "that name is taken" for an unrelated
+    violation would be a confident wrong answer. Requiring the SQLSTATE too means a
+    stray mention of the index name in some other error string cannot trigger this.
+    """
+    text = str(exc)
+    code = getattr(exc, "code", None) or getattr(exc, "pgcode", None)
+    looks_unique = "23505" in text or str(code) == "23505"
+    return bool(looks_unique and _OWNER_NAME_INDEX in text)
+
+
+def _raise_if_duplicate_strategy_name(exc: Exception, name=None) -> None:
+    """Translate the owner-name uniqueness violation into a 409. Returns otherwise.
+
+    STRAT-02. Migration 068 added the constraint that makes duplicate names impossible,
+    and nothing translated its violation -- so the one case the constraint exists to
+    catch surfaced as:
+
+        HTTP 500  {"error": "STRATEGY_CREATE_ERROR", "message": "<raw postgres text>"}
+
+    A 500 tells the author the platform is broken when in fact they typed a name they
+    already use, and the only remedy a 500 suggests is "try again", which cannot work.
+    T05 asks for "clear validation when an existing name is entered"; this is it.
+
+    WHY NOT CHECK FIRST AND INSERT SECOND. A read-then-write cannot be correct here:
+    two concurrent saves both read "no such name" and both proceed, and T05 also requires
+    that concurrent saves not silently overwrite one another. The constraint is the only
+    thing that holds under concurrency, so the right shape is to attempt the write and
+    classify the refusal -- which also means the 409 is produced by the same mechanism
+    that guarantees it, rather than by a check that can be raced.
+
+    MATCHED ON THE CONSTRAINT NAME, not on the SQLSTATE alone. `strategies` carries a
+    primary key and may carry other unique indexes later; `23505` only says "some
+    uniqueness was violated". Answering "that name is taken" for an unrelated violation
+    would be a confident wrong answer. The SQLSTATE is still required, so a stray mention
+    of the index name in an error string cannot trigger this on its own.
+    """
+    if not _is_duplicate_strategy_name(exc):
+        return
+
+    display = f" '{name}'" if name else ""
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "STRATEGY_NAME_ALREADY_EXISTS",
+            "message": (
+                f"You already have a strategy named{display}. Choose a different name, "
+                "or rename the existing one first."
+            ),
+            "field": "name",
+        },
+    )
+
+
 def _safe_uid(uid: str) -> str:
     """Validate UUID-shaped user_id before injecting into SQL."""
     if re.match(r"^[a-zA-Z0-9\-_]{1,128}$", str(uid)):
@@ -889,6 +976,11 @@ _LIST_COLUMNS: tuple = (
     "buy_logic",
     "tags",
     "version",
+    # LAUNCH AUDIT: the column that actually exists. `strategies` has `current_version`
+    # (migration 001; "v1.0" for a first save) and no `version` column, so the list answered
+    # without any version label and the Strategies table showed "—" in its Version column for
+    # every saved strategy. `Strategies.jsx` already reads `current_version`.
+    "current_version",
 )
 
 
@@ -1343,6 +1435,9 @@ async def create_strategy(
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
+        # STRAT-02: a name the owner already uses is a VALIDATION failure, not a server
+        # fault. Checked before the generic branch below, which would otherwise answer 500.
+        _raise_if_duplicate_strategy_name(e, data.get("name"))
         logger.error(f"[STRATEGIES] Error creating strategy: {e}")
         raise HTTPException(
             status_code=500,
@@ -1351,8 +1446,20 @@ async def create_strategy(
 
 
 # ── GET /api/strategies/{id} ─────────────────────────────────────────────
+#
+# 200/minute. API-01 (commit 396d210) deleted strategy_operations.py's own
+# "@router.get('/strategies/{strategy_id}')" as a permanently shadowed duplicate of this
+# route -- correctly, since this one always won the identical path. But the deleted copy
+# carried "@limiter.limit('200/minute')" and this one never did, so the deletion silently
+# dropped the rate limit along with the dead code (tests/test_task_8_2_deploy_preflight.py
+# caught this comparing against preflight_deploy_version's own 200/minute, which was
+# deliberately set to match this endpoint under Requirement 22.2 -- "the same 'get' action
+# on the closest equivalent resource" -- and has nothing to match against once this one
+# has none).
 @router.get("/{strategy_id}")
+@limiter.limit("200/minute")
 async def get_strategy_route(
+    request: Request,
     strategy_id: str,
     user: dict = Depends(get_current_user),
 ):
@@ -1572,6 +1679,11 @@ async def rename_strategy(
             .execute()
         )
     except Exception as e:
+        # STRAT-02: renaming onto a name the owner already uses is the same validation
+        # failure as creating one, and it reached the customer as "Unable to rename
+        # strategy. Please try again later." -- advice that cannot succeed, because
+        # retrying the same name hits the same constraint every time.
+        _raise_if_duplicate_strategy_name(e, name)
         logger.error(
             "[STRATEGIES] Failed to rename strategy %s, user %s: %s",
             strategy_id,
@@ -1621,6 +1733,124 @@ async def rename_strategy(
 # compiled, then stored inside ``buy_logic`` by :func:`_dag_fields`, and these three keys are
 # dropped from the column payload rather than sent to a column that does not exist.
 _GRAPH_PAYLOAD_KEYS = ("graph_json", "nodes", "edges")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# API-01: THE COLUMN ALLOWLIST FOR `PUT /api/strategies/{id}`
+# ═════════════════════════════════════════════════════════════════════════════
+# This route took a raw caller `body` dict and did `update_payload = dict(body)` straight
+# into `.table("strategies").update(...)`. There was no column allowlist, and the only
+# field-specific guards were `status` (blocked from running/deployed) and `ml_model_path`
+# (containment-checked). Every other column on `strategies` was therefore writable by the
+# caller, including the ones that decide ownership, marketplace linkage and archival
+# state.
+#
+# The `.eq("user_id", user["id"])` filter on the UPDATE means this was never
+# CROSS-TENANT — a caller could only corrupt their own row. That is why this is a
+# mass-assignment / integrity defect rather than a tenant-isolation one. What it allowed:
+#
+#   tenant/ownership      `user_id` — reassign the row to another account
+#   marketplace linkage   `marketplace_listing_id`, `is_published`, `source_library_id`
+#   subscription state    `is_subscribed`, `subscription_id`, `is_read_only`
+#   lifecycle             `archived_at` (bypassing the archive workflow),
+#                         `is_active`, `environment` (paper/live!)
+#   integrity/provenance  `id`, `created_at`, `cloned_from`, `current_version`
+#   derived graph state   `dag_hash`, `dag_version`, `dag_schema_version` — these are
+#                         computed from the compiled plan, so a caller-supplied value
+#                         would make the stored hash disagree with the stored graph
+#   runtime telemetry     `last_signal_at`
+#
+# `environment` deserves naming explicitly: it is the paper/live discriminator on the
+# strategy row. A caller-writable execution environment on a trading strategy is the
+# worst field in the list, which is why an allowlist is the right shape here rather than
+# a longer series of individual field guards.
+#
+# WHY AN ALLOWLIST AND NOT A DENYLIST. A denylist is wrong by default: a column added to
+# `strategies` later would become silently caller-writable. An allowlist makes a new
+# column unwritable until somebody decides it should be, which is the direction that
+# fails safe. `tests/test_api01_strategies_update_allowlist.py` pins both halves.
+#
+# WHY 422 AND NOT SILENT STRIPPING. Silently dropping an unexpected field tells the
+# caller their write succeeded when it did not. This router's own convention for a
+# rejected field is an explicit 4xx naming the field (see `_assert_model_path_storable`'s
+# 422 and `create_strategy`'s validation), so a refusal is consistent with it. The error
+# echoes the offending FIELD NAMES but never their values — the same rule
+# `library.py:3043-3046` follows.
+
+#: Columns a caller may change through `PUT /api/strategies/{id}`.
+#:
+#: `status` is present but additionally constrained above: the handler refuses
+#: `running`/`deployed` so a caller cannot bypass the deploy gate, while still allowing
+#: the legitimate transitions (e.g. back to `draft`/`stopped`).
+_UPDATABLE_STRATEGY_COLUMNS = frozenset({
+    # identity and presentation
+    "name",
+    # market binding (also derivable from the graph; see SB-06 handling below)
+    "symbol",
+    "timeframe",
+    # strategy definition
+    "buy_logic",
+    "sell_logic",
+    "risk",
+    "indicators",
+    "dag_config",
+    "ml_model_path",
+    # deployment-time binding the author chooses
+    "exchange_id",
+    # lifecycle values that are legitimately author-settable
+    "status",
+    "execution_order",
+    # the author's own backtest evidence
+    "backtest_result",
+})
+
+#: Keys that are accepted in the request body but are NOT columns — they carry the graph
+#: and are folded into `buy_logic` further down, then popped from the payload.
+_NON_COLUMN_BODY_KEYS = frozenset(_GRAPH_PAYLOAD_KEYS)
+
+
+def _assert_update_fields_are_mutable(body: Dict[str, Any]) -> None:
+    """Refuse a `PUT /api/strategies/{id}` body carrying a non-caller-mutable field.
+
+    API-01. Raises :class:`HTTPException` 422 ``STRATEGY_FIELD_NOT_MUTABLE`` naming the
+    offending fields and echoing none of their values.
+    """
+    if not isinstance(body, dict):
+        # The handler's own contract is a JSON object; anything else is already a 422 by
+        # the time it gets here, but this keeps the guard total rather than assuming.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "STRATEGY_UPDATE_BODY_INVALID",
+                "message": "The request body must be a JSON object of fields to update.",
+            },
+        )
+
+    offending = sorted(
+        key
+        for key in body
+        if key not in _UPDATABLE_STRATEGY_COLUMNS and key not in _NON_COLUMN_BODY_KEYS
+    )
+    if not offending:
+        return
+
+    logger.info(
+        "[STRATEGIES] Update refused: %d non-mutable field(s) supplied: %s",
+        len(offending),
+        ", ".join(offending),
+    )
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "error": "STRATEGY_FIELD_NOT_MUTABLE",
+            "message": (
+                "These fields cannot be changed through this endpoint. Ownership, "
+                "marketplace linkage, subscription state, archival state, execution "
+                "environment and derived graph metadata are set by the server."
+            ),
+            "fields": offending,
+        },
+    )
 
 
 @router.put("/{strategy_id}")
@@ -1701,6 +1931,11 @@ async def update_strategy(
     # so a refusal writes nothing. See `_assert_model_path_storable`.
     if "ml_model_path" in body:
         _assert_model_path_storable(body.get("ml_model_path"))
+
+    # ── API-01: THE COLUMN ALLOWLIST ─────────────────────────────────────────
+    # The wider half of P1-06 referenced above, now closed. Enforced here, before the
+    # payload is assembled, so a refused request writes nothing at all.
+    _assert_update_fields_are_mutable(body)
 
     # ── The graph half ───────────────────────────────────────────────────────
     # Compiled BEFORE the update is issued, so an invalid graph is refused having changed
@@ -1877,6 +2112,81 @@ async def delete_strategy(
     return result
 
 
+async def _deploy_current_version_paper(
+    user: dict, strategy_id: str, supplied_params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Deploy a strategy's current version in PAPER mode through the canonical service.
+
+    The single place the legacy ``/deploy`` and ``/resume`` routes start a runtime (RT-03).
+    Raises ``HTTPException`` for every refusal; returns the service's outcome on success.
+
+    ``supplied_params`` is checked against ``DEPLOY_PARAMS_NOT_APPLIED`` (``capital``,
+    ``trade_size_pct``, ``stop_loss_pct``, ``max_drawdown_pct``) before anything else runs.
+    These four were the whole reason ``StrategyService.deploy_strategy`` -- the route this
+    one replaced (RT-03) -- refused rather than silently discarded them: a caller who sets
+    a stop-loss and has it dropped ends up with a live bot running with none, which is
+    worse than an error. That refusal did not travel with the replacement until now; see
+    tests/test_deploy_strategy_accepts_only_what_it_applies.py.
+    """
+    from backend_app.backend.deployment_binding import (BindingRequest,
+                                                        DeployRejected)
+    from backend_app.backend.strategy_service import (
+        DeployParameterNotApplicable, DeployPrerequisiteError, PlanLimitRefused,
+        assert_deploy_params_applicable, get_strategy_service)
+
+    try:
+        assert_deploy_params_applicable(supplied_params or {})
+        service = await get_strategy_service()
+        strategy = await service.get_strategy(user, strategy_id)
+        version_row = (strategy or {}).get("version") or {}
+        version = version_row.get("version")
+        if not version:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "NO_SAVED_VERSION",
+                        "message": "This strategy has no saved version to deploy. Save a version first."},
+            )
+        outcome = await service.deploy_version(
+            user=user,
+            strategy_id=strategy_id,
+            version=str(version),
+            environment="paper",
+            binding_request=BindingRequest.from_payload({"mode": "paper"}),
+        )
+    except HTTPException:
+        raise
+    except DeployParameterNotApplicable as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "DEPLOY_PARAMETER_NOT_APPLICABLE", "message": str(e)},
+        )
+    except DeployRejected as e:
+        raise HTTPException(status_code=e.http_status, detail=e.to_detail())
+    except DeployPrerequisiteError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "DEPLOY_PREREQUISITE_NOT_MET", "message": str(e),
+                    "missing_prerequisite": e.missing_prerequisite},
+        )
+    except PlanLimitRefused as e:
+        raise HTTPException(
+            status_code=e.http_status,
+            detail={"error": e.code, "message": e.message, "upgrade_url": "/app/billing"},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=403 if "Quota" in str(e) or "plan" in str(e) else 404,
+                            detail={"error": "DEPLOY_REFUSED", "message": str(e)})
+
+    if not outcome or not outcome.get("success"):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "DEPLOY_FAILED",
+                    "message": f"Deploy failed: {(outcome or {}).get('message') or 'runtime did not start'}"},
+        )
+
+    return outcome
+
+
 # ── POST /api/strategies/{id}/deploy ────────────────────────────────────
 @router.post("/{strategy_id}/deploy")
 async def deploy_bot(
@@ -1936,110 +2246,36 @@ async def deploy_bot(
     except ArchiveRejected as e:
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
 
-    blueprint = resp.data[0]
-    _lift_dag_fields(blueprint)
-    # Exchange identity is a DEPLOYMENT binding, resolved here at deploy time. It is
-    # deliberately absent from the saved strategy and from the graph (SB-06).
-    blueprint["exchange_id"] = body.get(
-        "exchange_id", blueprint.get("exchange_id", "binance")
-    )
-    
-    # SECURITY: Validate ML/DL strategies have trained models before deployment
-    _validate_ml_models_present(blueprint)
-
-    symbol = blueprint.get("symbol", "BTC/USDT")
-
-    # SECURITY & CONCURRENCY: Atomically reserve bot quota to eliminate TOCTOU races
-    plan_key = await get_user_plan(user["id"], sb)
-    allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BOTS.value)
-    if not allowed:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Quota exceeded for {Resource.BOTS.value}: {current_usage}/{limit}. Upgrade your plan to continue."
-        )
-
-    use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
-    
-    try:
-        if use_tee:
-            logger.info(f"[STRATEGIES] Delegating deployment of {strategy_id} to TEE")
-            # The mode travels WITH the command. Both consumers
-            # (`workers/command_worker.py`, `tee/main.py`) now refuse a start_bot command
-            # that does not state it, so omitting it would start nothing rather than start
-            # something in an unestablished mode.
-            #
-            # `True`, for the same reason as the local branch below: this endpoint resolves
-            # no Deployment_Binding and travels no Requirement 13 gate, so nothing here
-            # establishes that live trading was authorised.
-            # Regression: tests/test_live_deployment_mode_propagation.py
-            await publish_command(
-                "start_bot", 
-                {
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                    "blueprint": blueprint,
-                    "paper_trading": True,
-                }
-            )
-        else:
-            logger.info(f"[STRATEGIES] Executing deployment of {strategy_id} locally (Legacy Mode)")
-            # FORCED PAPER, and not a placeholder.
-            #
-            # This endpoint resolves no Deployment_Binding: it binds no exchange account, no
-            # risk configuration and no mode, and it travels none of the Requirement 13
-            # gates — which is precisely why the frontend was re-pointed off it to
-            # `POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy`.
-            # With nothing establishing that live trading was authorised for this strategy,
-            # on this account, the only honest mode is paper. The gated endpoint is where a
-            # live deployment is made.
-            # Regression: tests/test_live_deployment_mode_propagation.py
-            success, message = await fleet.start_bot(
-                user["id"], symbol, blueprint, paper_trading=True
-            )
-
-            if not success:
-                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-                logger.error(f"[STRATEGIES] Deploy failed for strategy {strategy_id}: {message}")
-                raise HTTPException(400, f"Deploy failed: {message}")
-    except PublishError as e:
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        logger.error(f"[STRATEGIES] PublishError deploying strategy {strategy_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOY_DISPATCH_FAILED", "message": str(e)}
-        )
-    except Exception as e:
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        raise
-
-    try:
-        sb = await _sb(user)
-        if sb:
-            await sb.table("strategies").update({"status": "running"}).eq(
-                "id", strategy_id
-            ).execute()
-    except Exception as e:
-        if not use_tee and hasattr(fleet, "stop_bot"):
-            try:
-                await fleet.stop_bot(user["id"], symbol)
-            except Exception:
-                pass
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
-        raise HTTPException(status_code=503, detail="Unable to update strategy status after deployment. Please try again later.")
+    # ── RT-03: THIS ROUTE NO LONGER STARTS A BOT ITSELF ─────────────────────────────
+    # It used to build a blueprint from the `strategies` row and call `fleet.start_bot` with
+    # no Deployment_Binding, no `strategy_deployments` row and no lifecycle transition. For a
+    # strategy saved by the current builder that blueprint carried a graph and none of the
+    # `buy_logic`/`sell_logic`/`risk` the legacy evaluator reads, so the bot started and could
+    # never emit an order -- while this route answered `{"status": "running"}`.
+    #
+    # It is now a thin PAPER-ONLY entry point onto the one canonical deploy
+    # (`StrategyService.deploy_version`): same gates, same quota, same row, same runtime
+    # (DAGEngine.execute_plan). The mode is fixed to paper because this route has never
+    # carried a Requirement 13 binding; a live deployment is made through
+    # POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy.
+    # Regression: tests/test_rt03_legacy_deploy_route_uses_canonical_deploy.py
+    outcome = await _deploy_current_version_paper(user, strategy_id, supplied_params=body)
 
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
-            {
-                "type": "bot_status",
-                "strategy_id": strategy_id,
-                "status": "running",
-                "symbol": symbol,
-            },
+            {"type": "bot_status", "strategy_id": strategy_id, "status": "running"},
         )
     )
 
+    # The old body of this route dispatched this notification inline when it built the
+    # blueprint and called `fleet.start_bot` itself; that call was dropped along with the
+    # rest of the old body when this route became a thin entry point onto the canonical
+    # deploy (RT-03), with nothing in `_deploy_current_version_paper` taking its place. A
+    # user whose strategy deploys successfully got no notification of it. Restored here,
+    # after the canonical deploy actually succeeds, naming the paper mode this route
+    # always deploys in (it never carries a live binding).
+    strategy_row = resp.data[0]
     try:
         from backend_app.core.notification_dispatcher import dispatch_user_notification
         await dispatch_user_notification(
@@ -2047,17 +2283,25 @@ async def deploy_bot(
             event_type="strategy_deployed",
             category="strategy",
             severity="info",
-            title=f"Strategy Deployed: {symbol}",
-            message=f"Strategy '{blueprint.get('name', strategy_id)}' is now running live on {symbol}.",
+            title=f"Strategy Deployed: {strategy_row.get('symbol', strategy_id)}",
+            message=(
+                f"Strategy '{strategy_row.get('name', strategy_id)}' is now running "
+                f"in paper mode on {strategy_row.get('symbol', strategy_id)}."
+            ),
             strategy_id=strategy_id,
-            metadata={"symbol": symbol, "strategy_id": strategy_id, "idempotency_key": f"strat_deploy:{user['id']}:{strategy_id}"},
+            metadata={
+                "symbol": strategy_row.get("symbol"),
+                "strategy_id": strategy_id,
+                "deployment_id": (outcome.get("deployment") or {}).get("id"),
+                "idempotency_key": f"strat_deploy:{user['id']}:{strategy_id}",
+            },
             ws_manager=ws_mgr,
         )
-    except Exception as notif_err:
-        logger.debug(f"[STRATEGIES] Notification dispatch error: {notif_err}")
+    except Exception as notif_err:  # noqa: BLE001 - a notification failure must never undo a deploy
+        logger.debug(f"[STRATEGIES] Deploy notification dispatch error: {notif_err}")
 
     logger.info(f"[STRATEGIES] Strategy {strategy_id} deployed successfully")
-    return {"status": "running"}
+    return {"status": "running", "deployment_id": (outcome.get("deployment") or {}).get("id")}
 
 
 # ── POST /api/strategies/{id}/stop ───────────────────────────────────────
@@ -2067,54 +2311,51 @@ async def stop_bot(
     user: dict = Depends(get_current_user),
     fleet=Depends(get_fleet),
     ws_mgr=Depends(get_ws_manager),
-    _feature=Depends(require_live_trading),
 ):
-    """Stops the bot loop and cancels all open orders for that symbol."""
+    """Stops the bot loop and cancels all open orders for that symbol.
+
+    PAUSE-01: not plan-gated. It required the live-trading entitlement, so a Free user -- or
+    a user whose paid plan had lapsed -- could not stop their own bot. Stopping is the safe
+    direction and is never refused for a plan reason.
+    """
     # SECURITY: Verify strategy belongs to authenticated user
     sb = await _sb(user)
     if not sb:
         raise HTTPException(404, "Strategy not found.")
-    resp = await (
-        sb
-        .table("strategies")
-        .select("symbol, status")
-        .eq("id", strategy_id)
-        .eq("user_id", user["id"])
-        .execute()
-    )
+    try:
+        resp = await (
+            sb
+            .table("strategies")
+            .select("symbol, status")
+            .eq("id", strategy_id)
+            .eq("user_id", user["id"])
+            .execute()
+        )
+    except Exception as e:
+        # Same answer pause gives: an unreadable store is a 503 the caller can retry, never a
+        # bare 500 (and never a fabricated "already stopped").
+        logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id} for stop, user {user['id']}: {e}")
+        raise HTTPException(status_code=503, detail="Unable to retrieve strategy for stop. Please try again later.")
     if not resp.data:
         logger.error(f"[STRATEGIES] Strategy not found for stop: {strategy_id}")
         raise HTTPException(404, "Strategy not found.")
 
-    if resp.data[0].get("status") != "running":
-        logger.info(f"[STRATEGIES] Strategy {strategy_id} is already stopped.")
+    symbol = resp.data[0].get("symbol")
+
+    # RT-03/RT-08: stop through the canonical service, which stops each running DEPLOYMENT of
+    # this strategy by its real symbol and writes a durable stop request when the bot is owned
+    # by another process. (This route used to call `fleet.stop_bot` directly and then mark the
+    # strategy stopped whether or not any bot had been reached.)
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    service = await get_strategy_service()
+    # PAUSE-01: the deployments decide, not the row -- a PAUSED deployment is stopped too,
+    # where the old `status != 'running'` early return left it holding the strategy
+    # undeletable.
+    stopped = await service.stop_all_deployments(user, strategy_id)
+    logger.info(f"[STRATEGIES] Strategy {strategy_id}: {stopped} deployment(s) stopped.")
+    if stopped == 0 and resp.data[0].get("status") not in ("running", "paused"):
         return {"status": "already_stopped"}
-
-    symbol = resp.data[0]["symbol"]
-    
-    use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
-    
-    try:
-        if use_tee:
-            logger.info(f"[STRATEGIES] Delegating stop of {strategy_id} to TEE")
-            await publish_command(
-                "stop_bot",
-                {
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                },
-            )
-        else:
-            logger.info("[STRATEGIES] Stopping bot locally (Legacy Mode)")
-            await fleet.stop_bot(user["id"], symbol)
-    except PublishError as e:
-        logger.error(f"[STRATEGIES] PublishError stopping strategy {strategy_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STOP_DISPATCH_FAILED", "message": str(e)}
-        )
-
-    logger.info(f"[STRATEGIES] Strategy {strategy_id} stopped. Order cleanup handled by BotRunner.")
 
     sb = await _sb(user)
     if sb:
@@ -2122,16 +2363,13 @@ async def stop_bot(
             "id", strategy_id
         ).execute()
 
-    # Decrement bot usage only when transitioning from running -> stopped
-    await decrement_usage(Resource.BOTS.value, user)
-
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
             {"type": "bot_status", "strategy_id": strategy_id, "status": "stopped"},
         )
     )
-    
+
     try:
         from backend_app.core.notification_dispatcher import dispatch_user_notification
         await dispatch_user_notification(
@@ -2836,6 +3074,61 @@ async def get_backtest_status(job_id: str, user: dict = Depends(get_current_user
     return response
 
 
+class MarketDataUnavailable(RuntimeError):
+    """BT-01: the exchange history needed for a backtest could not be fetched."""
+
+
+_TIMEFRAME_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "M": 2592000}
+
+
+def _periods_per_year(timeframe: str) -> float:
+    """Bars per year for a ccxt-style timeframe such as ``15m``, ``1h``, ``1d``."""
+    try:
+        unit = timeframe[-1]
+        seconds = int(timeframe[:-1]) * _TIMEFRAME_SECONDS[unit]
+        return (365.0 * 86400.0) / seconds
+    except Exception:  # noqa: BLE001 - unknown timeframe: say so via None metrics upstream
+        return 0.0
+
+
+def _equity_curve_metrics(equity_history, timeframe: str) -> dict:
+    """BT-01: Sharpe / Sortino / Calmar from the REAL per-bar equity curve.
+
+    These used to be invented: ``sharpe = win_rate*avg_win / ((1-win_rate)*avg_loss)``,
+    ``sortino = sharpe * 1.2`` and a Calmar from a two-point curve. Every figure here is
+    derived from ``equity_history`` or is ``None`` (never 0, never a guess) when the curve
+    cannot support it.
+    """
+    import math
+
+    import numpy as np
+
+    out = {"sharpe_ratio": None, "sortino_ratio": None, "calmar_ratio": None}
+    eq = np.asarray([float(x) for x in equity_history], dtype=float)
+    ppy = _periods_per_year(timeframe)
+    if len(eq) < 3 or ppy <= 0 or not np.all(np.isfinite(eq)) or np.any(eq <= 0):
+        return out
+
+    returns = np.diff(eq) / eq[:-1]
+    std = float(np.std(returns))
+    mean = float(np.mean(returns))
+    if std > 0:
+        out["sharpe_ratio"] = round(mean / std * math.sqrt(ppy), 2)
+
+    downside = returns[returns < 0]
+    dstd = float(np.sqrt(np.mean(downside ** 2))) if len(downside) else 0.0
+    if dstd > 0:
+        out["sortino_ratio"] = round(mean / dstd * math.sqrt(ppy), 2)
+
+    peak = np.maximum.accumulate(eq)
+    max_dd = float(np.max((peak - eq) / peak))
+    years = (len(eq) - 1) / ppy
+    if max_dd > 0 and years > 0:
+        annualised = (eq[-1] / eq[0]) ** (1.0 / years) - 1.0
+        out["calmar_ratio"] = round(annualised / max_dd, 2)
+    return out
+
+
 def backtest_internal(payload: dict):
     """
     Run full DAG-based backtest.
@@ -2955,29 +3248,20 @@ def backtest_internal(payload: dict):
                 df.set_index("timestamp", inplace=True)
                 
                 logger.info(f"[Backtest] {symbol}: {len(df)} candles")
+                if len(df) == 0:
+                    raise ValueError("exchange returned no candles")
                 return df
                 
             except Exception as e:
-                logger.info(f"[Backtest] Data fallback for {symbol}: {e}")
-                
-                # Synthetic data fallback
-                np.random.seed(hash(symbol) % 2**32)
-                returns = np.random.normal(0, 0.01, limit)
-                price = 100 * np.exp(np.cumsum(returns))
-                
-                df = pd.DataFrame({
-                    "open": price,
-                    "high": price * 1.005,
-                    "low": price * 0.995,
-                    "close": price,
-                    "volume": np.random.uniform(100, 1000, limit)
-                })
-                
-                df.index = pd.date_range(start="2024-01-01", periods=limit, freq=timeframe)
-                df.index.name = "timestamp"
-                
-                return df
-        
+                # BT-01: NEVER substitute synthetic data. This used to seed numpy with the
+                # symbol's hash and return a random walk as if it were market history, so a
+                # network failure produced a confident-looking, entirely fabricated result.
+                logger.error(f"[Backtest] market data unavailable for {symbol}: {e}")
+                raise MarketDataUnavailable(
+                    f"Could not fetch market data for {symbol} ({type(e).__name__}); "
+                    "no backtest was run and no result was fabricated."
+                ) from e
+
         # Fetch data for all symbols
         market_data = {}
         for symbol in symbols:
@@ -3068,6 +3352,10 @@ def backtest_internal(payload: dict):
         min_length = min(len(df) for df in market_data.values())
         logger.info(f"[Backtest] Running simulation for {min_length} steps...")
         
+        # BT-01: the equity curve is MEASURED, one point per bar, marked to market. The
+        # headline ratios below are computed from it (they used to be invented).
+        equity_history = [float(initial_capital)]
+
         # Execute trades based on signals
         for i in range(min_length):
             for symbol, signals in all_signals.items():
@@ -3100,6 +3388,12 @@ def backtest_internal(payload: dict):
                     portfolio.close_position(symbol)
                     risk.update_equity(float(pnl))
                     logger.info(f"  [t={i}] SELL {symbol} @ {current_price:.2f} (PnL: {pnl:.2f})")
+
+            # End of bar: mark every open position at this bar's close, record equity.
+            for _sym, _df in market_data.items():
+                if _sym in execution.get_positions() and i < len(_df):
+                    execution.mark_to_market(_sym, Decimal(str(_df["close"].iloc[i])))
+            equity_history.append(float(execution.current_equity))
         
         # Close remaining positions
         for symbol in list(execution.get_positions().keys()):
@@ -3108,6 +3402,7 @@ def backtest_internal(payload: dict):
                 pnl, msg = execution.close_position(symbol, final_price)
                 risk.update_equity(float(pnl))
                 logger.info(f"  [FINAL] CLOSE {symbol} @ {final_price:.2f}")
+        equity_history.append(float(execution.current_equity))
 
         # -----------------------------
         # RESULTS
@@ -3124,29 +3419,16 @@ def backtest_internal(payload: dict):
         total_return_pct = float((current_equity / initial_capital - 1) * 100)
         max_drawdown_pct = float(stats.get('drawdown_pct', 0.0) * 100)
         
-        # Sharpe ratio
-        sharpe_ratio = 0.0
-        if stats['total_trades'] > 0:
-            avg_win = stats.get('avg_win', 0)
-            avg_loss = stats.get('avg_loss', 0)
-            if avg_loss > 0:
-                sharpe_ratio = (stats['win_rate'] * avg_win) / ((1 - stats['win_rate']) * avg_loss)
-        
-        calmar_ratio = abs(total_return_pct / max_drawdown_pct) if max_drawdown_pct > 0 else 0
-        
-        # Build equity curve
-        equity_curve = []
-        if 'equity_history' in stats:
-            equity_curve = [
-                {"timestamp": i, "time": i, "equity": float(eq), "value": float(eq)}
-                for i, eq in enumerate(stats['equity_history'])
-            ]
-        else:
-            equity_curve = [
-                {"timestamp": 0, "time": 0, "equity": float(initial_capital), "value": float(initial_capital)},
-                {"timestamp": 1, "time": 1, "equity": current_equity, "value": current_equity}
-            ]
-        
+        # BT-01: ratios from the measured equity curve (None when it cannot support one).
+        ratios = _equity_curve_metrics(equity_history, timeframe)
+
+        # The measured per-bar curve. There is no two-point fallback: a backtest that
+        # produced no bars has no curve, and says so with an empty list.
+        equity_curve = [
+            {"timestamp": i, "time": i, "equity": float(eq), "value": float(eq)}
+            for i, eq in enumerate(equity_history)
+        ] if len(equity_history) >= 2 else []
+
         # DAG results mapping
         dag_results = None
         if use_dag:
@@ -3178,9 +3460,9 @@ def backtest_internal(payload: dict):
             
             # Extended metrics
             "profit_factor": float(stats.get('profit_factor', 1.0)),
-            "sharpe_ratio": round(sharpe_ratio, 2),
-            "sortino_ratio": round(sharpe_ratio * 1.2, 2),
-            "calmar_ratio": round(calmar_ratio, 2),
+            "sharpe_ratio": ratios["sharpe_ratio"],
+            "sortino_ratio": ratios["sortino_ratio"],
+            "calmar_ratio": ratios["calmar_ratio"],
             
             # Equity curve
             "equity": equity_curve,
@@ -3194,13 +3476,20 @@ def backtest_internal(payload: dict):
             "initial_capital": float(initial_capital),
         }
 
+    except MarketDataUnavailable as e:
+        logger.error("BACKTEST ABORTED: %s", e)
+        return {
+            "error": str(e),
+            "error_type": "MarketDataUnavailable",
+            "fabricated_data_used": False,
+        }
     except Exception as e:
         logger.error("BACKTEST ERROR")
         logger.error(traceback.format_exc())
-        
+
+        # The traceback stays in the server log; it is not returned to the caller.
         return {
             "error": str(e),
-            "traceback": traceback.format_exc(),
             "error_type": type(e).__name__
         }
 
@@ -3325,21 +3614,59 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
                 # plan.dag_hash is a field. This is the SB-02 line.
                 cloned_buy_logic.update(_dag_fields(compiled.plan))
 
-    try:
-        ins_query = sb.table("strategies").insert(cloned_payload).execute()
-        ins = await ins_query if inspect.isawaitable(ins_query) else ins_query
-        if not ins.data:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to insert cloned strategy record.")
-        return {
-            "status": "cloned",
-            "strategy": ins.data[0],
-            "warnings": response_warnings,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[STRATEGIES] Clone failed for strategy {strategy_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error cloning strategy. Please try again later.")
+    # ── STRAT-02: cloning twice must work, not 500 ──
+    #
+    # The name above is always "<original> (Copy)", so the SECOND clone of one strategy
+    # collided with the first on `uq_strategies_owner_name_live` and the generic handler
+    # below answered 500 "Database error cloning strategy. Please try again later." --
+    # advice that could never succeed, because every retry proposes the same name.
+    #
+    # T05 requires that duplicating a strategy create a new identity. It does; the
+    # obstacle was only the label. So the label is what moves: "(Copy)", then "(Copy 2)",
+    # "(Copy 3)". Attempted rather than looked up, because a read-then-insert races -- two
+    # concurrent clones would both read "(Copy) is free" and one would still fail. Letting
+    # the constraint arbitrate and advancing on its refusal is correct under concurrency.
+    base_name = cloned_payload.get("name") or "Strategy (Copy)"
+    last_duplicate_error: Optional[Exception] = None
+    for attempt in range(1, _CLONE_NAME_ATTEMPTS + 1):
+        cloned_payload["name"] = (
+            base_name if attempt == 1 else f"{base_name} {attempt}"
+        )
+        try:
+            ins_query = sb.table("strategies").insert(cloned_payload).execute()
+            ins = await ins_query if inspect.isawaitable(ins_query) else ins_query
+            if not ins.data:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to insert cloned strategy record.")
+            return {
+                "status": "cloned",
+                "strategy": ins.data[0],
+                "warnings": response_warnings,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            if _is_duplicate_strategy_name(e):
+                # Taken. Try the next label; do not log at ERROR, this is an expected
+                # outcome of cloning the same strategy more than once.
+                last_duplicate_error = e
+                logger.info(
+                    "[STRATEGIES] clone name %r is taken, advancing",
+                    cloned_payload["name"],
+                )
+                continue
+            logger.error(f"[STRATEGIES] Clone failed for strategy {strategy_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error cloning strategy. Please try again later.")
+
+    # Every label in the window was taken. Say so plainly rather than looping forever or
+    # reporting a server fault.
+    logger.warning(
+        "[STRATEGIES] clone of %s exhausted %d name attempts for user %s",
+        strategy_id, _CLONE_NAME_ATTEMPTS, user.get("id"),
+    )
+    _raise_if_duplicate_strategy_name(
+        last_duplicate_error or Exception(f"23505 {_OWNER_NAME_INDEX}"),
+        cloned_payload.get("name"),
+    )
 
 @router.post("/optimize")
 async def optimize_strategy(
@@ -3490,8 +3817,10 @@ async def walk_forward_optimization(
     
     Uses the optimization_engine.run_walk_forward_analysis() method for proper implementation.
     """
-    from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
-    from backend_app.backend.backtest_runtime import get_backtest_runtime
+    # OPT-03: OptimizationEngine/OptimizationConfig/OptimizationMethod/ValidationMethod
+    # and BacktestRuntime are already imported at module scope (so
+    # `patch("backend_app.routers.strategies.OptimizationEngine", ...)` reaches the
+    # name this closure resolves) -- no local re-import of them here.
     from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
     from uuid import uuid4
     import ccxt
@@ -3553,16 +3882,9 @@ async def walk_forward_optimization(
             dependencies={}
         )
         
-        # Get optimization engine and backtest runtime
-        optimization_engine = get_optimization_engine()
-        backtest_runtime = get_backtest_runtime()
-        
-        # Inject backtest runtime
-        optimization_engine.set_backtest_runtime(backtest_runtime)
-        
         # Create exchange instance
         exchange_instance = ccxt.binance()
-        
+
         # Create optimization config for walk-forward
         config = OptimizationConfig(
             method=OptimizationMethod.GRID_SEARCH,  # Use grid search as base
@@ -3584,6 +3906,29 @@ async def walk_forward_optimization(
             max_drawdown=payload.get("max_drawdown", 0.2),
             daily_loss_limit=payload.get("daily_loss_limit", 0.05)
         )
+
+        # OPT-03: a fresh engine + runtime for THIS request only, not the shared
+        # process-wide get_optimization_engine()/get_backtest_runtime() singletons --
+        # every concurrent or back-to-back call to this endpoint shared the SAME
+        # OptimizationEngine instance (and therefore the same _optimization_history,
+        # read back by run_walk_forward_analysis's own _get_best_parameters call),
+        # so one tenant's call could read another tenant's optimization results. The
+        # shared backtest_runtime singleton also ran on its class defaults
+        # regardless of what `config` above carries, the same "accepted but ignored"
+        # bug backend_app/routers/strategy_operations.py::_backtest_runtime_for
+        # already fixed for the plain backtest endpoint -- built here from the SAME
+        # payload-derived values `config` already carries, so this endpoint's
+        # capital/fee/slippage/risk fields are the ones actually simulated against.
+        backtest_runtime = BacktestRuntime(
+            initial_capital=config.initial_capital,
+            fees=config.fees,
+            slippage=config.slippage,
+            risk_per_trade=config.risk_per_trade,
+            max_drawdown=config.max_drawdown,
+            daily_loss_limit=config.daily_loss_limit,
+        )
+        optimization_engine = OptimizationEngine()
+        optimization_engine.set_backtest_runtime(backtest_runtime)
         
         # Run genuine walk-forward analysis
         walk_forward_results = await optimization_engine.run_walk_forward_analysis(
@@ -3655,14 +4000,14 @@ async def walk_forward_optimization(
     if async_job:
         async def _run_walk_forward_background():
             try:
-                await redis_manager.hset(_status_key(job_id), {
+                await redis_manager.hset(_status_key(job_id), mapping={
                     "status": "running",
                     "progress": "0%",
                     "message": "Initializing walk-forward analysis..."
                 })
                 res = await _execute_walk_forward()
                 import json
-                await redis_manager.hset(_status_key(job_id), {
+                await redis_manager.hset(_status_key(job_id), mapping={
                     "status": res.get("status", "completed"),
                     "result": json.dumps(res),
                     "progress": "100%",
@@ -3670,7 +4015,7 @@ async def walk_forward_optimization(
                 })
             except Exception as e:
                 logger.error(f"Error in walk-forward background task: {e}")
-                await redis_manager.hset(_status_key(job_id), {
+                await redis_manager.hset(_status_key(job_id), mapping={
                     "status": "failed",
                     "error": str(e)
                 })
@@ -3701,14 +4046,31 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
     rec = res.data[0]
-    if not rec.get("is_active") or rec.get("status") == "paused":
+
+    # RT-03/RT-08: stop through the canonical service (by each deployment's real symbol, with a
+    # durable stop request when another process owns the bot) rather than `fleet.stop_bot`
+    # keyed on the strategy row's symbol, which only ever matched a bot in THIS process.
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    from backend_app.backend import strategy_lifecycle as _lc
+
+    service = await get_strategy_service()
+    # PAUSE-01: the DEPLOYMENTS decide whether there is anything to pause, never the strategy
+    # row's `is_active` flag. The version deploy path sets `status='running'` and never sets
+    # `is_active`, so every strategy deployed through it read `is_active=false` and this route
+    # refused 409 "already paused" while its live bot kept trading -- found on 2026-11-15 with
+    # the owner unable to pause (and so unable to delete) a running live FROM bot.
+    #
+    # And it is a real PAUSE now, not a stop: each running deployment moves to `paused`
+    # through the deployment lifecycle, keeping its mode and exchange binding, and its bot
+    # stops placing orders (the fleet heartbeat honours the row). Resume continues it.
+    paused = await service.transition_all_deployments(
+        user, strategy_id, _lc.ACTION_PAUSE, "running"
+    )
+    if paused == 0 and rec.get("status") in ("paused", "stopped"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already paused.")
-    
-    symbol = rec.get("symbol", "BTC/USDT")
-    bot_stopped = True
-    if hasattr(fleet, "stop_bot"):
-        bot_stopped, _ = await fleet.stop_bot(user["id"], symbol)
-        
+    bot_stopped = paused >= 0
+
     try:
         upd = await sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
     except Exception as e:
@@ -3721,56 +4083,48 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
 
 @router.post("/{strategy_id}/resume")
 async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_user), fleet=Depends(get_fleet)):
-    """Resume live execution bot for a strategy with strict state checks."""
+    """Resume a paused strategy: every PAUSED deployment continues where it stopped.
+
+    PAUSE-01. This used to start a FRESH PAPER deployment of the current version, so
+    "Resume" on a paused LIVE bot silently turned it into a paper bot (and, because it gated
+    on `is_active and running`, could start one beside a live bot still running). Pause is
+    now a real pause, so Resume moves the same deployments back to `running` through the
+    deployment lifecycle -- same mode, same exchange account, same limits.
+    """
     sb = await _sb(user)
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
-        
+
     try:
-        res = await sb.table("strategies").select("symbol, is_active, status, dag_config").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        res = await sb.table("strategies").select("status").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to retrieve strategy for resume. Please try again later.")
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
-    
-    rec = res.data[0]
-    if rec.get("is_active") and rec.get("status") == "running":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already running.")
-    
-    # SECURITY: Validate ML/DL strategies have trained models before resume
-    blueprint = {
-        "nodes": rec.get("buy_logic", {}).get("_nodes", []),
-        "ml_model_path": rec.get("ml_model_path")
-    }
-    _validate_ml_models_present(blueprint)
-    
-    symbol = rec.get("symbol", "BTC/USDT")
-    dag_config = rec.get("dag_config") or {"strategy_id": strategy_id}
-    bot_started = True
-    msg = "Resumed successfully"
-    
-    if hasattr(fleet, "start_bot"):
-        # FORCED PAPER. This path resumes from a `strategies` row, which carries no mode
-        # column — the mode lives on `strategy_deployments` and is resolved by the binding
-        # gates, neither of which this handler consults. A resume that cannot establish the
-        # strategy was authorised to trade live must not start it live.
-        # Regression: tests/test_live_deployment_mode_propagation.py
-        bot_started, msg = await fleet.start_bot(
-            user["id"], symbol, dag_config, paper_trading=True
+
+    from backend_app.backend import strategy_lifecycle as _lc
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    service = await get_strategy_service()
+    resumed = await service.transition_all_deployments(
+        user, strategy_id, _lc.ACTION_RESUME, "paused"
+    )
+    if resumed == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "NOTHING_TO_RESUME",
+                "message": "This strategy has no paused deployment to resume. Deploy it to start a new one.",
+            },
         )
-        if not bot_started:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fleet failed to resume strategy bot: {msg}")
-            
+
     try:
-        upd = await sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
-    except Exception as e:
-        logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
-        raise HTTPException(status_code=503, detail="Unable to update strategy status after resume. Please try again later.")
-    if not upd.data:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database update failed while resuming strategy.")
-        
-    return {"status": "running", "strategy_id": strategy_id, "message": msg}
+        await sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
+    except Exception as e:  # the deployments already resumed; the row catches up on its next settle
+        logger.warning(f"[STRATEGIES] Strategy {strategy_id} resumed but its row was not updated: {e}")
+
+    return {"status": "running", "strategy_id": strategy_id, "resumed": resumed, "message": "Resumed successfully"}
 
 def validate_dag(config):
     """Validate a strategy DAG configuration through the canonical validator.

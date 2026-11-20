@@ -344,10 +344,10 @@ def _subscription_row(
         "owner_id": OWNER_ID,
         "status": status,
         "price_minor": PRICE_MINOR_1999,
-        "currency": "USD",
+        "currency": "INR",
         "owner_share_minor": 1799,
         "platform_fee_minor": 200,
-        "provider": "stripe",
+        "provider": "razorpay",
         "provider_reference": "pi_the_payment_that_bought_this_month",
         "started_at": CURRENT_START,
         "period_start": CURRENT_START,
@@ -360,7 +360,7 @@ def _subscription_row(
 def _listing_row(
     *,
     price_minor: Optional[int] = PRICE_MINOR_1999,
-    currency: str = "USD",
+    currency: str = "INR",
     submission_state: Optional[str] = "PUBLISHED",
 ) -> Dict[str, Any]:
     submissions = [] if submission_state is None else [{"submission_state": submission_state}]
@@ -715,14 +715,14 @@ class TestTheRenewalIsACheckout:
         outcome = run_renewal(subscription_status="cancelled")
 
         assert outcome.error is None, f"the renewal was refused: {outcome.error}"
-        assert outcome.db.provider_calls() == ["stripe"], (
+        assert outcome.db.provider_calls() == ["razorpay"], (
             "the renewal contacted no payment provider; Requirement 11.6 requires a payment "
             "confirmed through the Billing_Integration before a transition into ACTIVE"
         )
         assert outcome.body.get("provider_reference") == "cs_renewal_1"
         assert outcome.body.get("checkout_url")
         assert outcome.body.get("subscription_id") == SUBSCRIPTION_ID
-        assert outcome.body.get("provider") == "stripe"
+        assert outcome.body.get("provider") == "razorpay"
 
     def test_the_renewal_amount_is_the_listings_price_minor_exactly(self):
         """1999 Minor_Units for a $19.99 Listing, as an ``int``. No float goes near an amount."""
@@ -732,7 +732,7 @@ class TestTheRenewalIsACheckout:
         assert type(outcome.provider_amounts[0]) is int
         assert outcome.body.get("amount_minor") == PRICE_MINOR_1999
         assert type(outcome.body["amount_minor"]) is int
-        assert outcome.body.get("currency") == "USD"
+        assert outcome.body.get("currency") == "INR"
 
     def test_the_renewal_changes_no_stored_state(self):
         """Zero write statements, and every table byte-identical before and after.
@@ -789,7 +789,7 @@ class TestTheRenewalIsACheckout:
         outcome = run_renewal(subscription_status=status)
 
         assert outcome.error is None, f"a {status} subscription could not renew: {outcome.error}"
-        assert outcome.db.provider_calls() == ["stripe"]
+        assert outcome.db.provider_calls() == ["razorpay"]
         assert not outcome.db.writes()
 
     def test_the_renewable_set_is_the_activation_set(self):

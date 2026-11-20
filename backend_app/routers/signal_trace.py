@@ -60,10 +60,9 @@ have to re-derive them from the source.
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
-from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response, Body
-from pydantic import BaseModel, Field
+from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response
 
 from backend_app.backend.order_lifecycle_state import (
     ORDER_LIFECYCLE_STATE_VALUES,
@@ -101,97 +100,46 @@ SIGNAL_TRACE_LITERAL_PATHS = ("/api/signal-trace/signals/export",)
 # REQUEST MODELS
 # ══════════════════════════════════════════════════════════════════════════
 
-class SignalCreateRequest(BaseModel):
-    """Request model for creating a signal."""
-    strategy_id: str = Field(..., description="Strategy ID")
-    strategy_version: str = Field(..., description="Strategy version")
-    deployment_id: str = Field(..., description="Deployment ID")
-    exchange_id: str = Field(..., description="Exchange ID")
-    symbol: str = Field(..., description="Trading pair")
-    timeframe: str = Field(..., description="Timeframe")
-    worker_id: str = Field(..., description="Worker ID")
-    decision: str = Field(..., description="Signal decision: BUY, SELL, EXIT, CLOSE, HOLD")
-    indicators: Dict = Field(..., description="Indicator values")
-    market_info: Dict = Field(..., description="Market information")
-    ml_info: Optional[Dict] = Field(None, description="ML/DL information")
-
-
-class RiskDecisionRequest(BaseModel):
-    """Request model for updating risk decision."""
-    risk_passed: bool = Field(..., description="Whether risk check passed")
-    risk_reason: str = Field(..., description="Reason for risk decision")
-    position_size: Optional[float] = Field(None, description="Calculated position size")
-    capital: Optional[float] = Field(None, description="Available capital")
-    exposure: Optional[float] = Field(None, description="Current exposure")
-    expected_loss: Optional[float] = Field(None, description="Expected loss")
-    expected_reward: Optional[float] = Field(None, description="Expected reward")
-    drawdown_check: Optional[bool] = Field(None, description="Drawdown check result")
-
-
-class OrderUpdateRequest(BaseModel):
-    """Request model for updating order information."""
-    order_id: str = Field(..., description="Order ID")
-    exchange_order_id: Optional[str] = Field(None, description="Exchange order ID")
-    order_status: str = Field(..., description="Order status")
-    quantity: float = Field(..., description="Order quantity")
-    filled: float = Field(..., description="Filled quantity")
-    remaining: float = Field(..., description="Remaining quantity")
-    average_price: float = Field(..., description="Average fill price")
-    fees: float = Field(..., description="Trading fees")
-    slippage: float = Field(..., description="Slippage")
-    latency_ms: float = Field(..., description="Order latency in milliseconds")
-
-
-class ExecutionUpdateRequest(BaseModel):
-    """Request model for updating execution information."""
-    trade_id: str = Field(..., description="Trade ID")
-    pnl: float = Field(..., description="PnL")
-    realized_pnl: Optional[float] = Field(None, description="Realized PnL")
-
-
 # ══════════════════════════════════════════════════════════════════════════
-# SIGNAL CRUD OPERATIONS
-# ══════════════════════════════════════════════════════════════════════════
-
-@router.post("/signals")
-@limiter.limit("100/minute")
-async def create_signal(
-    request: Request,
-    body: SignalCreateRequest = Body(...),
-    user: dict = Depends(get_current_user)
-):
-    """
-    Create a new signal record.
-    
-    Signal generation event in the execution audit trail.
-    """
-    try:
-        service = await get_signal_service()
-        
-        signal = await service.create_signal(
-            user=user,
-            strategy_id=body.strategy_id,
-            strategy_version=body.strategy_version,
-            deployment_id=body.deployment_id,
-            exchange_id=body.exchange_id,
-            symbol=body.symbol,
-            timeframe=body.timeframe,
-            worker_id=body.worker_id,
-            decision=body.decision,
-            indicators=body.indicators,
-            market_info=body.market_info,
-            ml_info=body.ml_info
-        )
-        
-        return signal
-    except Exception as e:
-        logger.error(f"Error creating signal for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "SIGNAL_CREATE_FAILED", "message": str(e)}
-        )
-
-
+# AUD-01. ``SignalCreateRequest``/``RiskDecisionRequest``/``OrderUpdateRequest``/
+# ``ExecutionUpdateRequest`` and the four endpoints they fed
+# (``POST /signals``, ``PUT /signals/{id}/risk``, ``PUT /signals/{id}/order``,
+# ``PUT /signals/{id}/execution``) were deleted here.
+#
+# THE DEFECT. Each was gated by nothing more than ``get_current_user`` - any
+# authenticated trader - and wrote WHATEVER the request body said directly into
+# ``public.signals`` via the identical ``SignalService.create_signal`` /
+# ``update_risk_decision`` / ``update_order`` / ``update_execution`` methods the
+# platform's own runtime uses. A trader could therefore write a signal for a
+# strategy they do not run, claim a risk engine "approved" a position it never
+# evaluated, or report an order fill/fee/slippage/PnL that never happened - and
+# ``tests/sandbox_lifecycle/test_cross_tenant_ownership_matrix.py``'s own
+# docstring recorded this exact area as "DATABASE-scoped… correctly filtered"
+# for CROSS-tenant tampering while flagging a separate in-memory-fallback
+# defect, neither of which changes that the DATA ITSELF was never validated
+# against anything real.
+#
+# THE FIX. These four routes had no legitimate caller: the real writer,
+# ``backend/master_executor.py``, calls the SAME ``SignalService`` methods as
+# a direct, in-process Python call -- never over HTTP -- and the frontend
+# (grepped across ``algo22-terminal/src/``) never calls any of the four paths
+# either. Deleting the HTTP surface removes the ONLY way an ordinary caller
+# could reach these methods at all, while the runtime's own direct calls are
+# completely unaffected (they never went through this router). The read
+# endpoints below (``list_signals``, ``export_signals``, the detail and
+# timeline routes) are UNCHANGED - users keep full read access to their own
+# audit trail, which is what "service-only writes, user endpoints read-only"
+# means.
+#
+# NOT DONE HERE, AND WHY. The remediation this finding names also asks for
+# "an append-only table with hash chaining for live" - a schema migration
+# (``public.signals`` would need the same append-only/RLS/trigger treatment
+# this session gave ``order_audit_log`` and ``trade_history``) that requires
+# verifying today's actual RLS policies and grants on ``signals`` in a real
+# database before touching them, which this pass does not have the means to
+# do safely. Closing the externally-reachable fabrication surface is the
+# concrete, verifiable half of this finding; the schema-hardening half
+# remains open.
 # ══════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════
 #
@@ -582,128 +530,8 @@ async def get_signal_timeline(request: Request,
         )
 
 
-@router.put("/signals/{signal_id}/risk")
-@limiter.limit("100/minute")
-async def update_risk_decision(
-    request: Request, 
-    signal_id: str,
-    body: RiskDecisionRequest = Body(...),
-    user: dict = Depends(get_current_user)
-):
-    """
-    Update signal with risk decision.
-    
-    Risk evaluation event in the execution audit trail.
-    """
-    try:
-        service = await get_signal_service()
-        
-        signal = await service.update_risk_decision(
-            user=user,
-            signal_id=signal_id,
-            risk_passed=body.risk_passed,
-            risk_reason=body.risk_reason,
-            position_size=body.position_size,
-            capital=body.capital,
-            exposure=body.exposure,
-            expected_loss=body.expected_loss,
-            expected_reward=body.expected_reward,
-            drawdown_check=body.drawdown_check
-        )
-        
-        return signal
-    except Exception as e:
-        logger.error(f"Error updating risk decision for signal {signal_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "RISK_UPDATE_FAILED", "message": str(e)}
-        )
-
-
-@router.put("/signals/{signal_id}/order")
-@limiter.limit("100/minute")
-async def update_order(
-    request: Request, 
-    signal_id: str,
-    body: OrderUpdateRequest = Body(...),
-    user: dict = Depends(get_current_user)
-):
-    """
-    Update signal with order information.
-    
-    Order generation and exchange response event in the execution audit trail.
-    """
-    try:
-        service = await get_signal_service()
-        
-        signal = await service.update_order(
-            user=user,
-            signal_id=signal_id,
-            order_id=body.order_id,
-            exchange_order_id=body.exchange_order_id,
-            order_status=body.order_status,
-            quantity=body.quantity,
-            filled=body.filled,
-            remaining=body.remaining,
-            average_price=body.average_price,
-            fees=body.fees,
-            slippage=body.slippage,
-            latency_ms=body.latency_ms
-        )
-        
-        return signal
-    except Exception as e:
-        logger.error(f"Error updating order for signal {signal_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "ORDER_UPDATE_FAILED", "message": str(e)}
-        )
-
-
-@router.put("/signals/{signal_id}/execution")
-@limiter.limit("100/minute")
-async def update_execution(
-    request: Request, 
-    signal_id: str,
-    body: ExecutionUpdateRequest = Body(...),
-    user: dict = Depends(get_current_user)
-):
-    """
-    Update signal with execution and PnL information.
-
-    Execution event in the execution audit trail.
-
-    BC-6 (vyomquant-ui-redesign task 12.6; Requirements 9.1, 9.2, 19.1, 19.2)
-        THIS IS ALSO WHERE REQUIREMENT 9.1'S STAGE 9 IS RECORDED. The same write that
-        records the execution makes the timeline's ``POSITION_UPDATED`` event appear, because
-        that event is derived from this row's ``executed_at`` (``signal_service``'s
-        :func:`~backend_app.backend.signal_service._position_updated_event`). There is no
-        second write, so this endpoint gained no new way to fail.
-
-        THE REQUEST CONTRACT IS UNCHANGED. ``ExecutionUpdateRequest`` still declares
-        exactly ``trade_id``, ``pnl`` and ``realized_pnl``; no field was added, required or
-        optional. A position the caller does not report is reported as not-available on the
-        event rather than solicited here or invented downstream.
-
-        A REPEAT CALL IS SAFE. This is an overwrite of ``executed_at``, not an append, and
-        the timeline is a derivation from the row - so calling it twice for the same signal
-        leaves exactly one ``POSITION_UPDATED``, not two.
-    """
-    try:
-        service = await get_signal_service()
-        
-        signal = await service.update_execution(
-            user=user,
-            signal_id=signal_id,
-            trade_id=body.trade_id,
-            pnl=body.pnl,
-            realized_pnl=body.realized_pnl
-        )
-        
-        return signal
-    except Exception as e:
-        logger.error(f"Error updating execution for signal {signal_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "EXECUTION_UPDATE_FAILED", "message": str(e)}
-        )
+# AUD-01: PUT /signals/{id}/risk, PUT /signals/{id}/order and
+# PUT /signals/{id}/execution were deleted here along with POST /signals above - see
+# that deletion's own comment for the full reasoning. SignalService.update_risk_decision/
+# update_order/update_execution themselves are untouched and keep serving
+# backend/master_executor.py's direct, in-process calls.

@@ -264,6 +264,34 @@ class EventListener:
             # Clear oldest 50% (simple approach)
             self._processed_event_ids = set(list(self._processed_event_ids)[50000:])
         
+        # ── RT-16: REFUSE TO QUEUE INTO A QUEUE NOTHING DRAINS ───────────────────
+        #
+        # `_event_queue` is drained only by `_event_processing_loop`, which only runs
+        # after `start(event_router)` -- and `start` has no caller anywhere in the
+        # application. So before this guard, an event arriving on an unstarted listener
+        # was accepted, counted as processed (it is already in `_processed_event_ids`
+        # above, so a retry would be dropped as a duplicate), and put into a
+        # PriorityQueue that would grow for the life of the process while
+        # `self._event_router` stayed None.
+        #
+        # That is the worst of the three available behaviours: the fill is lost, the
+        # memory is not, and nothing says so. Refusing makes the condition visible and
+        # keeps `OrderWatchdog`'s poll as the single reconciliation path it already is.
+        if not self._running or self._event_router is None:
+            # Undo the dedup bookkeeping: this event was NOT processed, and a later
+            # redelivery of it must not be silently discarded as a duplicate.
+            self._processed_event_ids.discard(event.event_id)
+            logger.error(
+                "RT-16: dropping exchange event %s (type=%s) because this EventListener "
+                "has no event router -- start(event_router) was never called, so nothing "
+                "drains the queue. Queuing it would lose the fill AND leak memory. The "
+                "venue-reconciliation chain is not wired; OrderWatchdog's poll remains "
+                "the only path that resolves an order against the exchange.",
+                event.event_id,
+                getattr(event.event_type, "value", event.event_type),
+            )
+            return
+
         # Queue event with priority
         priority = self._get_event_priority(event.event_type)
         
@@ -271,7 +299,12 @@ class EventListener:
         sequence_key = event.sequence_id or int(event.received_at.timestamp() * 1000000)
         
         # (priority, sequence_key, event)
-        asyncio.create_task(self._event_queue.put((priority, sequence_key, event)))
+        # `put_nowait`, not `create_task(put(...))`: the queue is unbounded, so `put`
+        # never blocks and the task was pure overhead -- and worse, it detached the
+        # enqueue from this call, so ordering between two events delivered in the same
+        # tick depended on task scheduling rather than on the sequence key, and any
+        # exception vanished into an un-awaited task.
+        self._event_queue.put_nowait((priority, sequence_key, event))
         
         logger.debug(
             f"Event queued: {event.event_id} | "

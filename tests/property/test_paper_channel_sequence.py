@@ -17,7 +17,9 @@ WHAT IS DRIVEN, AND WHAT IS NOT DOUBLED
 Real: ``paper_events.record_event`` (the emit path: allocate, build, append),
 ``paper_repository.allocate_session_event_sequence`` (the version-guarded optimistic swap - three
 attempts, no in-process counter), ``paper_repository.insert_session_event``,
-``paper_repository.next_session_event_sequence`` (task 24.4's feed writer's allocator),
+``paper_repository.next_session_event_sequence`` (a log-based allocator used directly below as a
+synthetic second writer -- PAPER-06 moved its one production caller, task 24.4's feed-disconnect
+writer, onto ``allocate_session_event_sequence`` instead; see ``before_insert`` below),
 ``paper_channel.replay`` and ``paper_channel.broadcast``.
 
 Doubled: only the Persistence_Layer, through ``tests/test_paper_repository.FakeSupabase`` - the one
@@ -53,9 +55,11 @@ BOTH ways, and the census counts what actually happened rather than what was int
   - ``before_insert`` on ``paper_events``: the row has not landed yet, so a second writer that
     appends at the same sequence HERE makes the first's INSERT violate ``uq_paper_event_seq``.
     That second writer uses ``paper_repository.next_session_event_sequence`` -
-    ``max(sequence) + 1`` over the log, which is task 24.4's feed writer's allocator and a real
-    production path - because that is precisely the writer the counter's optimistic swap cannot
-    arbitrate against, and the database's refusal is what does.
+    ``max(sequence) + 1`` over the log, a log-based allocator the counter's optimistic swap cannot
+    arbitrate against by construction - so the database's refusal is what does, and the retry that
+    follows proves the counter allocator stays contiguous against ANY such writer, not only the
+    one production caller (task 24.4's feed-disconnect writer) this modeled before PAPER-06 moved
+    that caller onto the counter allocator itself.
 
 Both intrusions are the same production code the first producer runs. Neither is a mock, and
 neither weakens anything: the retry that follows a refusal is the one ``record_event``'s docstring
@@ -389,12 +393,17 @@ class _ConcurrentWriter:
     # ── seam 2: the duplicate-sequence refusal (uq_paper_event_seq) ────────
 
     def before_insert(self, client: Any, query: Any) -> None:
-        """Append at the sequence the other producer is about to use, through the feed writer.
+        """Append at the sequence the other producer is about to use, via a log-based allocator.
 
-        ``next_session_event_sequence`` is ``max(paper_events.sequence) + 1``: task 24.4's writer,
-        which reads the LOG rather than the counter and therefore cannot be arbitrated by the
-        counter's compare-and-swap. ``uq_paper_event_seq`` arbitrates it instead, and that refusal
-        is what the other producer then retries around.
+        ``next_session_event_sequence`` is ``max(paper_events.sequence) + 1`` -- it reads the LOG
+        rather than the counter and therefore cannot be arbitrated by the counter's compare-and-swap.
+        ``uq_paper_event_seq`` arbitrates it instead, and that refusal is what the other producer
+        then retries around. PAPER-06 moved the one production caller this simulated (task 24.4's
+        feed-disconnect writer) onto ``allocate_session_event_sequence`` instead, closing that real
+        collision; ``next_session_event_sequence`` itself is kept (it is still exercised directly by
+        its own test coverage) and reused HERE purely as a synthetic log-based second writer, to
+        keep proving the counter allocator's retry recovers contiguously against ANY writer that
+        bypasses it -- a property worth holding regardless of which caller it was built to describe.
         """
         if query.table_name != repo.EVENTS_TABLE or query.op != "insert":
             return

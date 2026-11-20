@@ -2889,16 +2889,22 @@ def test_the_simulator_writes_neither_created_nor_cancelled() -> None:
 
 
 def test_the_transition_guard_runs_before_the_first_write() -> None:
-    """The defect P-19 found, pinned structurally: ``can_transition`` precedes ``insert_fill``.
+    """The defect P-19 found, pinned structurally: ``can_transition`` precedes the writes.
 
     ``apply_fill`` used to validate ``state -> target`` only inside its fifth write, by which point
     the fill row, the account balance, the ledger row and the position had been written and this
     transport had no ``ROLLBACK`` to undo them. Asserted on the source positions because the
     ordering *is* the fix: a check that is present but late is the bug.
+
+    PAPER-05 replaced those seven separate writes with one call to
+    ``repo.apply_fill_atomic`` (``048_paper05_apply_fill_atomic.sql``), so there is now
+    exactly one write marker to check the guard precedes rather than three -- the
+    property this test pins (the transition guard runs before ANY write) is unchanged;
+    only the source shape of "a write" is.
     """
     source = inspect.getsource(sim.apply_fill)
     guard = source.index("can_transition(")
-    for write in ("repo.insert_fill(", "repo.bump_version(", "repo.upsert_position("):
+    for write in ("repo.apply_fill_atomic(",):
         assert guard < source.index(write), (
             f"apply_fill checks the transition after {write} - so an illegal transition would "
             "leave a partial write behind, which is exactly the defect P-19 reported"

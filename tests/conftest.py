@@ -22,6 +22,8 @@ os.environ["SUPABASE_JWT_SECRET"] = "dev-secret-change-in-production"
 # Set DEFAULT_EXCHANGE for websocket tests
 os.environ["DEFAULT_EXCHANGE"] = "binance"
 
+
+
 # Set VYOMQUANT_MODE=safe to override .env file's paper mode and ensure SQLite fallback
 os.environ["VYOMQUANT_MODE"] = "safe"
 
@@ -87,6 +89,58 @@ _REDIS_SINGLETON_SEAMS = (
 )
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  SQLITE LANE SCHEMA BOOTSTRAP
+#
+#  API-05 (commit 9ae0cd7) removed `Base.metadata.create_all(bind=engine)` from
+#  `main.py`'s import-time path -- correctly: it was a third schema-management
+#  mechanism alongside the numbered SQL migrations and Alembic, and it ran as an
+#  unconditional side effect of merely importing the module. But before that removal,
+#  some test files build a `TestClient(app)` and so DO import `main.py`, which is how
+#  the SQLite fallback file (`algo22.db`) ever got its tables -- nothing else in this
+#  suite ever created them. Once the call was gone, every SQLite-lane test that drives
+#  a real engine through `backend_app.core.database.SessionLocal()` directly (not
+#  through the app) was left with an empty database on a fresh checkout.
+#
+#  This never showed up locally because a developer's scratch `algo22.db` already had
+#  tables from before the removal, and it never showed up in CI because CI-06's
+#  dependency-audit bug meant the Unit & Integration Tests and Execution Tests jobs had
+#  never actually executed on this branch until now -- the same "first real run
+#  surfaces an invisible gap" pattern as CI-08, which hit the identical problem (no
+#  `auth.users`) on the PostgreSQL lane's own job and fixed it by provisioning the
+#  substrate explicitly rather than relying on an import-time side effect.
+#
+#  Scoped to the SQLite fallback specifically, never a real database: the PostgreSQL
+#  lane (`AERORA_TEST_DATABASE_URL` set) already provisions its schema from the real
+#  migrations before pytest runs (see 01-pr-check.yml's `database-tests` job), and
+#  running `create_all` there would be redundant at best and, per API-05's own
+#  reasoning, wrong in principle for any environment with real migrations to apply
+#  instead.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sqlite_lane_schema_bootstrap():
+    """Create every ORM table on the SQLite fallback file, once per test session.
+
+    `01-pr-check.yml`'s `frontend-build` job runs `tests/test_no_secrets_in_bundle.py`
+    (-m frontend_bundle) in a Python environment that installs only pytest -- it scans
+    the already-built JS bundle for leaked secrets and has no business with the
+    database, so it never installs sqlalchemy. Autouse means every collected test
+    requests this fixture, so the import has to be optional the same way
+    `_restore_shared_redis_singleton` above makes its own: a test that does not import
+    the backend at all should not be made to.
+    """
+    try:
+        from backend_app.core.database import Base, engine
+    except Exception:
+        return
+
+    if "sqlite" not in str(engine.url):
+        return
+    Base.metadata.create_all(bind=engine)
+
+
 @pytest.fixture(autouse=True)
 def _restore_shared_redis_singleton():
     """Restore the shared Redis manager's injection seams after every test.
@@ -115,6 +169,58 @@ def _restore_shared_redis_singleton():
                 redis_manager.__dict__[name] = before[name]
             else:
                 redis_manager.__dict__.pop(name, None)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEEP REDIS MANAGER SINGLETON — CROSS-EVENT-LOOP LEAK
+#
+#  `SharedRedisManager._ensure_manager()` (backend_app/core/cache/redis_manager.py)
+#  unconditionally calls `get_redis_manager()` from a SEPARATE module,
+#  `backend_app.backend.redis_manager`. That module keeps its own module-level
+#  `_redis_manager` global holding a `RedisManager` whose `._cache`/`._queue`/
+#  `._events` are real `redis.asyncio` connections bound to whichever event loop was
+#  running when `.initialize()` first succeeded. `get_redis_manager()`'s fast path
+#  (`if _redis_manager is not None and _redis_manager._connected: return
+#  _redis_manager`) hands that same object back without re-initializing as long as
+#  `._connected` stays True — which it does forever, since nothing ever calls
+#  `.close()` or flips it back to False on its own.
+#
+#  pytest-asyncio gives each async test function a fresh event loop by default
+#  (`asyncio_default_test_loop_scope=function`). The fixture above already resets
+#  `SharedRedisManager`'s own seams, including its `_redis_manager` attribute, but
+#  that only forces `_ensure_manager()` to call `get_redis_manager()` again — it does
+#  nothing about `get_redis_manager()`'s OWN module-level cache one layer down, so the
+#  second test in a process gets handed the first test's connections, bound to a loop
+#  that has since closed. Every write then fails ("Cache SET failed for '...': Event
+#  loop is closed") and callers that check the return value turn that into a hard
+#  failure rather than a silent no-op. See `tests/test_webhook_duplicate_delivery_real_redis.py`.
+#
+#  Restoring to a snapshot (like the fixture above) would be wrong here: the snapshot
+#  taken before a test with a live connection is exactly the stale object the next
+#  test must not receive. The only valid states across a loop boundary are "freshly
+#  initialized in the current loop" or "not yet initialized" — so this always resets
+#  to the latter rather than restoring a prior value.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(autouse=True)
+def _reset_deep_redis_manager_singleton():
+    """Force `backend_app.backend.redis_manager.get_redis_manager()` to reinitialize
+    in each test's own event loop instead of handing back a connection bound to a
+    previous test's already-closed loop."""
+    try:
+        import backend_app.backend.redis_manager as deep_redis
+    except Exception:
+        # A test that does not import the backend at all should not be made to.
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        deep_redis._redis_manager = None
+        deep_redis._get_manager_lock = None
+        deep_redis._get_manager_last_failed = 0.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -269,3 +375,420 @@ def _entitlement_state_is_per_test():
         yield
     finally:
         _clear_entitlement_keys()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  RATE-LIMITER LEAK GUARD  (REGRESSION_ORDER_ISOLATION.md)
+#
+#  The 8 order-dependent failures in `test_task_6_1_backtest_execute.py` were all an
+#  HTTP 429 where 409/200/404/422/500 was expected -- 33 passed when that file ran
+#  alone, 33 passed at HEAD, 8 failed at 80% of the full-suite ordering.
+#
+#  WHY A PER-FILE RESET WAS NOT ENOUGH. That file already carries
+#
+#      @pytest.fixture(autouse=True)
+#      def clear_rate_limit():
+#          from backend_app.core.rate_limit import limiter
+#          limiter.reset()
+#
+#  autouse and function-scoped, so it ran. The problem is WHICH OBJECT it reset.
+#  `core/rate_limit.py` builds ONE module-level `limiter`, the routers are decorated
+#  with `@limiter.limit(...)` at THEIR import time, and `main.py:593` does
+#  `app.state.limiter = limiter`. Three test files then re-import or reload that
+#  module -- `test_api03_rate_limit_storage_is_fail_closed.py`,
+#  `test_rate_limiter_fails_closed_in_production.py` (both `sys.modules.pop` +
+#  `import_module`) and `test_rate_limit_backend.py` (`importlib.reload`) -- which
+#  REBINDS `rate_limit.limiter` to a brand-new `Limiter` with its own storage while
+#  every registered route keeps closing over the original.
+#
+#  From that point on `from backend_app.core.rate_limit import limiter` yields a
+#  different object than the app is counting on, so the per-file reset cleared an
+#  unused limiter and the app's per-minute windows accumulated across thousands of
+#  TestClient requests until the routes started answering 429. The two rate-limit
+#  files run at 57% and `test_task_6_1` at 80%, which is the ordering observed.
+#
+#  Measured, not inferred: `staging/probe_order_isolation_429.py` confirms all six
+#  steps -- the app holds the original, a re-import yields a different object, the app
+#  still holds the original, the re-imported one is therefore the wrong reset target,
+#  `importlib.reload` does the same, and the two have separate storage.
+#
+#  THE FIX. Reset the limiter THE APP HOLDS, which is reachable as
+#  `app.state.limiter` whatever the module currently exports. Done here rather than in
+#  five separate files because it is a property of the session, not of any one file.
+#
+#  TEST-ONLY CONTAMINATION, not a product defect. Nothing in production re-imports
+#  `core.rate_limit`; each caller has its own rate-limit key and the windows roll.
+#  What the suite does that production does not is share one client address across
+#  ~13,000 requests in one process.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+#: Every ``Limiter`` instance this session has seen, including the ORPHANS a module
+#: re-import leaves behind. A ``WeakSet`` so a limiter that really does become garbage is
+#: not kept alive by this guard.
+_SEEN_LIMITERS = None
+
+#: The fingerprint of the last scan: ``(id(module limiter), id(app), route count)``.
+#:
+#: Keyed on the APP as well as the limiter, and that was a correction. Keying on the
+#: limiter alone scanned once -- on the first test, before anything had imported
+#: ``backend_app.main`` -- found no routes, recorded the limiter id, and then never
+#: re-scanned, so the guard was inert for the whole session and the 8 failures survived
+#: it. The route count is in the key too, because the app is built incrementally and a
+#: scan taken before the last router was registered would miss its limiter.
+_LAST_SCAN_KEY = None
+
+
+def _scan_for_limiters():
+    """Find every ``Limiter`` the app's routes are actually enforcing on, and remember it.
+
+    MEASURED NECESSITY, not defensiveness. ``staging/probe_order_isolation_429_body.py``
+    found THREE live ``Limiter`` instances mid-suite: ``app.state.limiter`` (which is also
+    the module's) and two ORPHANS left behind by the module re-imports. Resetting
+    ``app.state.limiter`` left the request at 429; resetting every live limiter brought it
+    to the expected 409. So the object doing the counting is reachable from neither the
+    module attribute nor ``app.state``.
+
+    WHY THE ROUTE CLOSURES AND NOT ``gc.get_objects()``. The gc sweep was tried first and
+    raised ``MemoryError`` on this process -- the app plus Hypothesis is millions of
+    objects and the returned list alone exhausted memory. ``slowapi`` keeps the limiter in
+    the closure of the wrapper its ``@limiter.limit(...)`` decorator installs (measured:
+    ``staging/probe_find_limiters_cheaply.py`` found 2 limiters across 351 route
+    endpoints, and ``endpoint attributes mentioning 'limit'`` is empty, so the closure is
+    the only place it lives). Walking 351 endpoints is cheap and reaches exactly the
+    objects that can refuse a request.
+    """
+    global _SEEN_LIMITERS
+
+    try:
+        from slowapi import Limiter
+    except Exception:
+        return
+
+    import sys
+    import weakref
+
+    if _SEEN_LIMITERS is None:
+        _SEEN_LIMITERS = weakref.WeakSet()
+
+    main_module = sys.modules.get("backend_app.main")
+    app = getattr(main_module, "app", None) if main_module is not None else None
+    for route in getattr(app, "routes", ()) or ():
+        func = getattr(route, "endpoint", None)
+        for _ in range(6):  # a short __wrapped__ chain; decorators here do not nest deep
+            if func is None:
+                break
+            for cell in getattr(func, "__closure__", None) or ():
+                try:
+                    value = cell.cell_contents
+                except ValueError:  # an empty cell
+                    continue
+                if isinstance(value, Limiter):
+                    _SEEN_LIMITERS.add(value)
+            func = getattr(func, "__wrapped__", None)
+
+
+def _reset_bound_rate_limiters():
+    """Reset every limiter object that could be holding a count for this session.
+
+    Deliberately does NOT import ``backend_app.main``. A test that never touches the app
+    should not pay for importing it, and forcing the import here would change what
+    thousands of tests load. The app is reset only if it is already in ``sys.modules``.
+    """
+    global _LAST_SCAN_KEY
+
+    import sys
+
+    rate_limit_module = sys.modules.get("backend_app.core.rate_limit")
+    current = getattr(rate_limit_module, "limiter", None)
+
+    main_module = sys.modules.get("backend_app.main")
+    app = getattr(main_module, "app", None) if main_module is not None else None
+
+    # Re-scan when anything that could introduce a new enforcing limiter has changed:
+    # the module's limiter being swapped by a re-import, a different app object, or more
+    # routes registered than the last scan saw.
+    scan_key = (
+        id(current) if current is not None else None,
+        id(app) if app is not None else None,
+        len(getattr(app, "routes", ()) or ()) if app is not None else 0,
+    )
+    if scan_key != _LAST_SCAN_KEY:
+        _LAST_SCAN_KEY = scan_key
+        _scan_for_limiters()
+
+    targets = []
+    if _SEEN_LIMITERS is not None:
+        targets.extend(list(_SEEN_LIMITERS))
+
+    bound = getattr(getattr(app, "state", None), "limiter", None)
+    for candidate in (bound, current):
+        if candidate is not None and not any(candidate is item for item in targets):
+            targets.append(candidate)
+
+    for limiter in targets:
+        reset = getattr(limiter, "reset", None)
+        if reset is None:
+            continue
+        try:
+            reset()
+        except Exception:
+            # A limiter whose storage refuses a reset must not fail the test that was
+            # about to run; the counts it keeps are the thing being guarded against,
+            # and a failure here would be reported against an innocent test.
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _rate_limit_counts_are_per_test():
+    """No test inherits another's rate-limit count. See the banner above."""
+    _reset_bound_rate_limiters()
+    try:
+        yield
+    finally:
+        _reset_bound_rate_limiters()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STANDING THE RATE LIMITER DOWN FOR A DIRECT HANDLER CALL
+#
+#  THE SAME OBJECT-IDENTITY DEFECT AS THE BANNER ABOVE, in its second form. That
+#  banner fixed the leak of rate-limit COUNTS by resetting every limiter the app
+#  is really enforcing on. The `enabled` flag had the identical problem and was
+#  not fixed, which is a different and louder failure:
+#
+#      Exception: parameter `request` must be an instance of starlette.requests.Request
+#
+#  Several modules call a route's handler as a plain function with a fake request,
+#  which is what makes an injected Supabase double and recorded writes possible.
+#  `slowapi`'s wrapper refuses a non-`Request` before the handler body runs
+#  whenever its limiter is enabled, so each of those modules stands the limiter
+#  down with
+#
+#      from backend_app.core.rate_limit import limiter
+#      monkeypatch.setattr(limiter, "enabled", False)
+#
+#  That disables WHATEVER `core.rate_limit` currently exports. Three test files
+#  (`test_api03_rate_limit_storage_is_fail_closed.py`,
+#  `test_rate_limiter_fails_closed_in_production.py`, `test_rate_limit_backend.py`)
+#  `sys.modules.pop` + re-import or `importlib.reload` that module, which REBINDS
+#  `rate_limit.limiter` to a brand-new `Limiter` while every already-decorated
+#  route keeps closing over the original. From then on the stand-down disables an
+#  object nothing enforces on, and the handler's own limiter is still armed.
+#
+#  MEASURED, not inferred. Before the reload, `deploy_marketplace_strategy`'s
+#  closure holds exactly the module's limiter (same id). After it, the module's id
+#  changes and the closure's does not, so `any(c is rate_limit.limiter for c in
+#  closure)` is False. Running those three files ahead of
+#  `tests/test_rt24_marketplace_deployment_starts.py` reproduces its seven CI
+#  failures locally, with the exact slowapi message above; run alone the file
+#  passes. That is why the failures looked like a CI-only mystery.
+#
+#  So the stand-down must target the limiter the HANDLER captured. Nothing here
+#  weakens rate-limit coverage: the decorators' presence and their exact limits are
+#  asserted from the limiter's own registry by
+#  `tests/test_task_33_2_rate_limit_keys.py`, and enforcement is exercised there
+#  against the real application.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _limiters_in_closure(func, depth=6):
+    """Every ``Limiter`` the decorator chain on ``func`` actually captured.
+
+    ``@limiter.limit(...)`` keeps its limiter in the closure of the wrapper it
+    installs, so this is where the object that can refuse a request lives --
+    reachable from neither the module attribute nor ``app.state`` once a re-import
+    has swapped those. Walks ``__wrapped__`` as well, because the handler may carry
+    other decorators above the rate limiter.
+    """
+    try:
+        from slowapi import Limiter
+    except Exception:  # pragma: no cover - slowapi absent means nothing to stand down
+        return []
+
+    found = []
+    for _ in range(depth):
+        if func is None:
+            break
+        for cell in getattr(func, "__closure__", None) or ():
+            try:
+                value = cell.cell_contents
+            except ValueError:  # an empty cell
+                continue
+            if isinstance(value, Limiter) and not any(value is seen for seen in found):
+                found.append(value)
+        func = getattr(func, "__wrapped__", None)
+    return found
+
+
+@pytest.fixture
+def stand_down_rate_limiting(monkeypatch):
+    """Disable every limiter that could refuse a direct call to ``handlers``.
+
+    Usage, from a module that calls handlers as functions::
+
+        @pytest.fixture(autouse=True)
+        def _rate_limiter_off(stand_down_rate_limiting):
+            stand_down_rate_limiting(lib.deploy_marketplace_strategy)
+
+    Covers three objects deliberately: the limiters in each handler's own closure
+    (the ones that actually enforce), the module's current export, and
+    ``app.state.limiter`` if the app is already imported. The last two are belt and
+    braces for a handler whose closure cannot be walked; the first is the one that
+    fixes the defect described above.
+
+    REFUSES SILENT NO-OPS. If a handler is passed and no limiter is found in its
+    closure, this raises. A stand-down that quietly found nothing is how the
+    original defect survived: the fixture ran, reported nothing, and the test
+    failed somewhere else entirely.
+
+    ``monkeypatch`` restores every flag afterwards, so nothing leaks into the rest
+    of the session.
+    """
+
+    def _apply(*handlers):
+        import sys
+
+        targets = []
+        for handler in handlers:
+            captured = _limiters_in_closure(handler)
+            if not captured:
+                raise AssertionError(
+                    f"no slowapi Limiter found in the closure of "
+                    f"{getattr(handler, '__name__', handler)!r}. Either it no longer "
+                    f"carries @limiter.limit(...) -- in which case this stand-down is "
+                    f"dead code and should go -- or the decorator chain is deeper than "
+                    f"this walk. Do not ignore it: a stand-down that finds nothing "
+                    f"leaves the handler refusing every fake request."
+                )
+            for limiter in captured:
+                if not any(limiter is seen for seen in targets):
+                    targets.append(limiter)
+
+        rate_limit_module = sys.modules.get("backend_app.core.rate_limit")
+        main_module = sys.modules.get("backend_app.main")
+        app = getattr(main_module, "app", None) if main_module is not None else None
+        for candidate in (
+            getattr(rate_limit_module, "limiter", None),
+            getattr(getattr(app, "state", None), "limiter", None),
+        ):
+            if candidate is not None and not any(candidate is seen for seen in targets):
+                targets.append(candidate)
+
+        for limiter in targets:
+            monkeypatch.setattr(limiter, "enabled", False, raising=False)
+        return targets
+
+    return _apply
+
+
+
+# ── RT-15 helper ──────────────────────────────────────────────────────────────────────
+# The live-execution gate now also requires the PLATFORM to be in live mode (mode=live,
+# live trading enabled, tenant allowlisted). Tests that deliberately mint and present live
+# authorisations opt in with ``@pytest.mark.usefixtures("live_platform_enabled")`` (or
+# ``pytestmark``). It patches only the environment, per test, and restores it.
+import pytest as _pytest_rt15  # noqa: E402
+
+
+@_pytest_rt15.fixture()
+def live_platform_enabled(monkeypatch):
+    monkeypatch.setenv("VYOMQUANT_MODE", "live")
+    monkeypatch.setenv("VYOMQUANT_ENABLE_LIVE_TRADING", "true")
+    monkeypatch.setenv("VYOMQUANT_LIVE_TENANT_ALLOWLIST", "*")
+    yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_on_demand_venue_quotes():
+    """PAPER-02: the on-demand venue quote must never fire from the unit suite.
+
+    ``paper_trading_service.resolve_market_price`` falls back to
+    :func:`~backend_app.backend.paper_trading_service.fetch_venue_quote`, a real bounded
+    REST read, when nothing has cached a price. ``tests/conftest.py`` sets
+    ``DEFAULT_EXCHANGE=binance`` for the whole suite (see the top of this file), so without
+    this guard every market-order test that does not supply a quote would reach out to the
+    live venue -- making unit tests network-dependent, slow, and dependent on a real price.
+
+    Autouse and default-off, so the production behaviour is opt-IN for a test rather than
+    opt-out: a test that wants the on-demand path asserts against a fake venue (see
+    tests/test_paper02_on_demand_quote.py), and the one test that exercises it against the
+    real venue is marked and skipped unless explicitly enabled.
+
+    This is the same reason ``fresh_paper_quote`` exists for the cache half: the production
+    default is to have no quote, and a test that needs one must say so.
+
+    SESSION-SCOPED, AND NOT VIA ``monkeypatch``, DELIBERATELY. The first version of this was
+    ``@pytest.fixture(autouse=True)`` taking ``monkeypatch``, which is function-scoped -- so
+    it re-patched once per test across the whole suite and, because an autouse
+    function-scoped fixture wraps every test, it also wrapped the Hypothesis ``@given``
+    tests. That reliably broke
+    ``tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic``
+    in CI (the failure surfaced as ``ValueError: 48 is not in list`` from inside
+    Hypothesis's own shrinker, ``intervalsets.index_from_char_in_shrink_order``, which
+    masked whatever it was shrinking). Patching once for the session removes the per-example
+    fixture churn entirely, and is what this guard wanted anyway: one substitution, not
+    fifteen thousand.
+
+    A test that needs the real function restores it itself with ``monkeypatch.setattr``,
+    which still wins for the duration of that test -- see
+    ``tests/test_paper02_on_demand_quote.py::_with_venue``.
+
+    THE IMPORT IS OPTIONAL, for the same reason ``_sqlite_lane_schema_bootstrap`` and
+    ``_restore_shared_redis_singleton`` above make theirs optional, and this fixture
+    originally forgot to. ``01-pr-check.yml``'s ``frontend-build`` job runs
+    ``tests/test_no_secrets_in_bundle.py -m frontend_bundle`` in an environment that
+    installs only pytest. Autouse means every collected test requests this fixture, so an
+    unguarded ``from backend_app...`` here fails at SETUP with
+    ``ModuleNotFoundError: No module named 'pydantic'`` -- and that is precisely what it
+    did: the bundle secret sweep errored on both tests and therefore never scanned
+    anything. A blocking check for a leaked credential in a shipped bundle was inert for
+    the same reason the step order was changed to protect it. A test that does not import
+    the backend at all must not be made to.
+    """
+    try:
+        from backend_app.backend import paper_trading_service as pts
+    except Exception:
+        yield
+        return
+
+    async def _refuse(symbol, exchange_id=None, *, timeout=None):
+        return None
+
+    original = pts.fetch_venue_quote
+    pts.fetch_venue_quote = _refuse
+    try:
+        yield
+    finally:
+        pts.fetch_venue_quote = original
+
+
+@pytest.fixture
+def fresh_paper_quote(monkeypatch):
+    """PAPER-02: market orders fill only at a measured quote. Tests that exercise the
+    fill path supply one through the provider hook (the production default is None)."""
+    from decimal import Decimal
+
+    from backend_app.backend import paper_trading_service as pts
+
+    quotes = {"BTC-USDT": "65000", "BTC-USD": "65000", "ETH-USDT": "3500",
+              "ETH-USD": "3500", "SOL-USDT": "150", "SOL-USD": "150"}
+
+    async def _quote(symbol):
+        return Decimal(quotes.get(symbol, "100"))
+
+    monkeypatch.setattr(pts, "get_fresh_market_price", _quote)
+
+    # Scripted-market tests used to move the fill by passing ``price`` on a market order -
+    # the PAPER-02 defect. The scripted quote is now set explicitly; production ignores
+    # the client price for market orders (see test_paper02_*).
+    orig = pts.PaperTradingService.place_order
+
+    async def _place_order(self, user_id, symbol, side, order_type="market", quantity=0.01,
+                           price=None, *a, **kw):
+        if str(order_type).lower() == "market" and price:
+            quotes[self._clean_symbol(symbol)] = str(price)
+        return await orig(self, user_id, symbol, side, order_type, quantity, price, *a, **kw)
+
+    monkeypatch.setattr(pts.PaperTradingService, "place_order", _place_order)
+    return quotes

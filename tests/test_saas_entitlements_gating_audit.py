@@ -461,23 +461,19 @@ class TestServerSideQuotaEnforcement:
 # ── 4. Full Payment -> Subscription -> Entitlement Lifecycle ─────────────────
 class TestPaymentLifecycleAndTransitions:
     """Audit Section 3, 4, 5 & 6: Upgrade, Downgrade, Cancellation, Expiration, Past Due."""
+    # REMOVED: the tests that stood here drove BillingLifecycle.activate_subscription /
+    # start_trial / upgrade_subscription / downgrade_subscription / renew_subscription
+    # against a Supabase mock and asserted each method's own return dict. None of those
+    # methods had a production caller -- renew_subscription's only one was inside
+    # stripe_webhook()'s invoice.payment_succeeded branch, which went with the provider --
+    # so they proved the library returned what it said it returned and nothing about what
+    # the product does. The product's real grant path is the Razorpay webhook
+    # (_apply_billing_entitlement + _record_plan_period), covered behaviourally by
+    # test_billing_e2e.py, test_bill01_razorpay_plans_expire.py and
+    # test_subscription_renewal_regression.py. The surface itself is now pinned by
+    # tests/test_billing_lifecycle_surface.py, which also records that this product has
+    # no trial, no grace period, no proration on upgrade and no scheduled downgrade.
 
-    @pytest.mark.asyncio
-    async def test_subscription_activation_from_payment(self):
-        """Successful payment activates plan in DB and clears profile cache."""
-        mock_sb = create_supabase_mock(tier="free", user_id="usr_pay_1")
-
-        with patch("backend_app.core.billing_lifecycle.redis_manager.delete", new_callable=AsyncMock) as mock_del:
-            result = await BillingLifecycle.activate_subscription(
-                user_id="usr_pay_1",
-                plan="pro",
-                supabase=mock_sb,
-                payment_provider="stripe",
-                payment_id="pi_stripe_12345"
-            )
-            assert result["status"] == "active"
-            assert result["plan"] == "pro"
-            mock_del.assert_called_with("profile_limits:usr_pay_1")
 
     @pytest.mark.asyncio
     async def test_soft_cancellation_preserves_entitlements_until_expiry(self):
@@ -497,48 +493,8 @@ class TestPaymentLifecycleAndTransitions:
             "cancel_at_period_end": True,
         })
 
-    @pytest.mark.asyncio
-    async def test_subscription_renewal_extends_billing_period(self):
-        """Auto-renewal extends next_billing_date and resets cancel_at_period_end."""
-        mock_sb = create_supabase_mock(tier="pro", status="active", user_id="usr_renew_1")
 
-        result = await BillingLifecycle.renew_subscription(
-            user_id="usr_renew_1",
-            supabase=mock_sb
-        )
-        assert result["status"] == "renewed"
-        assert result["plan"] == "pro"
 
-    @pytest.mark.asyncio
-    async def test_plan_upgrade_starter_to_pro(self):
-        """Plan upgrade immediately unlocks Pro tier capabilities."""
-        mock_sb = create_supabase_mock(tier="starter", user_id="usr_up_1")
-
-        result = await BillingLifecycle.upgrade_subscription(
-            user_id="usr_up_1",
-            new_plan="pro",
-            supabase=mock_sb
-        )
-        assert result["status"] == "upgraded"
-        assert result["previous_plan"] == "starter"
-        assert result["new_plan"] == "pro"
-
-    @pytest.mark.asyncio
-    async def test_plan_downgrade_schedules_at_next_billing(self):
-        """Plan downgrade records pending_downgrade_tier without destroying active data."""
-        mock_sb = create_supabase_mock(tier="pro", user_id="usr_down_1")
-
-        result = await BillingLifecycle.downgrade_subscription(
-            user_id="usr_down_1",
-            new_plan="starter",
-            supabase=mock_sb
-        )
-        assert result["status"] == "downgrade_scheduled"
-        assert result["current_plan"] == "pro"
-        assert result["pending_plan"] == "starter"
-        mock_sb.table("profiles").update.assert_called_with({
-            "pending_downgrade_tier": "starter"
-        })
 
 
 # ── 5. Payment Failure & Account Freeze Fail-Closed Safety ────────────────────

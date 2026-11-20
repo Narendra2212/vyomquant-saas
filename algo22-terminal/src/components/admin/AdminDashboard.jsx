@@ -2,11 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { 
     Search, Download, ChevronLeft, ChevronRight, 
-    Trash2, Edit3, Loader2, AlertCircle, Users, BarChart3,
-    CheckCircle, Clock, Mail, X, ArrowDown, MessageCircle
+    Trash2, Edit3, Loader2, AlertCircle, Users,
+    CheckCircle, Clock, Mail, X, MessageCircle
 } from 'lucide-react'
 import { waitlistAdminApi } from '../../lib/waitlistApi'
-import { downloadAnalyticsApi } from '../../lib/downloadAnalyticsApi'
 
 const STATUS_COLORS = {
     pending: 'bg-status-warning-wash text-status-warning border-status-warning/20',
@@ -34,8 +33,6 @@ export default function AdminDashboard() {
     const [analytics, setAnalytics] = useState(null)
     const [editingId, setEditingId] = useState(null)
     const [editNotes, setEditNotes] = useState('')
-    const [downloadStats, setDownloadStats] = useState(null)
-    const [downloadLoading, setDownloadLoading] = useState(false)
 
     const fetchData = useCallback(async () => {
         setLoading(true)
@@ -49,18 +46,10 @@ export default function AdminDashboard() {
         } catch (err) { setError(err.message) } finally { setLoading(false) }
     }, [filters, page, limit])
 
-    const fetchDownloadStats = useCallback(async () => {
-        setDownloadLoading(true)
-        try {
-            const stats = await downloadAnalyticsApi.getStats({ days: 30 })
-            setDownloadStats(stats)
-        } catch (err) { setError(err.message) } finally { setDownloadLoading(false) }
-    }, [])
 
     useEffect(() => {
-        if (activeTab === 'waitlist') fetchData()
-        else fetchDownloadStats()
-    }, [activeTab, fetchData, fetchDownloadStats])
+        fetchData()
+    }, [fetchData])
 
     const handleStatusChange = async (id, newStatus) => {
         try { await waitlistAdminApi.updateStatus(id, newStatus); fetchData() }
@@ -96,7 +85,7 @@ export default function AdminDashboard() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
                         <div>
                             <h1 className="text-2xl font-bold text-content-primary">Admin Dashboard</h1>
-                            <p className="text-sm text-content-secondary mt-1">{activeTab === 'waitlist' ? `${total} waitlist entries` : 'Download analytics'}</p>
+                            <p className="text-sm text-content-secondary mt-1">{`${total} waitlist entries`}</p>
                         </div>
                         <Link to="/" className="btn-ghost text-sm">Back to Site</Link>
                     </div>
@@ -104,9 +93,6 @@ export default function AdminDashboard() {
                     <div className="flex gap-2 mb-8">
                         <button onClick={() => setActiveTab('waitlist')} className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'waitlist' ? 'bg-brand-wash text-brand border border-brand/30' : 'text-content-secondary hover:text-content-primary border border-transparent hover:bg-surface-raised'}`}>
                             <Users className="w-4 h-4 inline mr-2" />Waitlist
-                        </button>
-                        <button onClick={() => setActiveTab('downloads')} className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'downloads' ? 'bg-brand-wash text-brand border border-brand/30' : 'text-content-secondary hover:text-content-primary border border-transparent hover:bg-surface-raised'}`}>
-                            <ArrowDown className="w-4 h-4 inline mr-2" />Downloads
                         </button>
                     </div>
 
@@ -117,7 +103,7 @@ export default function AdminDashboard() {
                         </div>
                     )}
 
-                    {activeTab === 'waitlist' ? (
+                    {(
                         <>
                             {analytics && (
                                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -223,52 +209,6 @@ export default function AdminDashboard() {
                                     </div>
                                 )}
                             </div>
-                        </>
-                    ) : (
-                        <>
-                            {downloadLoading ? <div className="card-surface p-12 text-center"><Loader2 className="w-6 h-6 animate-spin text-brand mx-auto" /></div> :
-                            downloadStats ? (
-                                <>
-                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                                        <div className="card-surface p-4"><div className="text-xs font-mono text-content-secondary uppercase mb-1">Total Downloads (30d)</div><div className="text-2xl font-black text-content-primary">{downloadStats.total}</div></div>
-                                        <div className="card-surface p-4"><div className="text-xs font-mono text-content-secondary uppercase mb-1">Windows</div><div className="text-2xl font-black text-brand">{downloadStats.byPlatform.windows || 0}</div></div>
-                                        <div className="card-surface p-4"><div className="text-xs font-mono text-content-secondary uppercase mb-1">macOS</div><div className="text-2xl font-black text-status-warning">{downloadStats.byPlatform.macos || 0}</div></div>
-                                        <div className="card-surface p-4"><div className="text-xs font-mono text-content-secondary uppercase mb-1">Linux</div><div className="text-2xl font-black text-status-profit">{downloadStats.byPlatform.linux || 0}</div></div>
-                                    </div>
-                                    <div className="card-surface p-6 mb-8">
-                                        <h3 className="text-sm font-bold text-content-primary mb-4">Downloads by Version</h3>
-                                        <div className="space-y-3">
-                                            {Object.entries(downloadStats.byVersion).map(([version, count]) => {
-                                                const pct = downloadStats.total > 0 ? Math.round((count / downloadStats.total) * 100) : 0
-                                                return (
-                                                    <div key={version}>
-                                                        <div className="flex justify-between text-xs mb-1"><span className="text-content-secondary font-mono">{version}</span><span className="text-content-primary font-mono">{count} ({pct}%)</span></div>
-                                                        <div className="h-2 bg-surface-raised rounded-full overflow-hidden"><div className="h-full bg-brand rounded-full transition-all duration-500" style={{ width: `${pct}%` }} /></div>
-                                                    </div>
-                                                )
-                                            })}
-                                            {Object.keys(downloadStats.byVersion).length === 0 && <p className="text-sm text-content-secondary text-center py-4">No download data yet.</p>}
-                                        </div>
-                                    </div>
-                                    <div className="card-surface p-6">
-                                        <h3 className="text-sm font-bold text-content-primary mb-4">Daily Download Trend (30 Days)</h3>
-                                        <div className="flex items-end gap-1 h-40">
-                                            {Object.entries(downloadStats.byDay).sort(([a], [b]) => a.localeCompare(b)).map(([day, count]) => {
-                                                const maxCount = Math.max(...Object.values(downloadStats.byDay))
-                                                const height = maxCount > 0 ? (count / maxCount) * 100 : 0
-                                                return (
-                                                    <div key={day} className="flex-1 flex flex-col items-center gap-1 group">
-                                                        <div className="w-full bg-surface-raised rounded-t-sm relative h-32">
-                                                            <div className="absolute bottom-0 left-0 right-0 bg-brand/60 rounded-t-sm transition-all duration-300 group-hover:bg-brand" style={{ height: `${height}%` }} />
-                                                        </div>
-                                                        <span className="text-[10px] font-mono text-content-secondary">{day.slice(5)}</span>
-                                                    </div>
-                                                )
-                                            })}
-                                        </div>
-                                    </div>
-                                </>
-                            ) : <div className="card-surface p-12 text-center text-content-secondary">No download data available.</div>}
                         </>
                     )}
                 </div>

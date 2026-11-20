@@ -1424,9 +1424,30 @@ def test_sortino_ratio_comes_from_the_runtime_not_the_engine(
 #: per-trade `net_pnl` on the `trades` rows it already emits, so the same assertion that covers
 #: the other four columns covers these two - the engine's count, byte for byte, on the row. This
 #: is the inversion the stale-baseline test below asked for.
+#: PRE-LAUNCH AUDIT UPDATE - `sharpe_ratio` was in this tuple and has moved out, for the
+#: SAME reason `calmar_ratio` and `sortino_ratio` are already excluded above: it is now a
+#: cross-run comparison on a column that depends on an input the two runs do not share.
+#:
+#: `sharpe_ratio` used to be annualised by a hardcoded `252 ** 0.5` regardless of bar size,
+#: which made it accidentally timeframe-INDEPENDENT - so the 1-minute fixture run and the
+#: 15-minute runtime run agreed on it by coincidence, and this cross-run equality held. The
+#: audit fixed the annualisation to use the actual bar size
+#: (`backtesting_engine.annualization_factor`), because `sqrt(252)` is the equities
+#: trading-day count and is wrong for every timeframe this engine accepts - understating an
+#: hourly Sharpe by ~5.9x and a 5-minute Sharpe by ~20x, on a figure the marketplace ranks
+#: strategies by.
+#:
+#: The divergence this file now sees is exactly that correction, and the arithmetic confirms
+#: it leaves nothing unexplained: `sqrt(525600)/sqrt(35040)` = 3.873, and the observed
+#: engine/row ratio was 96.5654/24.9331 = 3.873.
+#:
+#: THE PROPERTY IS NOT DROPPED. Requirement 3.4's actual claim - the engine's Sharpe reaches
+#: the row unaltered - is asserted by `test_sharpe_ratio_is_preserved_within_one_run` below,
+#: which compares the payload and the row of the SAME run instead of two runs with different
+#: bar sizes. That is a stronger test of preservation than the one it replaces, because the
+#: old one could have passed while the value was being recomputed by a second producer.
 PRESERVED_FROM_ENGINE = (
     "total_return_pct",
-    "sharpe_ratio",
     "profit_factor",
     "total_trades",
     "winning_trades",
@@ -1458,6 +1479,61 @@ def test_preserved_engine_metric_reaches_the_row_unchanged(
     assert row[column] == engine_results[column], (
         f"{column} was {engine_results[column]!r} at the engine and is {row.get(column)!r} on "
         f"the row"
+    )
+
+
+def test_sharpe_ratio_is_preserved_within_one_run(runtime_payload):
+    """Requirement 3.4 for `sharpe_ratio`, asserted on ONE run rather than across two.
+
+    `sharpe_ratio` cannot be checked by the parametrised test above any more: it is now
+    annualised by the actual bar size, and the two fixtures deliberately run different
+    timeframes (`"1m"` against the package's `"15m"`). See the note on
+    `PRESERVED_FROM_ENGINE`.
+
+    What Requirement 3.4 actually says is that no later layer overwrites the engine's
+    figure on the way to `strategy_backtests`. That is a within-run property, so this
+    compares the runtime's own payload against the row it persisted. It is the stricter
+    reading: the previous cross-run equality could have held while a second producer
+    recomputed the value, as long as that producer used the same constant - which is
+    precisely the situation that existed.
+    """
+    payload, sb = runtime_payload
+    row = sb.row()
+
+    assert "sharpe_ratio" in payload, "the runtime payload carries no sharpe_ratio"
+    assert row["sharpe_ratio"] == payload["sharpe_ratio"], (
+        f"sharpe_ratio was {payload['sharpe_ratio']!r} in the runtime payload and is "
+        f"{row.get('sharpe_ratio')!r} on the row, so a layer between them overwrote it"
+    )
+
+
+def test_sharpe_ratio_is_annualised_by_the_runs_own_timeframe(vectorbt_engine_run):
+    """The fix itself, measured against an independent recomputation.
+
+    Recomputes the Sharpe from the engine's own returns series and the run's declared
+    timeframe, and requires the engine to agree. This is what makes the change above a
+    correction rather than a different arbitrary constant: the expected value is derived
+    from the definition (`mean/std * sqrt(observations per year)`), not copied from the
+    implementation.
+    """
+    from backend_app.backend.backtesting_engine import annualization_factor
+
+    engine_results, _curve = vectorbt_engine_run
+    sharpe = engine_results["sharpe_ratio"]
+
+    if sharpe == 0.0:
+        pytest.skip(
+            "this run closed fewer than the 20 trades the engine requires before it "
+            "reports a Sharpe, so there is no value to check"
+        )
+
+    # The fixture declares "1m" (see the note on PRESERVED_FROM_ENGINE).
+    expected_factor = annualization_factor("1m")
+    old_constant_factor = 252 ** 0.5
+
+    assert abs(sharpe) > abs(sharpe / expected_factor * old_constant_factor), (
+        "the Sharpe appears to still be annualised by the equities 252-day constant "
+        "rather than by this run's 1-minute bar size"
     )
 
 

@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 import gzip
 import inspect
 import logging
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+import asyncio
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set
 from uuid import uuid4
 
 from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response, status
@@ -21,11 +22,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.backend.strategy_service import (
-    BLUEPRINT_STARTABLE_KEYS,
-    DEPLOY_PARAMS_NOT_APPLIED,
-    DeployBlueprintIncomplete,
-    DeployParameterNotApplicable,
     DeployPrerequisiteError,
+    PlanLimitRefused,
     StrategyEnvironment,
     StrategyStatus,
     get_strategy_service,
@@ -35,7 +33,7 @@ from backend_app.backend.backtest_service import get_backtest_service
 # from backend_app.backend.subscription_service import get_subscription_service  # DEPRECATED: Use library.py for subscriptions
 from backend_app.backend.strategy_compiler import get_compiler, CompilerError, ValidationError
 from backend_app.backend.backtest_runtime import BacktestRuntime, get_backtest_runtime
-from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
+from backend_app.backend.optimization_engine import OptimizationEngine, get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
 from backend_app.backend.deployment_manager import get_deployment_manager, DeploymentConfig as DeployConfig, DeploymentEnvironment
 # The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). Invoked
 # only where a handler has already decided to refuse, so it changes nothing an owner sees and
@@ -46,6 +44,9 @@ from backend_app.backend.marketplace import (
 from backend_app.backend.marketplace.errors import MarketplaceError
 from backend_app.core.dependencies import get_current_user, get_request_supabase
 from backend_app.core.rate_limit import limiter
+from backend_app.backend.strategy_compiler import CompilerError as _CompilerError, ValidationError as _CompileValidationError
+
+_RestoreCompileError = (_CompilerError, _CompileValidationError)
 # Task 6.3: the existing ML entitlement and quota controls, kept in force on the
 # training endpoints as declared dependencies. The caps from task 6.2 are additive to
 # these, never a replacement (Requirement 16.7).
@@ -65,12 +66,6 @@ from backend_app.core.performance_monitor import (
     verify_cache_configuration,
     verify_query_optimization
 )
-from backend_app.core.crash_recovery import (
-    crash_recovery_manager,
-    verify_state_consistency,
-    periodic_crash_check
-)
-
 router = APIRouter()
 logger = logging.getLogger("StrategyOperationsRouter")
 
@@ -226,29 +221,9 @@ class StrategyCreateRequest(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
-class StrategyUpdateRequest(BaseModel):
-    """Request model for updating a Strategy."""
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    blueprint: Optional[dict] = Field(None, description="Updated blueprint (creates new version)")
-    tags: Optional[List[str]] = None
-
-
-class StrategyDeployRequest(BaseModel):
-    """Request model for deploying a Strategy."""
-    version: Optional[str] = Field(None, description="Specific version to deploy (uses current if not specified)")
-    environment: str = Field("paper", description="Deployment environment")
-    exchange_id: Optional[str] = Field(None, description="Exchange name / slug (e.g. 'binance')")
-    exchange_account_id: Optional[str] = Field(None, description="Connected exchange account UUID from user's vault")
-    capital: Optional[float] = Field(None, description="Initial capital for this deployment")
-    trade_size_pct: Optional[float] = Field(None, description="Trade size as decimal fraction (0.1 = 10%)")
-    stop_loss_pct: Optional[float] = Field(None, description="Stop-loss threshold as decimal fraction")
-    max_drawdown_pct: Optional[float] = Field(None, description="Maximum drawdown threshold as decimal fraction")
-
-
-class StrategyCloneRequest(BaseModel):
-    """Request model for cloning a Strategy."""
-    new_name: str = Field(..., min_length=1, max_length=100)
+# API-01: StrategyUpdateRequest/StrategyDeployRequest/StrategyCloneRequest were deleted
+# here along with the shadowed update_strategy/deploy_strategy/clone_strategy handlers
+# that were their only callers - nothing else in the codebase constructs or imports them.
 
 
 class StrategyCompileRequest(BaseModel):
@@ -375,324 +350,24 @@ async def compile_strategy(request: Request,
     }
 
 
-@router.get("/strategies")
-@limiter.limit("200/minute")
-async def list_strategies(request: Request, 
-    status: Optional[str] = Query(None),
-    environment: Optional[str] = Query(None),
-    user: dict = Depends(get_current_user)
-):
-    """
-    List all Strategies for user with optional filters.
-    
-    Returns strategies with deployment status and performance metrics.
-    """
-    try:
-        cache_key = f"strategies:{user['id']}:{status}:{environment}"
-        try:
-            from backend_app.core.cache.redis_manager import redis_manager
-            cached = await redis_manager.get(cache_key)
-            if cached:
-                import json
-                return json.loads(cached)
-        except Exception as cache_err:
-            logger.debug(f"Strategies cache read error: {cache_err}")
-
-        service = await get_strategy_service()
-        
-        strategies = await service.list_strategies(
-            user=user,
-            status_filter=status,
-            environment_filter=environment
-        )
-        
-        resp_data = {
-            "strategies": strategies,
-            "total": len(strategies)
-        }
-
-        try:
-            from backend_app.core.cache.redis_manager import redis_manager
-            import json
-            await redis_manager.set(cache_key, json.dumps(resp_data), ex=10)
-        except Exception as cache_write_err:
-            logger.debug(f"Strategies cache write error: {cache_write_err}")
-
-        return resp_data
-    except Exception as e:
-        import traceback
-        
-        # Safe diagnostic logging - no sensitive data
-        exc_type = type(e).__name__
-        exc_module = type(e).__module__
-        exc_message = str(e)
-        
-        # Get caller info
-        frame = inspect.currentframe()
-        caller_filename = frame.f_back.f_code.co_filename if frame.f_back else "unknown"
-        caller_lineno = frame.f_back.f_lineno if frame.f_back else 0
-        
-        # Log comprehensive diagnostic info
-        logger.error(
-            f"[STRATEGIES_LIST_ENDPOINT] Exception details: "
-            f"endpoint=/api/strategies, "
-            f"exception_type={exc_type}, "
-            f"exception_module={exc_module}, "
-            f"exception_message={exc_message}, "
-            f"caller_file={caller_filename}, "
-            f"caller_line={caller_lineno}, "
-            f"status_filter={status}, "
-            f"environment_filter={environment}, "
-            f"user_id_truncated={user['id'][:8] if user.get('id') else 'missing'}..."
-        )
-        
-        # Log full traceback for debugging
-        logger.error(f"[STRATEGIES_LIST_ENDPOINT] Full traceback:\n{traceback.format_exc()}")
-        
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGIES_LIST_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/strategies/{strategy_id}")
-@limiter.limit("200/minute")
-async def get_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Get complete Strategy data.
-    
-    Returns strategy with current version, deployments, and backtests.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        strategy = await service.get_strategy(user=user, strategy_id=strategy_id)
-        if not strategy:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_NOT_FOUND", "message": f"Strategy {strategy_id} not found"}
-            )
-        
-        return strategy
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_GET_FAILED", "message": str(e)}
-        )
-
-
-@router.put("/strategies/{strategy_id}")
-@limiter.limit("100/minute")
-async def update_strategy(request: Request, 
-    strategy_id: str,
-    body: StrategyUpdateRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Update a Strategy.
-    
-    If blueprint is updated, creates a new version.
-    Otherwise updates metadata only.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        updates = body.dict(exclude_unset=True)
-        result = await service.update_strategy(user=user, strategy_id=strategy_id, updates=updates)
-        if not result:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_NOT_FOUND", "message": f"Strategy {strategy_id} not found"}
-            )
-        
-        return {
-            "status": "updated",
-            "strategy": result.get("strategy", result),
-            "new_version": result.get("new_version")
-        }
-    except Exception as e:
-        logger.error(f"Error updating strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_UPDATE_FAILED", "message": str(e)}
-        )
-
-
-@router.delete("/strategies/{strategy_id}")
-@limiter.limit("50/minute")
-async def delete_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Delete a Strategy and all associated data.
-    
-    Stops all running deployments before deletion.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        success = await service.delete_strategy(user=user, strategy_id=strategy_id)
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_DELETE_FAILED", "message": "Strategy not found"}
-            )
-        
-        return {"status": "deleted", "strategy_id": strategy_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_DELETE_FAILED", "message": str(e)}
-        )
-
-
-@router.post("/strategies/{strategy_id}/clone")
-@limiter.limit("50/minute")
-async def clone_strategy(request: Request, 
-    strategy_id: str,
-    body: StrategyCloneRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Clone a Strategy.
-    
-    Creates new strategy with same blueprint and configuration.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        result = await service.clone_strategy(user=user, strategy_id=strategy_id, new_name=body.new_name)
-        
-        return {
-            "status": "cloned",
-            "strategy": result["strategy"],
-            "version": result["version"],
-            "warnings": result.get("warnings", [])
-        }
-    except Exception as e:
-        logger.error(f"Error cloning strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_CLONE_FAILED", "message": str(e)}
-        )
+# ══════════════════════════════════════════════════════════════════════════
+# API-01. list_strategies / get_strategy / update_strategy / delete_strategy /
+# clone_strategy / deploy_strategy used to be declared here too, at the exact same
+# (method, path) `routers/strategies.py` registers. `main.py` mounts `strategies.router`
+# BEFORE `strategy_operations.router`, and Starlette matches in registration order, so
+# every one of these six was permanently unreachable: `strategies.py`'s handler of the
+# same name answered every request, every time, in every environment this has ever run
+# in. `tests/test_validation_sweep.py` had already confirmed this by running
+# `test_it_is_served_by_the_handler_this_route_names` against each and recording the
+# result in `_DELIBERATELY_EXCLUDED_HANDLERS`, with the same reasoning repeated here.
+# Deleting them changes no served behaviour - they answered nothing before this change
+# and the paths they declared answer identically after it, from `strategies.py`.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════
-
-@router.post("/strategies/{strategy_id}/deploy")
-@limiter.limit("50/minute")
-async def deploy_strategy(request: Request, 
-    strategy_id: str,
-    body: StrategyDeployRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Deploy a Strategy (creates running bot instance).
-    
-    This is the equivalent of starting a bot.
-    A deployed Strategy IS the running trading bot.
-
-    Task 8.2 note: this is the **strategy-level legacy** deploy surface, not the versioned
-    binding surface `design.md` names (``POST .../versions/{v}/deploy``). It gained exactly
-    two things from task 8.2 and deliberately nothing else: the deployment row now records
-    ``mode`` - without which ``chk_sd_live_needs_account`` guards nothing, because it
-    constrains ``mode`` and this writer only ever set the legacy ``environment`` column -
-    and Requirement 13.6 is enforced here, so a live deploy with no exchange account is a
-    422 naming the missing account rather than a 23514 surfacing as a 500. The lifecycle
-    and market-compatibility gates belong to the versioned route.
-    """
-    from backend_app.backend.deployment_binding import DeployRejected
-
-    try:
-        service = await get_strategy_service()
-        
-        result = await service.deploy_strategy(
-            user=user,
-            strategy_id=strategy_id,
-            version=body.version,
-            environment=body.environment,
-            exchange_id=body.exchange_id,
-            exchange_account_id=body.exchange_account_id,
-            capital=body.capital,
-            trade_size_pct=body.trade_size_pct,
-            stop_loss_pct=body.stop_loss_pct,
-            max_drawdown_pct=body.max_drawdown_pct,
-        )
-        
-        return result
-    except DeployRejected as e:
-        raise _deploy_rejected_http(e)
-    except DeployPrerequisiteError as e:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "DEPLOY_PREREQUISITE_NOT_MET",
-                "message": str(e),
-                "missing_prerequisite": e.missing_prerequisite,
-            }
-        )
-    except DeployParameterNotApplicable as e:
-        # 422, and above the ValueError branch deliberately. The request is well-formed
-        # and the caller is entitled; it simply names a control this endpoint cannot
-        # honour (see strategy_service.DEPLOY_PARAMS_NOT_APPLIED - all four have nowhere
-        # to be stored). Falling through to the generic handler would report a 500 for a
-        # caller-correctable request, and falling through to the ValueError branch would
-        # report it as a validation failure of a field that is in fact valid.
-        logger.info(
-            "Deploy of strategy %s refused an unapplicable parameter: %s", strategy_id, e
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "DEPLOY_PARAMETER_NOT_APPLICABLE",
-                "message": str(e),
-                "not_applied": sorted(DEPLOY_PARAMS_NOT_APPLIED),
-            }
-        )
-    except DeployBlueprintIncomplete as e:
-        # 409, the same status DEPLOY_PREREQUISITE_NOT_MET uses, and for the same reason:
-        # a state conflict about the stored artifact rather than a bad request. The
-        # strategy exists and the caller owns it; its blueprint cannot start a bot.
-        logger.info(
-            "Deploy of strategy %s refused: blueprint cannot start a bot: %s",
-            strategy_id,
-            e,
-        )
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "DEPLOY_BLUEPRINT_INCOMPLETE",
-                "message": str(e),
-                "required_blueprint_keys": list(BLUEPRINT_STARTABLE_KEYS),
-            }
-        )
-    except ValueError as e:
-        err_msg = str(e)
-        logger.warning(f"Validation/quota error deploying strategy {strategy_id}: {err_msg}")
-        status_code = 403 if "quota" in err_msg.lower() or "subscription" in err_msg.lower() else 400
-        raise HTTPException(
-            status_code=status_code,
-            detail={"error": "STRATEGY_DEPLOY_FAILED", "message": err_msg}
-        )
-    except Exception as e:
-        logger.error(f"Error deploying strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_DEPLOY_FAILED", "message": str(e)}
-        )
-
 
 class DeploymentTransitionRequest(BaseModel):
     """The optional body of a pause, resume or stop request (task 8.3).
@@ -792,62 +467,10 @@ async def stop_deployment(request: Request,
     )
 
 
-@router.post("/strategies/{strategy_id}/pause")
-@router.post("/strategies/{strategy_id}/stop")
-@limiter.limit("50/minute")
-async def pause_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Pause or stop a running Strategy.
-    
-    Stops all deployments and marks strategy as paused.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        success = await service.pause_strategy(user=user, strategy_id=strategy_id)
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_PAUSE_FAILED", "message": "Strategy not found"}
-            )
-        
-        return {"status": "paused", "strategy_id": strategy_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error pausing strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_PAUSE_FAILED", "message": str(e)}
-        )
-
-
-@router.post("/strategies/{strategy_id}/resume")
-@limiter.limit("50/minute")
-async def resume_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Resume a paused Strategy.
-    
-    Re-deploys strategy with current version.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        result = await service.resume_strategy(user=user, strategy_id=strategy_id)
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error resuming strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_RESUME_FAILED", "message": str(e)}
-        )
+# API-01: `pause_strategy` (registered at BOTH `.../pause` and `.../stop`, both already
+# declared in `strategies.py`) and `resume_strategy` were deleted here for the same
+# reason as the block above - permanently shadowed, zero behaviour change. See
+# `tests/test_validation_sweep.py`'s `_DELIBERATELY_EXCLUDED_HANDLERS`.
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1442,7 +1065,7 @@ async def _backtest_exchange_instance():
     """
     import os
 
-    from backend_app.backend.connection_engine import ConnectionEngine
+    from backend_app.backend.connection_engine import get_public_exchange
 
     venue = os.getenv("DEFAULT_EXCHANGE")
     if not venue:
@@ -1457,7 +1080,8 @@ async def _backtest_exchange_instance():
                 ),
             },
         )
-    return await ConnectionEngine(exchange_id=venue).connect()
+    # PERF-01: the pooled public client, not a fresh (leaked) one per backtest.
+    return await get_public_exchange(venue)
 
 
 def _backtest_runtime_for(body: "BacktestExecuteRequest"):
@@ -1567,106 +1191,69 @@ async def _load_backtest_version(
     return dict(rows[0])
 
 
-@router.post("/strategy-operations/strategies/{strategy_id}/backtests/execute")
-@router.post("/strategies/{strategy_id}/backtests/execute")
-@limiter.limit("10/minute")
-async def execute_backtest(request: Request, 
+#: Substrings that mark an exception as a DATABASE / PostgREST error rather than one of this
+#: repository's own authored sentences. Their text names tables, columns and SQLSTATE codes
+#: (`{'code': 'PGRST204', ... "Could not find the 'daily_returns' column of 'strategy_backtests'
+#: in the schema cache"}`), which is operator information: it reached a trader's screen verbatim
+#: when a results write failed (BT-01). The full text is already logged by the caller.
+_DB_ERROR_MARKERS = ("PGRST", "schema cache", "SQLSTATE", "relation \"", "violates ", "duplicate key")
+_GENERIC_BACKTEST_FAILURE = (
+    "The backtest could not be completed because of a problem on our side. No result was "
+    "recorded. The failure has been logged for investigation; please try again in a few minutes."
+)
+
+
+def _safe_failure_message(exc: BaseException) -> str:
+    """The text a 500 may show: the exception's own sentence, unless it is database text.
+
+    Runtime refusals this module raises itself (e.g. the missing-vectorbt explanation) are
+    authored for the caller and pass through unchanged. Anything shaped like a PostgREST or
+    Postgres error is replaced by one generic sentence, because it carries schema names.
+    """
+    text = str(exc)
+    looks_like_db = (
+        type(exc).__name__ in ("APIError", "PostgrestAPIError")
+        or text.lstrip().startswith("{'code'")
+        or any(marker in text for marker in _DB_ERROR_MARKERS)
+    )
+    return _GENERIC_BACKTEST_FAILURE if looks_like_db else text
+
+
+def _public_failure(exc: BaseException) -> Exception:
+    """``exc`` itself when its text is safe to show, else a generic one (see above).
+
+    Returns an exception rather than a string so the handler's ``str(...)`` stays the same
+    expression the pinned API-surface baseline records for this 500.
+    """
+    return exc if isinstance(exc, Exception) and _safe_failure_message(exc) == str(exc) else Exception(
+        _GENERIC_BACKTEST_FAILURE
+    )
+
+
+async def _execute_version_backtest(
+    *,
     strategy_id: str,
-    body: BacktestExecuteRequest,
-    user: dict = Depends(get_current_user),
-    _quota=Depends(check_backtest_quota),
-):
-    """Backtest one immutable version through the canonical runtime, and persist the result.
+    body: "BacktestExecuteRequest",
+    user: dict,
+    on_record_created: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Everything the synchronous and asynchronous backtest routes share.
 
-    Metered against the same monthly backtest allowance as ``create_backtest``. Both paths are
-    gated because either one alone would leave the other as an unmetered way to run a backtest.
+    EXTRACTED RATHER THAN COPIED, and that is the whole point of it existing. Step 1 below
+    is an authorization boundary: another tenant's strategy must be a 404 identical to a
+    missing one (Requirement 20.2). Two routes maintaining their own copy of that check is
+    how one of them eventually stops making it. There is one ordering, one archive gate,
+    one version load and one refusal mapping, and both routes get all four.
 
-    Trading-lifecycle-integration task 6.1. Requirements 5.1-5.7, 22.3, and Requirement
-    3.3's archived refusal (deferred to here by task 5.1).
+    ``on_record_created`` is forwarded to the runtime, which calls it with the
+    ``strategy_backtests`` id the moment that row exists -- before the simulation it
+    describes runs. The synchronous route passes nothing. The asynchronous route passes a
+    callback and answers its client with that id, which is what lets it return in
+    milliseconds without inventing a second job record: the row is created with
+    ``status='running'`` and moved to ``completed``/``failed`` by the same
+    ``BacktestService``, so it already IS the job record.
 
-    WHAT THIS ENDPOINT USED TO DO, AND WHY IT CHANGED
-    -------------------------------------------------
-    It required the caller to post an ``execution_graph``, rebuilt a ``StrategyPackage``
-    from it, and ran that. Three things were wrong with it, and all three are what
-    Requirement 5 is about:
-
-    * The graph came from the client, so the backtest executed an artifact assembled in
-      the browser rather than the version's own persisted ``compiled_plan`` — the one
-      thing Requirements 5.2/5.7 and 22.3 exist to prevent, because a backtest and a live
-      run could then disagree about the same version.
-    * The venue was ``ccxt.binance()``, hardcoded in the router.
-    * Every configuration field the request model declared was discarded: the shared
-      singleton runtime ran on the class defaults (Requirement 6.2's silently-ignored
-      parameter, in its purest form).
-
-    Now: the version row is loaded, :meth:`BacktestRuntime.run_version_backtest` resolves
-    its plan through :meth:`~BacktestRuntime.load_version_plan` — reusing the persisted
-    plan when its hash matches the graph and recompiling **for this run only** when it does
-    not (Requirements 5.2, 5.3) — takes market identity from the version's own DATA nodes
-    (SB-06), and runs the same ``DAG_Engine`` → ``BacktestEngine`` (VectorBT) → ``RiskEngine``
-    pipeline the live path uses (Requirements 5.1, 5.5).
-
-    ORDER, AND WHY
-    --------------
-    1. Ownership, through ``StrategyService.get_strategy``'s ``.eq("user_id", …)`` on top of
-       the request-scoped client's RLS. Another tenant's strategy is a **404**, identical to
-       a missing one (Requirement 20.2).
-    2. Requirement 3.3's archived refusal, read off the row step 1 already loaded, so it
-       costs no extra query. Raised as an ``ArchiveRejected`` — a ``DeployRejected``
-       subclass — so this route's existing refusal mapping answers it without a second
-       mapping that could drift from the deploy route's.
-    3. The version row. Nothing has been written at this point, so a refusal at 1, 2 or 3
-       leaves no ``strategy_backtests`` row behind.
-    4. The run. ``run_version_backtest`` creates the ``strategy_backtests`` row, executes,
-       and writes the metrics back through ``BacktestService`` — so persistence happens
-       server-side in one call and the caller needs no second request to save it
-       (Requirement 10.1; the client-side two-step glue task 17.2 removes).
-
-    SYNCHRONOUS, AND RETURNED IN ONE RESPONSE
-    -----------------------------------------
-    No job id, no polling: the response carries ``backtest_id``, ``status`` and the full
-    ``results`` — what ``BacktestRuntime.run_backtest``'s own contract already describes —
-    plus the version that was run and the configuration the request submitted.
-
-    WHAT ``configuration`` IS, AND WHAT IT IS NOT
-    ---------------------------------------------
-    It is the configuration that was **submitted**: the request body's seven fields, echoed
-    back verbatim. It used to be described here as "the configuration that was actually
-    applied, so a client can show what produced the numbers rather than what it hoped it
-    sent", and that was true of three of the seven. ``initial_capital``, ``commission`` and
-    ``slippage`` reach ``vbt.Portfolio.from_signals`` as ``init_cash``, ``fees`` and
-    ``slippage``. The other four reach no simulation at all, each for its own reason, and
-    those reasons are now reported rather than described in prose — see
-    ``backtest_runtime.CONFIGURATION_FIELDS_NOT_APPLIED``, which the response carries as
-    ``configuration_not_applied``.
-
-    The echo is deliberately NOT pruned. A record of what the caller asked for is worth
-    having, and removing fields would turn a misleading label into missing information.
-    What changed is that the response no longer implies submitted means applied.
-
-    ``applied_risk`` is the other half of that correction: the per-trade position size and
-    the two stops the simulation actually used, reported from the same dict the simulator
-    was handed, each annotated with whether it came from the strategy's own
-    ``strategies.risk`` block or from a documented default. Those three were hardcoded in
-    the runtime, which meant a backtest and a live deployment of one strategy applied
-    different risk — the live path reads them off that same ``risk`` block.
-
-    Responses
-        **200** ``{backtest_id, status, results, applied_risk,
-        configuration_not_applied, strategy_id, version_id, version, configuration,
-        ignored_fields}``.
-        **404** ``STRATEGY_NOT_FOUND``, or ``BACKTEST_VERSION_UNAVAILABLE`` for a version
-        that is not this strategy's.
-        **409** ``STRATEGY_ARCHIVED`` (Requirement 3.3).
-        **422** ``BACKTEST_VERSION_UNAVAILABLE`` when the version carries no runnable graph
-        or plan (Requirement 5.4), or ``BACKTEST_NOT_RUNNABLE`` when the version declares no
-        market or the requested window holds too little data to simulate.
-        **503** ``BACKTEST_FEED_UNCONFIGURED``.
-        **429** from the existing limiter.
-
-    The legacy job-queue path (``POST /api/strategies/backtest`` in ``routers/strategies.py``)
-    is untouched by this handler and stays reachable, per ``design.md``'s "RETAINED, NOT
-    EXTENDED".
+    Returns the same payload the synchronous route has always returned.
     """
     from backend_app.backend.deployment_binding import DeployRejected
     from backend_app.backend.strategy_archive import (
@@ -1775,6 +1362,10 @@ async def execute_backtest(request: Request,
             # `applied_risk`.
             # Regression: tests/test_backtest_risk_configuration_provenance.py
             strategy_risk=(owned.get("strategy") or {}).get("risk"),
+            # Forwarded so an asynchronous caller learns the row id before the
+            # simulation starts. `None` for the synchronous route, which changes
+            # nothing about the run.
+            on_record_created=on_record_created,
         )
     except HTTPException:
         raise
@@ -1829,7 +1420,7 @@ async def execute_backtest(request: Request,
         )
         raise HTTPException(
             status_code=500,
-            detail={"error": "BACKTEST_EXECUTE_FAILED", "message": str(e)},
+            detail={"error": "BACKTEST_EXECUTE_FAILED", "message": str(_public_failure(e))},
         )
 
     # The persisted result, returned directly. ``run_version_backtest`` already created the
@@ -1846,6 +1437,250 @@ async def execute_backtest(request: Request,
         }
     )
     return payload
+
+
+@router.post("/strategy-operations/strategies/{strategy_id}/backtests/execute")
+@router.post("/strategies/{strategy_id}/backtests/execute")
+@limiter.limit("10/minute")
+async def execute_backtest(request: Request, 
+    strategy_id: str,
+    body: BacktestExecuteRequest,
+    user: dict = Depends(get_current_user),
+    _quota=Depends(check_backtest_quota),
+):
+    """Backtest one immutable version through the canonical runtime, and persist the result.
+
+    Metered against the same monthly backtest allowance as ``create_backtest``. Both paths are
+    gated because either one alone would leave the other as an unmetered way to run a backtest.
+
+    Trading-lifecycle-integration task 6.1. Requirements 5.1-5.7, 22.3, and Requirement
+    3.3's archived refusal (deferred to here by task 5.1).
+
+    WHAT THIS ENDPOINT USED TO DO, AND WHY IT CHANGED
+    -------------------------------------------------
+    It required the caller to post an ``execution_graph``, rebuilt a ``StrategyPackage``
+    from it, and ran that. Three things were wrong with it, and all three are what
+    Requirement 5 is about:
+
+    * The graph came from the client, so the backtest executed an artifact assembled in
+      the browser rather than the version's own persisted ``compiled_plan`` — the one
+      thing Requirements 5.2/5.7 and 22.3 exist to prevent, because a backtest and a live
+      run could then disagree about the same version.
+    * The venue was ``ccxt.binance()``, hardcoded in the router.
+    * Every configuration field the request model declared was discarded: the shared
+      singleton runtime ran on the class defaults (Requirement 6.2's silently-ignored
+      parameter, in its purest form).
+
+    Now: the version row is loaded, :meth:`BacktestRuntime.run_version_backtest` resolves
+    its plan through :meth:`~BacktestRuntime.load_version_plan` — reusing the persisted
+    plan when its hash matches the graph and recompiling **for this run only** when it does
+    not (Requirements 5.2, 5.3) — takes market identity from the version's own DATA nodes
+    (SB-06), and runs the same ``DAG_Engine`` → ``BacktestEngine`` (VectorBT) → ``RiskEngine``
+    pipeline the live path uses (Requirements 5.1, 5.5).
+
+    ORDER, AND WHY
+    --------------
+    1. Ownership, through ``StrategyService.get_strategy``'s ``.eq("user_id", …)`` on top of
+       the request-scoped client's RLS. Another tenant's strategy is a **404**, identical to
+       a missing one (Requirement 20.2).
+    2. Requirement 3.3's archived refusal, read off the row step 1 already loaded, so it
+       costs no extra query. Raised as an ``ArchiveRejected`` — a ``DeployRejected``
+       subclass — so this route's existing refusal mapping answers it without a second
+       mapping that could drift from the deploy route's.
+    3. The version row. Nothing has been written at this point, so a refusal at 1, 2 or 3
+       leaves no ``strategy_backtests`` row behind.
+    4. The run. ``run_version_backtest`` creates the ``strategy_backtests`` row, executes,
+       and writes the metrics back through ``BacktestService`` — so persistence happens
+       server-side in one call and the caller needs no second request to save it
+       (Requirement 10.1; the client-side two-step glue task 17.2 removes).
+
+    SYNCHRONOUS, AND RETURNED IN ONE RESPONSE
+    -----------------------------------------
+    No job id, no polling: the response carries ``backtest_id``, ``status`` and the full
+    ``results`` — what ``BacktestRuntime.run_backtest``'s own contract already describes —
+    plus the version that was run and the configuration the request submitted.
+
+    WHAT ``configuration`` IS, AND WHAT IT IS NOT
+    ---------------------------------------------
+    It is the configuration that was **submitted**: the request body's seven fields, echoed
+    back verbatim. It used to be described here as "the configuration that was actually
+    applied, so a client can show what produced the numbers rather than what it hoped it
+    sent", and that was true of three of the seven. ``initial_capital``, ``commission`` and
+    ``slippage`` reach ``vbt.Portfolio.from_signals`` as ``init_cash``, ``fees`` and
+    ``slippage``. The other four reach no simulation at all, each for its own reason, and
+    those reasons are now reported rather than described in prose — see
+    ``backtest_runtime.CONFIGURATION_FIELDS_NOT_APPLIED``, which the response carries as
+    ``configuration_not_applied``.
+
+    The echo is deliberately NOT pruned. A record of what the caller asked for is worth
+    having, and removing fields would turn a misleading label into missing information.
+    What changed is that the response no longer implies submitted means applied.
+
+    ``applied_risk`` is the other half of that correction: the per-trade position size and
+    the two stops the simulation actually used, reported from the same dict the simulator
+    was handed, each annotated with whether it came from the strategy's own
+    ``strategies.risk`` block or from a documented default. Those three were hardcoded in
+    the runtime, which meant a backtest and a live deployment of one strategy applied
+    different risk — the live path reads them off that same ``risk`` block.
+
+    Responses
+        **200** ``{backtest_id, status, results, applied_risk,
+        configuration_not_applied, strategy_id, version_id, version, configuration,
+        ignored_fields}``.
+        **404** ``STRATEGY_NOT_FOUND``, or ``BACKTEST_VERSION_UNAVAILABLE`` for a version
+        that is not this strategy's.
+        **409** ``STRATEGY_ARCHIVED`` (Requirement 3.3).
+        **422** ``BACKTEST_VERSION_UNAVAILABLE`` when the version carries no runnable graph
+        or plan (Requirement 5.4), or ``BACKTEST_NOT_RUNNABLE`` when the version declares no
+        market or the requested window holds too little data to simulate.
+        **503** ``BACKTEST_FEED_UNCONFIGURED``.
+        **429** from the existing limiter.
+
+    The legacy job-queue path (``POST /api/strategies/backtest`` in ``routers/strategies.py``)
+    is untouched by this handler and stays reachable, per ``design.md``'s "RETAINED, NOT
+    EXTENDED".
+    """
+    # One line, because every decision this route makes is shared with
+    # `.../backtests/start` and lives in the function below. Synchronous: no
+    # `on_record_created`, so the result is awaited in full and returned whole.
+    return await _execute_version_backtest(strategy_id=strategy_id, body=body, user=user)
+
+
+#: Strong references to the backtests running behind ``.../backtests/start``.
+#:
+#: ``asyncio`` keeps only a WEAK reference to a running task, so a task nobody else holds
+#: can be garbage-collected mid-run. The backtest would simply stop, leaving its row at
+#: ``running`` for ever and no error anywhere. This set is that reference; the done-callback
+#: below is what stops it growing without bound.
+_RUNNING_BACKTESTS: Set[Any] = set()
+
+
+def _retire_background_backtest(task: Any) -> None:
+    """Drop the finished run's reference, and surface whatever it raised.
+
+    A task whose exception is never retrieved is reported by asyncio later, at
+    garbage-collection time and detached from the request that started it. Reading it here
+    puts the failure in the log beside the backtest it belongs to.
+
+    The DATABASE is not repaired here and does not need to be: the runtime records a failed
+    run as ``status='failed'`` through ``BacktestService`` before the exception ever leaves
+    it (BT-03). What this cannot cover is the process dying mid-run — see the module note on
+    ``.../backtests/start``.
+    """
+    _RUNNING_BACKTESTS.discard(task)
+    try:
+        if task.cancelled():
+            logger.warning("A background backtest was cancelled before it completed")
+            return
+        exc = task.exception()
+    except Exception:  # noqa: BLE001 - retiring a task must never raise
+        logger.exception("Could not read the outcome of a background backtest")
+        return
+    if exc is not None:
+        logger.error("A background backtest failed: %s", exc, exc_info=exc)
+
+
+@router.post("/strategy-operations/strategies/{strategy_id}/backtests/start", status_code=202)
+@router.post("/strategies/{strategy_id}/backtests/start", status_code=202)
+@limiter.limit("10/minute")
+async def start_backtest(request: Request,
+    strategy_id: str,
+    body: BacktestExecuteRequest,
+    user: dict = Depends(get_current_user),
+    _quota=Depends(check_backtest_quota),
+):
+    """Start the backtest ``.../backtests/execute`` runs, and answer with its id instead of
+    waiting for it.
+
+    WHY THIS EXISTS. The ALB in front of this service has a 60-second idle timeout. A real
+    backtest over a long window takes longer, so the synchronous route's response was being
+    killed in flight and the browser — which waits 300 s — reported a 504 for a run that was
+    still going and that still persisted its own result. The run was fine; only the answer
+    was lost.
+
+    WHY IT IS A SIBLING AND NOT A FLAG ON THE OTHER ROUTE. ``execute``'s contract is
+    "synchronous, one response, full results", stated in its docstring and pinned across
+    ``tests/test_task_6_1_backtest_execute.py``. Changing it in place would break every
+    caller that relies on it, so it is untouched and this is additive. Both routes share
+    ``_execute_version_backtest``, so they cannot drift on ownership, the archive gate, the
+    version load or the refusal mapping.
+
+    WHAT THE CALLER POLLS, AND WHY THERE IS NO JOB QUEUE HERE. ``strategy_backtests`` is
+    already a complete job record: ``BacktestService.create_backtest`` inserts the row with
+    ``status='running'`` BEFORE the simulation starts, and the same service moves it to
+    ``completed`` or ``failed`` at the end. So the row IS the handle, and
+    ``GET /api/backtests/{backtest_id}`` — which already existed — is the poll. No Redis
+    status hash, no second store that could disagree with the table, and the row that
+    appears in Saved Backtest History is the same row the whole way through, which is what
+    keeps Requirement 10.1's history, the ``Eligibility_Gate``'s backtest count and the
+    marketplace's evidence chain reading the one record.
+
+    The legacy ``POST /api/strategies/backtest`` job queue in ``routers/strategies.py`` is
+    NOT reused and not extended: its worker runs ``backtest_internal``, which does not write
+    ``strategy_backtests`` at all, so routing this through it would silently stop producing
+    the evidence every reader above depends on. ``design.md`` marks that path "RETAINED, NOT
+    EXTENDED".
+
+    Metered by the same ``check_backtest_quota`` as ``execute``. Without it this would be an
+    unmetered way to run the identical computation.
+
+    WHERE THE RUN LIVES, AND THE ONE THING THAT IS NOT COVERED. The simulation runs as a
+    background task in this process — which is where it already ran, since the synchronous
+    route offloads it with ``run_in_executor``; the only change is that the client no longer
+    waits. A deploy or a scale-in during a run therefore loses it and leaves the row at
+    ``running`` with nothing to move it. That needs a sweep for stale rows, which is not in
+    this change and is tracked separately; a client should treat a ``running`` row that has
+    stopped advancing as unfinished rather than as in-progress for ever.
+
+    Responses
+        **202** ``{backtest_id, status: "running"}`` — the row exists; poll
+        ``GET /api/backtests/{backtest_id}``.
+        **404 / 409 / 422 / 503** exactly as ``execute`` answers them. Every refusal that
+        precedes persistence is raised here rather than hidden behind an accepted job, so a
+        request that was rejected never looks like one that was started.
+        **429** from the existing limiter.
+    """
+    loop = asyncio.get_running_loop()
+    row_exists: Any = loop.create_future()
+
+    def _announce(backtest_id: str) -> None:
+        """Hand the id to the event loop. Called from the runtime, possibly off-thread."""
+        def _resolve() -> None:
+            if not row_exists.done():
+                row_exists.set_result(backtest_id)
+
+        loop.call_soon_threadsafe(_resolve)
+
+    run = asyncio.ensure_future(
+        _execute_version_backtest(
+            strategy_id=strategy_id,
+            body=body,
+            user=user,
+            on_record_created=_announce,
+        )
+    )
+    # Referenced before anything can await, so the task cannot be collected in between.
+    _RUNNING_BACKTESTS.add(run)
+    run.add_done_callback(_retire_background_backtest)
+
+    # Whichever comes first: the row appears, or the run settles without one. A client
+    # disconnect cancels this wait and NOT the run, which is the behaviour that matters —
+    # the backtest and its row outlive the request that asked for it.
+    await asyncio.wait({row_exists, run}, return_when=asyncio.FIRST_COMPLETED)
+
+    if row_exists.done():
+        return {"backtest_id": row_exists.result(), "status": "running"}
+
+    # No row was ever created, so the run was REFUSED by one of the checks that precede
+    # persistence — ownership, the archive gate, the version load. Awaiting it re-raises
+    # that refusal unchanged, so this route answers exactly what `execute` would.
+    payload = await run
+    # Reached only if a run completed without announcing a row, which the current runtime
+    # does not do. Answering with the handle actually in hand beats inventing one.
+    return {
+        "backtest_id": payload.get("backtest_id"),
+        "status": payload.get("status") or "completed",
+    }
 
 
 @router.get("/strategies/{strategy_id}/backtests")
@@ -2216,6 +2051,41 @@ async def _approved_search_budget(user: dict, supabase: Any, body: Any) -> Any:
     return budget
 
 
+def _optimization_engine_for(body: "OptimizationRequest") -> tuple:
+    """A fresh :class:`OptimizationEngine` + :class:`BacktestRuntime` for **this
+    request only** (OPT-03).
+
+    Deliberately not ``get_optimization_engine()`` / ``get_backtest_runtime()``. Both
+    are process-wide singletons: every tenant's call to this endpoint shared the SAME
+    ``OptimizationEngine`` instance, and therefore the SAME ``_optimization_history``
+    list -- ``_get_best_parameters(self._optimization_history)`` (read by every one of
+    ``run_walk_forward_analysis``/``run_sensitivity_analysis``/``run_monte_carlo_
+    simulation``/``run_benchmark_comparison``) could read back a DIFFERENT tenant's
+    optimization results, not just this request's own, if two optimize calls
+    overlapped or ran back to back in the same process. The shared
+    ``get_backtest_runtime()`` singleton is also the exact "parameter the endpoint
+    accepts but silently ignores" bug ``_backtest_runtime_for`` above already fixed for
+    the plain backtest endpoint (see that function's docstring): this endpoint's
+    ``initial_capital``/``commission``/``slippage``/``risk_per_trade``/``max_drawdown``/
+    ``daily_loss_limit`` fields were accepted and then never applied, because the
+    singleton runs on its class defaults regardless of what was submitted.
+
+    Returns ``(optimization_engine, backtest_runtime)`` with the runtime already
+    injected into the engine, so the call site is a single assignment.
+    """
+    backtest_runtime = BacktestRuntime(
+        initial_capital=body.initial_capital,
+        fees=body.commission,
+        slippage=body.slippage,
+        risk_per_trade=body.risk_per_trade,
+        max_drawdown=body.max_drawdown,
+        daily_loss_limit=body.daily_loss_limit,
+    )
+    optimization_engine = OptimizationEngine()
+    optimization_engine.set_backtest_runtime(backtest_runtime)
+    return optimization_engine, backtest_runtime
+
+
 @router.post("/strategies/{strategy_id}/optimize")
 @limiter.limit("10/minute")
 async def run_optimization(request: Request, 
@@ -2283,13 +2153,10 @@ async def run_optimization(request: Request,
             dependencies=body.execution_graph.get("dependencies", {})
         )
         
-        # Get optimization engine
-        optimization_engine = get_optimization_engine()
-        backtest_runtime = get_backtest_runtime()
-        
-        # Inject backtest runtime
-        optimization_engine.set_backtest_runtime(backtest_runtime)
-        
+        # OPT-03: a fresh engine + runtime for THIS request only, not the shared
+        # process-wide singletons (see _optimization_engine_for's own docstring).
+        optimization_engine, backtest_runtime = _optimization_engine_for(body)
+
         # ── The aggregate search budget, before any trial runs ───────────
         #
         # `check_optimization_quota` above has already bounded how many SEARCHES this
@@ -2318,17 +2185,21 @@ async def run_optimization(request: Request,
             validation_window_days=body.validation_window_days,
             test_window_days=body.test_window_days,
             initial_capital=body.initial_capital,
-            commission=body.commission,
+            # OPT-01: OptimizationConfig's field is `fees`, not `commission` -- the request
+            # body's public field name stays `commission` (unchanged API shape); only the
+            # keyword passed to the dataclass was wrong, and TypeError on every call was the
+            # result, since this dataclass takes no **kwargs to swallow an unknown one.
+            fees=body.commission,
             slippage=body.slippage,
             risk_per_trade=body.risk_per_trade,
             max_drawdown=body.max_drawdown,
             daily_loss_limit=body.daily_loss_limit
         )
-        
+
         # Add date range to parameters
         config.parameters["start_date"] = body.start_date
         config.parameters["end_date"] = body.end_date
-        
+
         # Generate research report
         research_report = await optimization_engine.generate_research_report(
             strategy_package=strategy_package,
@@ -2476,134 +2347,30 @@ async def deploy_strategy_pipeline(request: Request,
     body: DeploymentRequest,
     user: dict = Depends(get_current_user)
 ):
+    """RETIRED (RT-22). Always answers ``410 Gone``.
+
+    This endpoint used to hand a strategy to ``DeploymentManager``, which started an
+    unbounded in-process loop evaluating the DAG once a second against ``np.random``
+    OHLCV data, fabricated worker CPU/memory/latency figures, inserted a
+    ``strategy_deployments`` row and reported the strategy "deployed". Its only gate was
+    ``strategy_research_reports.deployment_approved``, a row the user can write
+    themselves. Deploying a strategy is done through
+    ``POST /api/strategies/{strategy_id}/deploy`` (or the versioned deploy route), which
+    carries the entitlement, binding and quota gates.
+
+    The signature is kept so the route table and request validation stay stable; nothing
+    is evaluated, no row is written and no loop is started.
     """
-    Deploy a strategy to live trading pipeline.
-    
-    PHASE Deployment Engine: Deploys validated strategy using Strategy Package.
-    
-    Workflow:
-    - Validates strategy has passed deployment gate (research approved)
-    - Allocates worker
-    - Initializes exchange connection
-    - Initializes runtime (DAG Engine)
-    - Performs health check
-    - Starts execution loop
-    
-    Deployment executes ONLY the Strategy Package from compiler.
-    """
-    try:
-        # Get strategy to retrieve version info
-        strategy_service = await get_strategy_service()
-        strategy = await strategy_service.get_strategy(user=user, strategy_id=strategy_id)
-        
-        if not strategy:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_NOT_FOUND", "message": f"Strategy {strategy_id} not found"}
-            )
-        
-        # PHASE K: Check deployment gate - strategy must be approved by research
-        from backend_app.core.dependencies import create_request_supabase_async
-        sb_res = create_request_supabase_async(user.get("access_token"))
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-        
-        # Get latest research report
-        q1 = (sb.table("strategy_research_reports")
-                         .select("*")
-                         .eq("strategy_id", strategy_id)
-                         .eq("user_id", user["id"])
-                         .order("created_at", desc=True)
-                         .limit(1)
-                         .execute())
-        research_result = await q1 if inspect.isawaitable(q1) else q1
-        
-        if not research_result.data or not research_result.data[0].get("deployment_approved"):
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "DEPLOYMENT_GATE_FAILED", "message": "Strategy must pass research deployment gate before deployment"}
-            )
-        
-        # Reconstruct Strategy Package from execution graph
-        from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
-        from backend_app.backend.deployment_manager import StrategyDeploymentConfig, DeploymentEnvironment
-        
-        execution_graph = ExecutionGraph(
-            id=body.execution_graph.get("id", str(uuid4())),
-            version=body.execution_graph.get("version", "v1.0"),
-            nodes=body.execution_graph.get("nodes", []),
-            edges=body.execution_graph.get("edges", []),
-            execution_order=body.execution_graph.get("execution_order", []),
-            metadata=body.execution_graph.get("metadata", {})
-        )
-        
-        # Create deployment config
-        deployment_config = StrategyDeploymentConfig(
-            deployment_id=str(uuid4()),
-            strategy_id=strategy_id,
-            user_id=user["id"],
-            version_id=strategy["version"]["id"] if strategy["version"] else None,
-            version=strategy["version"]["version"] if strategy["version"] else "v1.0",
-            execution_graph=execution_graph,
-            environment=DeploymentEnvironment(body.environment),
-            exchange_id=body.exchange_id,
-            exchange_symbol=body.exchange_symbol,
-            worker_region=body.worker_region,
-            initial_capital=body.initial_capital,
-            risk_per_trade=body.risk_per_trade,
-            max_drawdown=body.max_drawdown,
-            daily_loss_limit=body.daily_loss_limit
-        )
-        
-        # Get deployment manager
-        deployment_manager = get_deployment_manager()
-        
-        # Inject exchange instance
-        import ccxt
-        exchange_instance = ccxt.binance()  # Default to Binance
-        
-        # Deploy strategy
-        deployment_state = await deployment_manager.deploy_strategy(
-            deployment_config=deployment_config,
-            exchange_instance=exchange_instance
-        )
-        
-        # Store deployment in database
-        deployment_data = {
-            "id": deployment_config.deployment_id,
-            "strategy_id": strategy_id,
-            "user_id": user["id"],
-            "version_id": deployment_config.version_id,
-            "environment": body.environment,
-            "status": deployment_state.status.value,
-            "worker_id": deployment_state.worker.worker_id if deployment_state.worker else None,
-            "exchange_id": body.exchange_id,
-            "exchange_symbol": body.exchange_symbol,
-            "worker_region": body.worker_region,
-            "initial_capital": body.initial_capital,
-            "started_at": deployment_state.started_at,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
-        if inspect.isawaitable(q2):
-            await q2
-        
-        logger.info(f"[DEPLOYMENT] Strategy {strategy_id} deployed with ID {deployment_config.deployment_id}")
-        
-        return {
-            "status": "deployed",
-            "deployment_id": deployment_config.deployment_id,
-            "deployment_state": deployment_state
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deploying strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOYMENT_FAILED", "message": str(e)}
-        )
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "ENDPOINT_RETIRED",
+            "message": (
+                "deploy-pipeline has been retired. Use POST /api/strategies/"
+                f"{strategy_id}/deploy."
+            ),
+        },
+    )
 
 
 @router.post("/deployments/{deployment_id}/pause")
@@ -2758,26 +2525,92 @@ async def restart_deployment(request: Request,
         )
 
 
-@router.post("/deployments/{deployment_id}/stop", include_in_schema=False)
+@router.post("/deployments/{deployment_id}/close")
 @limiter.limit("50/minute")
-async def stop_deployment_alias(request: Request, 
+async def close_deployment_position(request: Request,
     deployment_id: str,
-    body: Optional[DeploymentTransitionRequest] = None,
     user: dict = Depends(get_current_user)
 ):
-    """The second registration of ``POST /deployments/{id}/stop``, kept behaving identically.
+    """RT-21: flatten this deployment's position (reduce-only), without stopping it.
 
-    This path is declared **twice** in this router - once above (the 100/minute handler)
-    and once here - which pre-dates this task. FastAPI matches the first registration, so
-    this one was already unreachable; it is left in place because deleting a route is a
-    larger blast radius than this task's scope, and pointed at the same implementation so
-    that if the ordering ever changes the behaviour does not. ``include_in_schema=False``
-    keeps the duplicate out of the OpenAPI document, where two entries for one path is a
-    contract nobody can honour.
+    This does not place the order itself: only the process already running the bot knows
+    ``recovered_exposure_coins`` (see migration 038's header), so this writes a durable
+    ``close_requested_at`` the owning process picks up on its own heartbeat, the same
+    mechanism ``stop`` already uses for a cross-process stop. Accepted, not immediate -- the
+    response confirms the request was recorded, not that a position was closed.
+
+    Responses
+        **202** request recorded.
+        **404** no such deployment belongs to this user.
+        **409** the deployment is not running, so there is no owning process to act on it.
+        **429** from the existing limiter.
     """
-    return await _transition_deployment_endpoint(
-        "stop", deployment_id, user, body.reason if body is not None else None
-    )
+    from backend_app.backend.deployment_state import DeploymentStateStore
+    from backend_app.core.dependencies import create_request_supabase_async
+
+    sb_res = create_request_supabase_async(user.get("access_token"))
+    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    if sb is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "DEPLOYMENT_CLOSE_UNAVAILABLE",
+                "message": "No database client is available, so ownership of this "
+                           "deployment could not be verified and nothing was requested.",
+            },
+        )
+
+    try:
+        owned_q = (
+            sb.table("strategy_deployments")
+            .select("id")
+            .eq("id", deployment_id)
+            .eq("user_id", user["id"])
+            .limit(1)
+            .execute()
+        )
+        owned = await owned_q if inspect.isawaitable(owned_q) else owned_q
+    except Exception as e:
+        logger.error(
+            "Ownership of deployment %s could not be verified for user %s: %s",
+            deployment_id, user["id"], e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "DEPLOYMENT_CLOSE_UNAVAILABLE",
+                "message": "Ownership of this deployment could not be verified, so "
+                           "nothing was requested.",
+            },
+        )
+
+    if not owned or not getattr(owned, "data", None):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "DEPLOYMENT_NOT_FOUND",
+                "message": f"Deployment {deployment_id} not found",
+            },
+        )
+
+    store = DeploymentStateStore(client_factory=lambda: sb)
+    requested = await store.request_close(deployment_id)
+    if not requested:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "DEPLOYMENT_NOT_RUNNING",
+                "message": "This deployment is not running, so there is no owning "
+                           "process to flatten a position.",
+            },
+        )
+    return {"status": "close_requested", "deployment_id": deployment_id}
+
+
+# API-01: the second, `include_in_schema=False` registration of `POST
+# /deployments/{id}/stop` (`stop_deployment_alias`) was deleted here. It was already
+# unreachable - FastAPI matches the FIRST registration (`stop_deployment`, above) - and
+# its own docstring said so explicitly. Deleting it changes no served behaviour.
 
 
 @router.get("/strategies/{strategy_id}/deployments")
@@ -2786,37 +2619,100 @@ async def list_deployments(request: Request,
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
-    """List all deployments for a strategy."""
+    """List a strategy's deployments, from the authoritative record.
+
+    LT-01. This read ONLY ``deployment_manager.list_deployments`` - the in-process registry -
+    and a deployment started by ``deploy_version`` (the fleet path every deploy button uses)
+    is never in that registry (see ``get_deployment`` below, which already learned this). So
+    the Live Trading page answered "No deployment record was returned" for every strategy
+    while a bot was running (production, 2026-11-13: deployment 7bb586c0), could not show it
+    and could not stop it, and told traders the list "may be incomplete".
+
+    The ``strategy_deployments`` rows are read FIRST, scoped to the caller twice (the
+    request-scoped client's RLS plus an explicit ``user_id`` filter), newest first, capped
+    at 50. The in-process runtime is consulted only to ATTACH a worker and health readings to
+    a row the caller owns; a registry-only deployment for this strategy (legacy worker path)
+    is still listed. Health is ``None`` - never a fabricated 0 or "healthy" - when no runtime
+    is attached. Response keys are unchanged.
+    """
+    from backend_app.core.dependencies import create_request_supabase_async
+
     try:
-        deployment_manager = get_deployment_manager()
-        deployments = deployment_manager.list_deployments(user["id"])
-        
-        return {
-            "strategy_id": strategy_id,
-            "deployments": [
-                {
-                    "deployment_id": d.deployment_id,
-                    "status": d.status.value,
-                    "environment": d.config.environment.value,
-                    "worker": d.worker.worker_id if d.worker else None,
-                    "started_at": d.started_at,
-                    "health": {
-                        "cpu_percent": d.health.cpu_percent,
-                        "memory_percent": d.health.memory_percent,
-                        "latency_ms": d.health.latency_ms,
-                        "uptime_seconds": d.health.uptime_seconds
-                    }
-                }
-                for d in deployments if d.config.strategy_id == strategy_id
-            ],
-            "total": len([d for d in deployments if d.config.strategy_id == strategy_id])
-        }
-    except Exception as e:
-        logger.error(f"Error listing deployments for strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOYMENTS_LIST_FAILED", "message": str(e)}
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        q = (
+            sb.table("strategy_deployments")
+            .select("*")
+            .eq("user_id", user["id"])
+            .eq("strategy_id", strategy_id)
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
         )
+        res = await q if inspect.isawaitable(q) else q
+        rows = [dict(r) for r in ((getattr(res, "data", None) or []) if res else [])]
+    except Exception as e:
+        logger.error(
+            f"Deployments of strategy {strategy_id} could not be read for user {user['id']}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "DEPLOYMENTS_LIST_UNAVAILABLE",
+                "message": "The deployment records could not be read, so no list was returned. "
+                           "This is not a report that nothing is running.",
+            },
+        )
+
+    try:
+        runtime = {
+            d.deployment_id: d
+            for d in get_deployment_manager().list_deployments(user["id"])
+            if d.config.strategy_id == strategy_id
+        }
+    except Exception as e:  # noqa: BLE001 - runtime detail is optional; the rows are not
+        logger.warning(f"In-process deployment registry unreadable for {user['id']}: {e}")
+        runtime = {}
+
+    def _health(d: Any) -> Optional[Dict[str, Any]]:
+        if d is None or getattr(d, "health", None) is None:
+            return None
+        return {
+            "cpu_percent": d.health.cpu_percent,
+            "memory_percent": d.health.memory_percent,
+            "latency_ms": d.health.latency_ms,
+            "uptime_seconds": d.health.uptime_seconds,
+        }
+
+    listed: List[Dict[str, Any]] = []
+    seen = set()
+    for row in rows:
+        dep_id = str(row.get("id") or "")
+        seen.add(dep_id)
+        attached = runtime.get(dep_id)
+        listed.append({
+            "deployment_id": dep_id,
+            "status": str(row.get("status") or ""),
+            "environment": row.get("environment") or row.get("mode"),
+            "worker": (
+                attached.worker.worker_id if attached is not None and attached.worker
+                else row.get("worker_id")
+            ),
+            "started_at": row.get("started_at") or row.get("created_at"),
+            "health": _health(attached),
+        })
+    for dep_id, d in runtime.items():
+        if dep_id in seen:
+            continue
+        listed.append({
+            "deployment_id": d.deployment_id,
+            "status": d.status.value,
+            "environment": d.config.environment.value,
+            "worker": d.worker.worker_id if d.worker else None,
+            "started_at": d.started_at,
+            "health": _health(d),
+        })
+    return {"strategy_id": strategy_id, "deployments": listed, "total": len(listed)}
 
 
 @router.get("/deployments/{deployment_id}")
@@ -2986,49 +2882,12 @@ async def compare_backtests(request: Request,
         )
 
 
-@router.delete("/backtests/{backtest_id}")
-@limiter.limit("50/minute")
-async def delete_backtest(request: Request, 
-    backtest_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Delete a backtest.
-
-    UNREACHABLE, AND NOT TO BE UNSHADOWED AS IT STANDS
-    --------------------------------------------------
-    This module declares ``DELETE /backtests/{backtest_id}`` twice. FastAPI matches the
-    FIRST registration, which is the handler ~800 lines above; nothing routes here, and
-    ``tests/sandbox_lifecycle/test_cross_tenant_ownership_matrix.py`` pins that fact
-    (``backtests.archive`` asserts the registration that answers is the earlier one).
-
-    It is left in place rather than deleted because removing a route declaration is a
-    surface change this remediation was not scoped to make. But note what it would do if it
-    ever became the one that answers: ``delete_backtest`` is now truthful about whether the
-    ownership-scoped DELETE matched, so ``if not success -> 404`` here would answer the
-    OWNER 200 and everybody else 404 - i.e. it would become exactly the existence oracle
-    Requirement 20.2 forbids. Whoever resolves the duplication must make this branch
-    unconditional first, the way the live handler does.
-    """
-    try:
-        backtest_service = await get_backtest_service()
-        
-        success = await backtest_service.delete_backtest(user=user, backtest_id=backtest_id)
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "BACKTEST_DELETE_FAILED", "message": "Backtest not found"}
-            )
-        
-        return {"status": "deleted", "backtest_id": backtest_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting backtest {backtest_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "BACKTEST_DELETE_FAILED", "message": str(e)}
-        )
+# API-01: this module declared `DELETE /backtests/{backtest_id}` a second time here,
+# verbatim-shadowed by the handler ~800 lines above (FastAPI matches the FIRST
+# registration). Its own docstring said as much ("UNREACHABLE, AND NOT TO BE UNSHADOWED
+# AS IT STANDS" - the existence-oracle hazard it warned a future un-shadowing would
+# create no longer applies to any reachable code, since this copy is gone). Deleting it
+# changes no served behaviour.
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -3161,6 +3020,16 @@ async def restore_version(request: Request,
             "restored_from": version,
             "new_version": new_version
         }
+    except HTTPException:
+        raise
+    except _RestoreCompileError as e:
+        # VER-01: a restore now recompiles the old graph. One that no longer validates
+        # (e.g. a block since removed from the registry) is refused with its report and
+        # nothing written - a 422, not a 500.
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "VERSION_RESTORE_INVALID", "message": str(e)},
+        )
     except ValueError as e:
         # Re-versioning the owner's strategy is forbidden to a subscriber (Requirement 12.4),
         # not impossible. 403 with a stable code and an audited refusal for an entitled
@@ -3309,6 +3178,13 @@ async def deploy_version(request: Request,
                 "message": str(e),
                 "missing_prerequisite": e.missing_prerequisite,
             }
+        )
+    except PlanLimitRefused as e:
+        # QUOTA-MODE-01 / LIVE-PLAN-01: a plan refusal is a 403 with its own stable code,
+        # not the generic ValueError -> 404 VERSION_NOT_FOUND below.
+        raise HTTPException(
+            status_code=e.http_status,
+            detail={"error": e.code, "message": e.message, "upgrade_url": "/app/billing"},
         )
     except ValueError as e:
         raise HTTPException(
@@ -3910,124 +3786,37 @@ async def verify_performance(request: Request,
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# CRASH RECOVERY ENDPOINTS
+# CRASH RECOVERY ENDPOINTS -- UNMOUNTED (OPS-03)
 # ══════════════════════════════════════════════════════════════════════════
-
-@router.post("/crash-recovery/recover-deployment")
-@limiter.limit("10/minute")
-async def recover_deployment(request: Request,
-    body: Dict[str, Any],
-    user: dict = Depends(get_current_user)
-):
-    """
-    Recover a crashed deployment.
-    
-    Initiates recovery process for a deployment that has crashed.
-    """
-    try:
-        deployment_id = body.get("deployment_id")
-        if not deployment_id:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "MISSING_DEPLOYMENT_ID", "message": "deployment_id is required"}
-            )
-        
-        recovery_result = await crash_recovery_manager.recover_deployment(
-            deployment_id=deployment_id,
-            user_id=user["id"],
-            strategy_id=body.get("strategy_id", "")
-        )
-        
-        return recovery_result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error recovering deployment for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOYMENT_RECOVERY_FAILED", "message": str(e)}
-        )
-
-
-@router.post("/crash-recovery/recover-signals")
-@limiter.limit("10/minute")
-async def recover_signals(request: Request,
-    body: Dict[str, Any],
-    user: dict = Depends(get_current_user)
-):
-    """
-    Recover signals that may have been lost during crash.
-    """
-    try:
-        strategy_id = body.get("strategy_id")
-        if not strategy_id:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "MISSING_STRATEGY_ID", "message": "strategy_id is required"}
-            )
-        
-        crash_time = datetime.fromisoformat(body.get("crash_time", datetime.now(timezone.utc).isoformat()))
-        
-        recovery_result = await crash_recovery_manager.recover_signals(
-            strategy_id=strategy_id,
-            user_id=user["id"],
-            crash_time=crash_time
-        )
-        
-        return recovery_result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error recovering signals for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "SIGNAL_RECOVERY_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/crash-recovery/verify-state")
-@limiter.limit("10/minute")
-async def verify_system_state(request: Request,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Verify overall system state consistency.
-    
-    Checks deployment-worker, signal, and portfolio consistency.
-    """
-    try:
-        consistency_result = await verify_state_consistency()
-        return consistency_result
-    except Exception as e:
-        logger.error(f"Error verifying system state: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STATE_VERIFICATION_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/crash-recovery/log")
-@limiter.limit("50/minute")
-async def get_recovery_log(request: Request,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Get crash recovery operation log.
-    """
-    try:
-        recovery_log = crash_recovery_manager.get_recovery_log()
-        active_recoveries = crash_recovery_manager.get_active_recoveries()
-        
-        return {
-            "recovery_log": recovery_log,
-            "active_recoveries": active_recoveries
-        }
-    except Exception as e:
-        logger.error(f"Error getting recovery log: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "RECOVERY_LOG_FAILED", "message": str(e)}
-        )
+#
+# The four endpoints that used to live here (/crash-recovery/recover-deployment,
+# recover-signals, verify-state, log) called straight into
+# backend_app.core.crash_recovery.CrashRecoveryManager, whose own methods are
+# fabrication, not recovery: _get_deployment_state returns a HARDCODED placeholder dict
+# for every deployment_id ("status": "running", "exchange_id": "binance") instead of
+# querying anything; _cancel_open_orders, _restart_worker are bare `pass`; _reconcile_
+# portfolio always returns {"positions": [], "balance": 0.0, "reconciled": True}; and
+# _verify_recovery always returns {"success": True, ...} unconditionally. So
+# recover_deployment ALWAYS reported RecoveryStatus.SUCCEEDED, having cancelled no
+# orders, reconciled nothing, and restarted nothing -- a false "recovery succeeded"
+# confirmation on a crash-handling endpoint for a live-trading platform is a worse
+# failure mode than no endpoint at all: an operator who trusts it has no reason to look
+# further. recover_signals and verify_system_state are the same shape (their private
+# helpers are stubs returning empty/fixed results). get_recovery_log additionally
+# returned every tenant's active_recoveries/recovery_log unscoped by the caller's own
+# user_id -- any authenticated caller could read every other tenant's recovery activity.
+#
+# Unmounted rather than patched, per this finding's own remediation note ("Unmount
+# until implemented on RT-16"): RT-16 (VERIFIED_FIXED earlier this session) built the
+# real venue-reconciliation primitives (ReconciliationScheduler, adjudication against
+# the actual exchange) that a real implementation of this endpoint would have to be
+# built on, and that work was not done for crash-specific recovery in this pass.
+# backend_app/core/crash_recovery.py is UNCHANGED -- its own placeholder nature is
+# documented in its module docstring, and this is a mount removal from this router,
+# not a deletion, matching the precedent this session already set for RT-11's
+# distributed_execution router.
+#
+# See tests/test_ops03_crash_recovery_endpoints_unmounted.py.
 
 
 def _pipeline_timeframes() -> tuple:
@@ -4606,7 +4395,7 @@ async def _fetch_preview_bars(symbol: str, timeframe: str, bars: int) -> List[Li
     """
     import os
 
-    from backend_app.backend.connection_engine import ConnectionEngine
+    from backend_app.backend.connection_engine import get_public_exchange
     from backend_app.backend.data_seeking_engine import DataEngine
 
     venue = os.getenv("DEFAULT_EXCHANGE")
@@ -4625,7 +4414,9 @@ async def _fetch_preview_bars(symbol: str, timeframe: str, bars: int) -> List[Li
             },
         )
 
-    engine = DataEngine(await ConnectionEngine(exchange_id=venue).connect())
+    # PERF-01: the pooled public client. A fresh client per call re-downloaded the venue's
+    # market list on the event loop every 15 s (the builder's poll) and leaked its session.
+    engine = DataEngine(await get_public_exchange(venue))
     return await engine.fetch_historical_ohlcv(symbol, timeframe, limit=int(bars))
 
 

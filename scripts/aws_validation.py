@@ -20,14 +20,48 @@ import sys
 from typing import Dict, List, Tuple
 
 
-REQUIRED_SECRETS = [
-    "/vyomquant/production/SUPABASE_SERVICE_ROLE_KEY",
-    "/vyomquant/production/SUPABASE_ANON_KEY",
-    "/vyomquant/production/SUPABASE_JWT_SECRET",
-    "/vyomquant/production/DATABASE_URL",
-    "/vyomquant/production/MASTER_ENCRYPTION_KEYS",
-    "/vyomquant/production/JWT_SECRET",
-]
+#: SEC-01: this used to be a HARDCODED list of six `/vyomquant/production/UPPERCASE`
+#: paths. Every one of them was wrong in the way that matters most for a deployment
+#: gate: the running task definition references eleven `vyomquant/production/lowercase`
+#: secrets and NONE of the six. So this check verified the existence of secrets the
+#: application does not read, while never checking a single one it does -- it would have
+#: passed with `vyomquant/production/database_url` deleted.
+#:
+#: The list is now DERIVED from the task definition's own `secrets[].valueFrom`, which
+#: is the file this script already validates two functions below. A hardcoded list can
+#: drift from the deployment; a derived one cannot.
+def _aws_error_code(stderr: str) -> str:
+    """The AWS error code from a CLI failure (e.g. ResourceNotFoundException,
+    AccessDeniedException, InvalidRequestException for a secret scheduled for deletion)."""
+    import re as _re
+
+    m = _re.search(r"\(([A-Za-z]+(?:Exception|Error|Denied))\)", stderr or "")
+    if m:
+        return m.group(1)
+    text = (stderr or "").strip().splitlines()
+    return (text[-1][:160] if text else "no error text")
+
+
+def required_secrets(filepath: str = "ecs-task-definition-full.json") -> List[str]:
+    """Secret names the task definition actually resolves, read from it directly."""
+    if not os.path.exists(filepath):
+        return []
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            td = json.load(fh)
+    except Exception:
+        return []
+    names = []
+    for container in td.get("containerDefinitions", []) or []:
+        for entry in container.get("secrets", []) or []:
+            arn = entry.get("valueFrom", "")
+            if not arn:
+                continue
+            # arn:aws:secretsmanager:<region>:<acct>:secret:<name>[-<suffix>]
+            marker = ":secret:"
+            name = arn.split(marker, 1)[1] if marker in arn else arn
+            names.append(name)
+    return sorted(set(names))
 
 REQUIRED_ECR_REPOS = [
     "vyomquant-api",
@@ -129,11 +163,44 @@ def validate_aws_live() -> Dict:
             report["errors"].append(f"ECR repo missing or inaccessible: {repo}")
 
     # 3. Secrets Manager Validation
-    for sec in REQUIRED_SECRETS:
-        code, stdout, stderr = run_aws_cmd(["secretsmanager", "describe-secret", "--secret-id", sec])
-        report["secrets"][sec] = (code == 0)
+    #
+    # SEC-01: `describe-secret` succeeding is NOT sufficient and that gap was real.
+    # `vyomquant/production/supabase_key` describes fine -- Terraform created it -- but
+    # has ZERO versions, so `get-secret-value` returns ResourceNotFound and a task
+    # consuming it would fail at launch. A gate that only describes cannot see that.
+    # So this checks the secret both EXISTS and HAS A RETRIEVABLE VERSION, without ever
+    # reading the value itself.
+    secrets_to_check = required_secrets()
+    if not secrets_to_check:
+        report["errors"].append(
+            "Could not derive any required secret from the task definition; refusing "
+            "to report the secret check as passing on an empty list."
+        )
+    for sec in secrets_to_check:
+        code, stdout, stderr = run_aws_cmd(
+            ["secretsmanager", "describe-secret", "--secret-id", sec])
         if code != 0:
-            report["errors"].append(f"Secrets Manager secret missing: {sec}")
+            report["secrets"][sec] = False
+            # DEPLOY-SEC-02: say WHY. "missing" (ResourceNotFound), "deleted" (scheduled for
+            # deletion) and "access denied" (the deploy role lost secretsmanager:Describe*)
+            # need three different fixes; the AWS error code names which. No value is read.
+            reason = _aws_error_code(stderr)
+            report["errors"].append(f"Secrets Manager secret missing: {sec} ({reason})")
+            continue
+        vcode, vout, verr = run_aws_cmd(
+            ["secretsmanager", "list-secret-version-ids", "--secret-id", sec])
+        has_version = False
+        if vcode == 0:
+            try:
+                has_version = bool(json.loads(vout).get("Versions"))
+            except Exception:
+                has_version = False
+        report["secrets"][sec] = has_version
+        if not has_version:
+            report["errors"].append(
+                f"Secrets Manager secret exists but has NO retrievable version, so a "
+                f"task consuming it will fail at launch: {sec}"
+            )
 
     # 4. ECS Cluster Validation
     code, stdout, stderr = run_aws_cmd(["ecs", "describe-clusters", "--clusters", ECS_CLUSTER])
@@ -181,6 +248,12 @@ def main():
 
         all_sec_ok = all(aws_res["secrets"].values())
         print(f"Secrets Manager: {'ALL PASS' if all_sec_ok else 'SOME MISSING'}")
+        # DEPLOY-SEC-02: name each failing secret in the job log. "SOME MISSING" alone left
+        # a blocked deploy undiagnosable from CI (2026-11-20, runs 581/582). Names are not
+        # secret; values are never read.
+        for err in aws_res["errors"]:
+            if "Secrets Manager" in err:
+                print(f"  - {err}")
 
         print(f"ECS Cluster ({ECS_CLUSTER}): {'PASS' if aws_res['ecs_cluster'] else 'FAIL'}")
         print(f"ECS Service ({ECS_SERVICE}): {'PASS' if aws_res['ecs_service'] else 'FAIL'}")
@@ -190,6 +263,25 @@ def main():
     status = "PASS"
     if not td_res["valid"]:
         status = "FAIL"
+
+    # SEC-01: A MISSING REQUIRED SECRET NOW FAILS THE GATE WITHOUT --strict.
+    #
+    # Previously only `--strict` could fail on this, and the deploy workflow does not
+    # pass it (.github/workflows/03-deploy.yml:144 runs the engine with no flags). So
+    # "Secrets Manager: SOME MISSING" printed and the gate passed anyway -- a
+    # pre-deployment check that reported the exact condition that breaks a task launch
+    # and then waved it through.
+    #
+    # Scoped deliberately: this only fails when credentials WERE valid, i.e. the check
+    # actually ran. A credential-less run (a PR check, a laptop) skips the live calls
+    # entirely and must not be failed for something it could not look at -- that would
+    # make the gate unrunnable outside deployment, which is how `--strict` ended up
+    # never being passed in the first place.
+    if aws_res["credentials_valid"]:
+        missing = [name for name, ok in aws_res["secrets"].items() if not ok]
+        if missing or not aws_res["secrets"]:
+            status = "FAIL"
+
     if strict_mode and (not aws_res["credentials_valid"] or aws_res["errors"]):
         status = "FAIL"
 

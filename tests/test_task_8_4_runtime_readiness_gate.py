@@ -64,6 +64,7 @@ from backend_app.backend.dag_engine import (ACTION_TRIGGER_THRESHOLD,
                                             RUNTIME_STATES, WARMING,
                                             DAGEngine, DAGExecutionError,
                                             ExecutionBlocked,
+                                            MLInferenceUnavailable,
                                             PlanRuntimeState, TradeIntent,
                                             build_intent, mark_node)
 from backend_app.backend.strategy_dag import registry as registry_module
@@ -723,18 +724,58 @@ class TestAwaitingModel:
         assert intents == []
 
     def test_a_verified_checksum_clears_the_awaiting_model_hold(
-        self, model_plan, reg, store
+        self, model_plan, reg, store, unfrozen
     ):
         """The seam is real in both directions: a row whose recorded checksum matches the
-        stored bytes is no longer awaiting a model."""
+        stored bytes is no longer awaiting a model.
+
+        TAKES ``unfrozen``, which it was missing. ``tests/conftest.py`` sets
+        ``VYOMQUANT_MODE=safe``, and once the model hold is CLEARED the ML node actually
+        runs - at which point ``MLExecutor.execute`` consults
+        ``SafetyMonitor.check_execution_allowed("ml_inference")`` and raises
+        ``MLInferenceUnavailable``. That exception escaped ``run()`` and the assertion
+        below was never reached. Its sibling
+        ``test_the_runtime_never_has_to_catch_an_exception_to_find_this_out`` does not need
+        the fixture because a node that stays AWAITING_MODEL never executes.
+
+        This is the fixture this file already provides for exactly this situation, lifted
+        per test and never in ``conftest`` - and ``TestTheSystemFreezeStillStops`` still
+        asserts that the freeze stops emission by default, so nothing is weakened.
+
+        AND IT DOES NOT REQUIRE THE PREDICTION TO SUCCEED, for a measured reason. Once the
+        model hold clears, ``MLExecutor.execute`` runs and refuses with
+        ``MLInferenceUnavailable``: this plan's ``n_lag`` node hands it a ``FeatureMatrix``
+        and ``MLExecutor`` only accepts a ``pandas.Series`` (measured: zero occurrences of
+        ``FeatureMatrix`` in the whole of ``MLExecutor``, three of ``pd.Series``). That is a
+        separate product gap, recorded as a finding rather than fixed here, and it is NOT
+        what this test is about. The subject is the readiness gate's verdict - whether the
+        node is still held AWAITING_MODEL - which is decided BEFORE the executor is
+        reached. So the refusal is caught and named, and the state is asserted on the
+        object this test owns rather than on ``run()``'s return value, which an exception
+        never produces.
+        """
         uri = store.put("u/s/v/n_model/model.joblib", ARTIFACT_BYTES)
         recorded = store.checksum(uri)
         assert MR.model_ready(self._row(uri, recorded))
 
         state = PlanRuntimeState(model_versions={"n_model": self._row(uri, recorded)})
-        _engine, state, _intents = run(model_plan, LONG_BARS, reg=reg, state=state)
+        engine = DAGEngine(enable_event_buffer=False)
 
-        assert state.state_of("n_model") != AWAITING_MODEL
+        # The gate sets the node's state; the executor then refuses for an unrelated
+        # reason. Both outcomes are acceptable here - what must NOT happen is the node
+        # still being held for a model whose checksum verified.
+        try:
+            engine.execute_plan(model_plan, candles(LONG_BARS), state, registry=reg)
+        except MLInferenceUnavailable as exc:
+            assert "no feature series" in str(exc), (
+                f"the ML node refused for a reason this test did not expect, which may "
+                f"mean the model hold did not clear after all: {exc}"
+            )
+
+        assert state.state_of("n_model") != AWAITING_MODEL, (
+            "a model whose recorded checksum matches the stored bytes is still being held "
+            "AWAITING_MODEL, so the readiness seam only works in one direction"
+        )
 
     def test_the_runtime_never_has_to_catch_an_exception_to_find_this_out(
         self, model_plan, reg

@@ -1,0 +1,291 @@
+"""backend/deployment_state.py - RT-08: durable deployment state the runtime writes and reads.
+
+THE DEFECT THIS CLOSES
+    A bot lives in one process's memory. Three things followed from that:
+
+    * A bot that crashed, failed to boot or gave up reconnecting left its
+      ``strategy_deployments`` row at ``running`` -- the fleet logged "exited cleanly" and wrote
+      nothing, so the UI and the quota kept describing a bot that no longer existed.
+    * ``stop_deployment`` only reached a bot in the SAME process (and passed the exchange id
+      where the symbol belongs, so it missed even then); on any other pod the request was
+      reported as success while the bot kept trading.
+    * A restart lost every bot, and nothing started them again.
+
+WHAT THIS MODULE IS
+    The runtime's side of the deployment row. It is deliberately tiny and takes the Supabase
+    client as a dependency so it can be exercised without a database. It runs under the SERVICE
+    role (background work has no request JWT), and every write is CONDITIONED on the current
+    status, so a late runtime report can never overwrite a user's stop and a stop can never be
+    overwritten by a stale "failed".
+
+STATES (``strategy_deployments.status``, free text; no CHECK constraint exists)
+    deploying -> running -> stopping -> stopped      (user stop: owner confirms, then 'stopped')
+    deploying | running -> failed                    (runtime reports the reason in error_message)
+    A 'stopping' row nobody owns is finalised to 'stopped' by :func:`resume_deployments`.
+
+Regression: tests/test_rt08_deployment_state_is_durable.py
+"""
+from __future__ import annotations
+
+import inspect
+import logging
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger("DeploymentState")
+
+LIVE_STATES = ("deploying", "running")
+STOP_STATES = ("stopping", "stopped")
+
+
+async def _run(query: Any) -> Any:
+    result = query.execute()
+    return await result if inspect.isawaitable(result) else result
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class DeploymentStateStore:
+    """Reads and conditional writes of one deployment row, as the platform."""
+
+    def __init__(self, client_factory: Optional[Callable[[], Any]] = None) -> None:
+        self._client_factory = client_factory
+
+    def _client(self) -> Any:
+        if self._client_factory is not None:
+            return self._client_factory()
+        from backend_app.core.dependencies import get_service_supabase
+
+        return get_service_supabase()
+
+    # ── reads ───────────────────────────────────────────────────────────
+
+    async def status_of(self, deployment_id: str) -> Optional[str]:
+        """The row's status, or ``None`` when it cannot be read (unknown is not 'stop')."""
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments").select("status").eq("id", deployment_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("deployment %s status unreadable: %s", deployment_id, exc)
+            return None
+        rows = getattr(res, "data", None) or []
+        return str(rows[0].get("status")) if rows else None
+
+    async def close_requested(self, deployment_id: str) -> bool:
+        """RT-21: is a flatten due? ``False`` (never guessed True) when the read fails."""
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .select("close_requested_at")
+                .eq("id", deployment_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("deployment %s close-request unreadable: %s", deployment_id, exc)
+            return False
+        rows = getattr(res, "data", None) or []
+        return bool(rows) and rows[0].get("close_requested_at") is not None
+
+    async def rows_in(self, statuses: tuple) -> List[Dict[str, Any]]:
+        sb = self._client()
+        res = await _run(
+            sb.table("strategy_deployments").select("*").in_("status", list(statuses))
+        )
+        return list(getattr(res, "data", None) or [])
+
+    # ── conditional writes ──────────────────────────────────────────────
+
+    async def mark_failed(self, deployment_id: str, reason: str) -> bool:
+        """``deploying|running -> failed``. False when the row was not in a live state."""
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .update({"status": "failed", "error_message": str(reason)[:1000],
+                         "stopped_at": _now()})
+                .eq("id", deployment_id)
+                .in_("status", list(LIVE_STATES))
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("could not record failure of deployment %s: %s", deployment_id, exc)
+            return False
+        changed = bool(getattr(res, "data", None))
+        if changed:
+            await self._release_quota(deployment_id)
+            await self._settle_strategy_status(deployment_id, "failed")
+        return changed
+
+    async def mark_stopped(self, deployment_id: str) -> bool:
+        """``running|deploying|stopping -> stopped``."""
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .update({"status": "stopped", "stopped_at": _now()})
+                .eq("id", deployment_id)
+                .in_("status", [*LIVE_STATES, "stopping"])
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("could not record stop of deployment %s: %s", deployment_id, exc)
+            return False
+        changed = bool(getattr(res, "data", None))
+        if changed:
+            await self._settle_strategy_status(deployment_id, "stopped")
+        return changed
+
+    async def request_stop(self, deployment_id: str) -> bool:
+        """``running|deploying -> stopping``: the durable stop request the owner honours."""
+        sb = self._client()
+        res = await _run(
+            sb.table("strategy_deployments")
+            .update({"status": "stopping"})
+            .eq("id", deployment_id)
+            .in_("status", list(LIVE_STATES))
+        )
+        return bool(getattr(res, "data", None))
+
+    async def request_close(self, deployment_id: str) -> bool:
+        """RT-21: durable flatten request, honoured by the owning bot's own heartbeat tick.
+
+        Status-independent of ``request_stop``: a close does not change ``status``, because
+        a position request cannot be confirmed here -- only the owning process knows its own
+        ``recovered_exposure_coins``, and may legitimately have none to close. ``False``
+        means the row was not found, never that nothing was requested.
+        """
+        sb = self._client()
+        res = await _run(
+            sb.table("strategy_deployments")
+            .update({"close_requested_at": _now()})
+            .eq("id", deployment_id)
+            .in_("status", [*LIVE_STATES, "stopping"])
+        )
+        return bool(getattr(res, "data", None))
+
+    async def clear_close_request(self, deployment_id: str) -> None:
+        """The owner calls this once it has acted on the request (whether or not a position
+        existed to close) -- never on its own initiative, so a request cannot be dropped by
+        anything other than the one process entitled to answer it."""
+        sb = self._client()
+        await _run(
+            sb.table("strategy_deployments")
+            .update({"close_requested_at": None})
+            .eq("id", deployment_id)
+        )
+
+    async def write_runtime_status(self, deployment_id: str, status: Dict[str, Any]) -> bool:
+        """OBS-01: store a running bot's self-report on its deployment row.
+
+        Best effort and silent on failure beyond one log line: the report is diagnostics,
+        never state anything decides on. Returns whether the row was written.
+        """
+        if not deployment_id:
+            return False
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .update({"runtime_status": dict(status)})
+                .eq("id", deployment_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("runtime status not written for %s: %s", deployment_id, exc)
+            return False
+        return bool(getattr(res, "data", None))
+
+    async def _settle_strategy_status(self, deployment_id: str, status: str) -> None:
+        """DEP-STRAT-01: a strategy is not ``running`` once nothing of it is running.
+
+        The runtime ended a deployment (failed, or a restart refused to resume a live one)
+        and wrote only the DEPLOYMENT row, so the strategy itself kept saying ``running``:
+        the Strategies table showed a live bot that no longer existed and offered Pause
+        instead of Deploy. Moved here, conditioned like every other write in this module:
+        only a strategy still ``running``/``deploying`` changes, and only when none of its
+        deployments is still live. Best effort - the deployment's own state is already
+        recorded, which is the authority.
+        """
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .select("strategy_id, version_id")
+                .eq("id", deployment_id)
+            )
+            rows = getattr(res, "data", None) or []
+            strategy_id = rows[0].get("strategy_id") if rows else None
+            version_id = rows[0].get("version_id") if rows else None
+            if version_id:
+                await self._settle_version_lifecycle(sb, str(version_id))
+            if not strategy_id:
+                return
+            live = await _run(
+                sb.table("strategy_deployments")
+                .select("id")
+                .eq("strategy_id", strategy_id)
+                .in_("status", list(LIVE_STATES))
+            )
+            if getattr(live, "data", None):
+                return
+            await _run(
+                sb.table("strategies")
+                .update({"status": status})
+                .eq("id", strategy_id)
+                .in_("status", list(LIVE_STATES))
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "strategy status not settled for deployment %s: %s", deployment_id, exc
+            )
+
+    async def _settle_version_lifecycle(self, sb: Any, version_id: str) -> None:
+        """VER-REDEPLOY-01: a version none of whose deployments is live is STOPPED.
+
+        The runtime moved a version READY -> DEPLOYED -> RUNNING and nothing ever moved it
+        on: every version that had run stayed RUNNING forever, after its deployment had
+        stopped or failed. Conditioned like every write here - only a version still
+        DEPLOYED/RUNNING/PAUSED changes, and only when no deployment of it is live.
+        ``lifecycle_state`` is not a column 004c's immutability trigger protects.
+        """
+        try:
+            live = await _run(
+                sb.table("strategy_deployments")
+                .select("id")
+                .eq("version_id", version_id)
+                .in_("status", list(LIVE_STATES))
+            )
+            if getattr(live, "data", None):
+                return
+            await _run(
+                sb.table("strategy_versions")
+                .update({"lifecycle_state": "STOPPED"})
+                .eq("id", version_id)
+                .in_("lifecycle_state", ["DEPLOYED", "RUNNING", "PAUSED"])
+            )
+        except Exception as exc:  # noqa: BLE001 - best effort; the deployment row decides
+            logger.warning("version %s lifecycle not settled: %s", version_id, exc)
+
+    async def _release_quota(self, deployment_id: str) -> None:
+        """A failed deployment no longer occupies a bot slot."""
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .select("user_id, mode, environment")
+                .eq("id", deployment_id)
+            )
+            rows = getattr(res, "data", None) or []
+            if not rows:
+                return
+            from backend_app.backend.strategy_service import deployment_quota_resource
+            from backend_app.core.subscription_engine import SubscriptionEngine
+
+            # QUOTA-MODE-01: release the allowance this deployment reserved.
+            await SubscriptionEngine.decrement_quota_usage(
+                str(rows[0]["user_id"]),
+                deployment_quota_resource(rows[0].get("mode"), rows[0].get("environment")),
+            )
+        except Exception as exc:  # noqa: BLE001 - best effort; the failure is already recorded
+            logger.warning("quota not released for failed deployment %s: %s", deployment_id, exc)

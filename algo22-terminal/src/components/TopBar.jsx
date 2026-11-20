@@ -164,6 +164,7 @@ import {
   isConnectionDown,
 } from './shell/ConnectionStatusIndicator';
 import { NAV_GROUPS, activeNavEntry, routeTitle } from './shell/navigation';
+import ThemeToggle from './shell/ThemeToggle';
 
 /**
  * The bar row's height, in pixels.
@@ -320,10 +321,20 @@ export default function TopBar({ className = '', style, ...rest }) {
           <Breadcrumb items={trail} label="Page context" />
         </div>
 
-        {/* Right, in §6.1's order. */}
+        {/* Right, in §6.1's order.
+
+            THEME-01 puts `ThemeToggle` LAST, outside that order rather than
+            inserted into it. The two controls before it report operational state
+            a trader acts on — whether the figures are current, whether something
+            needs attention — and they are read in that sequence. The theme is a
+            device preference that is set once and then ignored, so it takes the
+            least urgent position and does not displace either. `compact` so it
+            is an icon only: a bar that truncates its own breadcrumb trail to
+            protect these controls should not spend width on the word "light". */}
         <div className="flex shrink-0 items-center gap-3">
           <ConnectionStatusIndicator />
           <NotificationBell />
+          <ThemeToggle compact />
         </div>
       </div>
 

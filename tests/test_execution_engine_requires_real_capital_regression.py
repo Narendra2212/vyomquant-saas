@@ -45,11 +45,19 @@ from backend_app.core.execution_engine import ExecutionEngine
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+# Two callers were removed from this list under HY-02, not because they were fixed but
+# because they no longer exist: distributed_execution/execution_worker.py and
+# distributed_execution/idempotent_exchange_submission.py were deleted with the rest of
+# backend_app/backend/distributed_execution/, a 40-module subsystem whose only non-test
+# importer was its own already-unmounted router.
+#
+# The docstring above still describes what they did, deliberately. Their hardcoded
+# 100000.0 is the clearest surviving example of the defect this file exists to prevent,
+# and deleting the explanation along with the code would lose the reason the remaining two
+# entries are checked at all.
 CALLERS = [
     "backend_app/core/execution_engine.py",
     "backend_app/backend/dag_risk_integration.py",
-    "backend_app/backend/distributed_execution/execution_worker.py",
-    "backend_app/backend/distributed_execution/idempotent_exchange_submission.py",
 ]
 
 

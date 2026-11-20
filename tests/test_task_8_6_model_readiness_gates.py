@@ -675,7 +675,223 @@ class TestFeatureSchemaDriftGate:
 
 
 # ---------------------------------------------------------------------------
-# 4. Both gates, over a whole version
+# 3b. ML-01 - the minimum model performance gate
+# ---------------------------------------------------------------------------
+
+
+def _gate_now():
+    """A ``created_at`` guaranteed to be ON OR AFTER the gate's effective date."""
+    from datetime import timedelta
+
+    return (mr.MODEL_PERFORMANCE_GATE_EFFECTIVE_AT + timedelta(days=1)).isoformat()
+
+
+def _gate_before():
+    """A ``created_at`` guaranteed to be BEFORE the gate's effective date."""
+    from datetime import timedelta
+
+    return (mr.MODEL_PERFORMANCE_GATE_EFFECTIVE_AT - timedelta(days=1)).isoformat()
+
+
+class TestModelPerformanceGate:
+    """ML-01: a model that is intact and schema-matched can still be useless."""
+
+    # -- classification --------------------------------------------------
+
+    def test_a_classification_model_at_the_random_baseline_is_refused(self):
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 50, "accuracy": 0.333, "f1_macro": 0.3, "loss": 1.1},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert not verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_BELOW_THRESHOLD
+        assert verdict.details["metric"] == "accuracy"
+        assert verdict.details["value"] == 0.333
+        assert verdict.details["threshold"] == mr.MIN_CLASSIFICATION_TEST_ACCURACY
+        # The refusal names the actual metric and value, not a generic message.
+        assert "accuracy=0.3330" in verdict.message
+        assert "0.3500" in verdict.message
+
+    def test_a_classification_model_above_the_bar_passes(self):
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 50, "accuracy": 0.58, "f1_macro": 0.55, "loss": 0.7},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_SUFFICIENT
+        assert verdict.details["value"] == 0.58
+
+    def test_a_classification_model_exactly_at_the_bar_passes(self):
+        """The bar is inclusive: >= threshold, not > threshold."""
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {
+                "rows": 50,
+                "accuracy": mr.MIN_CLASSIFICATION_TEST_ACCURACY,
+                "f1_macro": 0.3,
+            },
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert verdict.ok
+
+    # -- regression --------------------------------------------------------
+
+    def test_a_regression_model_with_zero_r2_is_refused(self):
+        """R^2 == 0 is "no better than predicting the mean" - refused, not borderline-ok."""
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 50, "mse": 1.0, "mae": 0.8, "r2": 0.0},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert not verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_BELOW_THRESHOLD
+        assert verdict.details["metric"] == "r2"
+
+    def test_a_regression_model_with_negative_r2_is_refused(self):
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 50, "mse": 9.0, "mae": 2.0, "r2": -0.4},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert not verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_BELOW_THRESHOLD
+
+    def test_a_regression_model_with_positive_r2_passes(self):
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 50, "mse": 0.2, "mae": 0.1, "r2": 0.41},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_SUFFICIENT
+
+    # -- split selection -----------------------------------------------------
+
+    def test_validation_metrics_are_used_when_test_metrics_are_unscored(self):
+        """``{"rows": 0}`` is what an unscored split looks like - not usable."""
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 0},
+            "val_metrics": {"rows": 40, "accuracy": 0.6, "f1_macro": 0.55},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert verdict.ok
+        assert verdict.details["split"] == "val"
+
+    def test_training_metrics_alone_are_never_consulted(self):
+        """A model scored only on its own training rows cannot clear this gate."""
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "train_metrics": {"rows": 500, "accuracy": 0.99, "f1_macro": 0.99},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert not verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_METRICS_MISSING
+
+    # -- fail-closed on "cannot tell" ----------------------------------------
+
+    def test_no_metrics_at_all_is_refused_not_passed(self):
+        row = {"node_id": "n1", "id": MODEL_VERSION_ID, "created_at": _gate_now()}
+        verdict = mr.evaluate_model_performance(row)
+
+        assert not verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_METRICS_MISSING
+
+    def test_a_metrics_document_with_no_recognised_key_is_refused(self):
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 10, "some_custom_metric": 1.0},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert not verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_TASK_UNDETERMINED
+
+    def test_a_nan_metric_value_is_refused_not_treated_as_zero(self):
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 10, "accuracy": float("nan"), "f1_macro": None},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert not verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_METRICS_MISSING
+
+    # -- going forward, not retroactive --------------------------------------
+
+    def test_a_model_bound_before_the_gate_existed_is_not_retroactively_refused(self):
+        """A weak model bound under the governance that existed when it was bound."""
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_before(),
+            "test_metrics": {"rows": 50, "accuracy": 0.01, "f1_macro": 0.01},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_GATE_PREDATES_GOVERNANCE
+
+    def test_a_row_with_no_readable_created_at_is_not_retroactively_refused(self):
+        """Every pre-finding fixture in this file builds rows with no ``created_at`` at
+        all. The gate must not start failing them just because it cannot date them."""
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "test_metrics": {"rows": 50, "accuracy": 0.01, "f1_macro": 0.01},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_GATE_PREDATES_GOVERNANCE
+
+    def test_a_good_model_bound_after_the_gate_passes_on_its_own_merit(self):
+        """A model bound after the cutoff still passes normally when it clears the bar -
+        the cutoff grandfathers weak OLD models, it does not exempt new ones."""
+        row = {
+            "node_id": "n1",
+            "id": MODEL_VERSION_ID,
+            "created_at": _gate_now(),
+            "test_metrics": {"rows": 50, "accuracy": 0.6, "f1_macro": 0.55},
+        }
+        verdict = mr.evaluate_model_performance(row)
+
+        assert verdict.ok
+        assert verdict.code == mr.CODE_PERFORMANCE_SUFFICIENT
+
+
+# ---------------------------------------------------------------------------
+# 4. All three gates, over a whole version
 # ---------------------------------------------------------------------------
 
 
@@ -774,6 +990,60 @@ class TestEvaluateModelGates:
 
         assert report.ok
         assert report.warnings == []
+
+    def test_a_schema_matched_but_underperforming_model_fails_only_the_performance_gate(
+        self, registry, stored_artifact
+    ):
+        """Checksum and schema pass; ML-01 is what refuses this version."""
+        uri, checksum = stored_artifact
+        plan, ml = build_plan(registry, lags=(1, 2))
+        report = mr.evaluate_model_gates(
+            VERSION_ID,
+            plan,
+            {
+                ml: model_row(
+                    uri,
+                    checksum,
+                    node_id=ml,
+                    feature_names=("lag_1", "lag_2"),
+                    created_at=_gate_now(),
+                    test_metrics={"rows": 50, "accuracy": 0.2, "f1_macro": 0.18},
+                )
+            },
+            registry=registry,
+        )
+
+        assert not report.ok
+        assert report.first_artifact_failure() is None
+        assert report.first_schema_failure() is None
+        performance_failure = report.first_performance_failure()
+        assert performance_failure is not None
+        assert performance_failure.code == mr.CODE_PERFORMANCE_BELOW_THRESHOLD
+
+    def test_a_schema_matched_and_well_performing_model_passes_all_three_gates(
+        self, registry, stored_artifact
+    ):
+        uri, checksum = stored_artifact
+        plan, ml = build_plan(registry, lags=(1, 2))
+        report = mr.evaluate_model_gates(
+            VERSION_ID,
+            plan,
+            {
+                ml: model_row(
+                    uri,
+                    checksum,
+                    node_id=ml,
+                    feature_names=("lag_1", "lag_2"),
+                    created_at=_gate_now(),
+                    test_metrics={"rows": 50, "accuracy": 0.6, "f1_macro": 0.55},
+                )
+            },
+            registry=registry,
+        )
+
+        assert report.ok
+        assert report.first_performance_failure() is None
+        assert report.performance[0].code == mr.CODE_PERFORMANCE_SUFFICIENT
 
 
 class TestThisModuleRaisesNothing:
@@ -1077,6 +1347,93 @@ class TestDeployGate:
         assert "004d_training_and_models.sql" in rejected.message
         assert "004d_training_and_models.sql" in caplog.text
         assert (REPO_ROOT / rejected.details["migration"]).is_file()
+
+    async def test_an_underperforming_model_is_refused_at_deploy_time(
+        self, registry, stored_artifact
+    ):
+        """ML-01: intact and schema-matched is not enough. Named metric, named value."""
+        uri, checksum = stored_artifact
+        plan, ml = build_plan(registry, lags=(1, 2))
+        sb = _Supabase(
+            {
+                "model_versions": [
+                    model_row(
+                        uri,
+                        checksum,
+                        node_id=ml,
+                        feature_names=("lag_1", "lag_2"),
+                        created_at=_gate_now(),
+                        test_metrics={"rows": 50, "accuracy": 0.2, "f1_macro": 0.18},
+                    )
+                ]
+            }
+        )
+
+        with pytest.raises(db.DeployRejected) as exc:
+            await db.assert_models_verified(
+                sb, _user(), _version_row(plan), plan, registry=registry
+            )
+
+        rejected = exc.value
+        assert rejected.code == "MODEL_PERFORMANCE_BELOW_THRESHOLD"
+        assert rejected.http_status == 409
+        assert rejected.details["verdict"] == mr.CODE_PERFORMANCE_BELOW_THRESHOLD
+        assert rejected.details["metric"] == "accuracy"
+        assert rejected.details["value"] == 0.2
+        assert rejected.details["threshold"] == mr.MIN_CLASSIFICATION_TEST_ACCURACY
+        assert "accuracy=0.2000" in rejected.message
+
+    async def test_a_well_performing_model_is_admitted_exactly_as_before(
+        self, registry, stored_artifact
+    ):
+        """No regression for a model that already clears 17.6, 17.7 and now ML-01."""
+        uri, checksum = stored_artifact
+        plan, ml = build_plan(registry, lags=(1, 2))
+        sb = _Supabase(
+            {
+                "model_versions": [
+                    model_row(
+                        uri,
+                        checksum,
+                        node_id=ml,
+                        feature_names=("lag_1", "lag_2"),
+                        created_at=_gate_now(),
+                        test_metrics={"rows": 50, "accuracy": 0.6, "f1_macro": 0.55},
+                    )
+                ]
+            }
+        )
+
+        warnings = await db.assert_models_verified(
+            sb, _user(), _version_row(plan), plan, registry=registry
+        )
+        assert warnings == []
+
+    async def test_a_weak_model_bound_before_the_gate_existed_still_deploys(
+        self, registry, stored_artifact
+    ):
+        """Do not retroactively break an already-bound, already-deployed model version."""
+        uri, checksum = stored_artifact
+        plan, ml = build_plan(registry, lags=(1, 2))
+        sb = _Supabase(
+            {
+                "model_versions": [
+                    model_row(
+                        uri,
+                        checksum,
+                        node_id=ml,
+                        feature_names=("lag_1", "lag_2"),
+                        created_at=_gate_before(),
+                        test_metrics={"rows": 50, "accuracy": 0.05, "f1_macro": 0.04},
+                    )
+                ]
+            }
+        )
+
+        warnings = await db.assert_models_verified(
+            sb, _user(), _version_row(plan), plan, registry=registry
+        )
+        assert warnings == []
 
     async def test_an_unreadable_plan_is_refused_before_any_model_is_read(
         self, registry

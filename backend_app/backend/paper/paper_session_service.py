@@ -228,10 +228,11 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timedelta, timezone
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import (
     Any,
     Callable,
@@ -254,7 +255,9 @@ from backend_app.backend.market_data_contract import (
 from backend_app.backend.marketplace.entitlement_resolver import (
     Entitlement,
     EntitlementReadFailed,
+    EntitlementReason,
     resolve as resolve_entitlement,
+    resolve_owned_strategy,
 )
 from backend_app.backend.marketplace.money import (
     UnsupportedCurrency,
@@ -456,6 +459,10 @@ STATE_CREATED = "CREATED"
 STATE_RUNNING = "RUNNING"
 STATE_PAUSED = "PAUSED"
 STATE_STOPPED = "STOPPED"
+#: PAPER-04. "Was RUNNING, and the process that ran its loop is gone." Written only by the
+#: boot-time reconciliation pass via :data:`OPERATION_ABANDON`, never by a user: no route
+#: reaches it. See migrations/054 for why none of the other four states can carry this fact.
+STATE_ABANDONED = "ABANDONED"
 
 #: The six permitted edges of Requirement 17.7, as an adjacency map - the same shape
 #: ``paper_order_state.PAPER_ORDER_TRANSITIONS`` and
@@ -472,11 +479,19 @@ STATE_STOPPED = "STOPPED"
 #: again, and the equity series that follows is a NEW series
 #: (``paper_equity_snapshots.series_index = previous + 1``, Requirement 17.15) rather than a
 #: continuation of one that ended.
+#: PAPER-04 adds two edges to 009's six, and migration 054 seeds the matching pairs into
+#: ``paper_session_allowed_transitions`` so this module and ``trg_paper_session_guard``
+#: still describe one machine.
 PAPER_SESSION_TRANSITIONS: Dict[str, Tuple[str, ...]] = {
     STATE_CREATED: (STATE_RUNNING,),
-    STATE_RUNNING: (STATE_PAUSED, STATE_STOPPED),
+    STATE_RUNNING: (STATE_PAUSED, STATE_STOPPED, STATE_ABANDONED),
     STATE_PAUSED: (STATE_RUNNING, STATE_STOPPED),
     STATE_STOPPED: (STATE_CREATED,),
+    #: No ``ABANDONED -> RUNNING``: the loop's in-flight position lived in the dead
+    #: process and was never persisted, so a resume would cross a gap of unknown length
+    #: while reporting continuity it does not have. Reset starts a NEW equity series,
+    #: which is what actually happened.
+    STATE_ABANDONED: (STATE_CREATED,),
 }
 
 OPERATION_START = "start"
@@ -484,9 +499,30 @@ OPERATION_PAUSE = "pause"
 OPERATION_RESUME = "resume"
 OPERATION_STOP = "stop"
 OPERATION_RESET = "reset"
+#: PAPER-04. The one SYSTEM operation: performed by the boot-time reconciliation pass, not
+#: by a user, and reachable from no route. It is listed in :data:`SESSION_OPERATIONS`
+#: because ``_assert_machine_agrees`` is right to demand that every edge have an operation
+#: -- "an edge with no operation is an edge nothing can take" -- and this edge IS taken.
+OPERATION_ABANDON = "abandon"
 
-#: The five operations of Requirement 17.7, in the order the requirement names them.
+#: The five operations of Requirement 17.7, in the order the requirement names them, plus
+#: PAPER-04's system operation last. The five user operations remain the first five, so a
+#: reader comparing this to the requirement still sees it; ``abandon`` is distinguished by
+#: having no route rather than by being absent from here, which it cannot be.
 SESSION_OPERATIONS: Tuple[str, ...] = (
+    OPERATION_START,
+    OPERATION_PAUSE,
+    OPERATION_RESUME,
+    OPERATION_STOP,
+    OPERATION_RESET,
+    OPERATION_ABANDON,
+)
+
+#: The five a user can ask for. ``abandon`` is excluded deliberately: the route layer should
+#: iterate THIS, so that adding a system operation can never accidentally expose one as an
+#: API verb. ``SESSION_OPERATIONS`` stays the full vocabulary the state machine is checked
+#: against.
+USER_SESSION_OPERATIONS: Tuple[str, ...] = (
     OPERATION_START,
     OPERATION_PAUSE,
     OPERATION_RESUME,
@@ -508,7 +544,12 @@ OPERATION_TRANSITIONS: Dict[str, Mapping[str, str]] = {
     OPERATION_PAUSE: {STATE_RUNNING: STATE_PAUSED},
     OPERATION_RESUME: {STATE_PAUSED: STATE_RUNNING},
     OPERATION_STOP: {STATE_RUNNING: STATE_STOPPED, STATE_PAUSED: STATE_STOPPED},
-    OPERATION_RESET: {STATE_STOPPED: STATE_CREATED},
+    # PAPER-04: ``ABANDONED`` resets by the same edge ``STOPPED`` does. Both are terminal
+    # and both discard what came before, so reset is one operation with two sources, the
+    # way ``stop`` already is.
+    OPERATION_RESET: {STATE_STOPPED: STATE_CREATED, STATE_ABANDONED: STATE_CREATED},
+    # PAPER-04's system operation. No route reaches it; see OPERATION_ABANDON.
+    OPERATION_ABANDON: {STATE_RUNNING: STATE_ABANDONED},
 }
 
 #: Which of the sixteen Paper_Channel types records each operation (Requirement 19.2 fixes the
@@ -848,8 +889,21 @@ session_not_found = _session_not_found
 #: :func:`assert_strategy_supports_market` compares against. It is read and immediately reduced to
 #: two sets of strings; no part of it reaches a response, a log line or an event payload
 #: (Requirements 19.7, 23.3).
+#:
+#: PAPER-16: the same row is also what ``paper_session_runtime.resolve_session_plan`` hands to
+#: ``strategy_compiler.load_plan``, which must load the version's GRAPH to check the stored plan
+#: against it (Requirement 22.5). Without ``graph_json`` (and the legacy ``blueprint`` /
+#: ``execution_graph`` / ``schema_version`` it falls back to) every production session failed to
+#: resolve a plan - "Row carries no loadable strategy graph" - and produced no signal at all.
 STRATEGY_VERSIONS_TABLE = "strategy_versions"
-STRATEGY_VERSION_SELECT = "id,strategy_id,lifecycle_state,is_draft,compiled_plan"
+#: PROD-7: ``version`` (the label, e.g. ``v1.0``) is read too. ``signal_service.paper_session_facts``
+#: takes the Signal_Trace's ``strategy_version`` from this row - a ``paper_sessions`` row does not
+#: carry it - and without it every paper signal was refused SIGNAL_ATTRIBUTION_INCOMPLETE, so no
+#: paper signal ever reached ``public.signals``.
+STRATEGY_VERSION_SELECT = (
+    "id,strategy_id,version,lifecycle_state,is_draft,compiled_plan,"
+    "graph_json,schema_version,blueprint,execution_graph"
+)
 
 #: The version ``lifecycle_state`` values from which a Paper_Session may execute.
 #:
@@ -1417,6 +1471,13 @@ async def _spawn(
     spawner = spawn_loop or no_session_loop
     try:
         outcome = spawner(session, feed, config=config, account_id=account_id)
+        # PAPER-10. A Task (or any Future) is ALREADY scheduled: it is the running loop, and awaiting
+        # it here waited out the whole session. The production spawner returns exactly that, so a
+        # start request never returned while its session lived (CloudFront's 30 s ended it with a
+        # 504, the caller never received the session id, and ``stop_session`` never got a
+        # ``loop_task`` to settle). Only a bare coroutine - what a test spawner is - needs awaiting.
+        if isinstance(outcome, asyncio.Future):
+            return outcome
         if inspect.isawaitable(outcome):
             return await outcome
         return outcome
@@ -1474,6 +1535,7 @@ async def start_session(
     timeframe: Any,
     initial_capital_minor: Any,
     currency: Any = repo.DEFAULT_CURRENCY,
+    owned_strategy_id: Any = None,
     now: Optional[datetime] = None,
     markets: Any = None,
     exchange: Any = None,
@@ -1554,6 +1616,15 @@ async def start_session(
     # ── 1. THE SINGLE ADMISSION DECISION (Requirements 17.4, 11.10, property P-16) ──
     try:
         entitlement = await resolve_entitlement(caller, listing_id, supabase, instant)
+        if (
+            not entitlement.entitling
+            and owned_strategy_id
+            and entitlement.reason is EntitlementReason.LISTING_UNAVAILABLE
+        ):
+            # PAPER-09: no Listing backs this reference. It may still be the caller's OWN strategy,
+            # which has no Listing until it is published and is the first thing a trader paper-trades.
+            # Same admission decision, OWNED half, keyed on the strategy and the caller's identity.
+            entitlement = await resolve_owned_strategy(caller, owned_strategy_id, supabase)
     except EntitlementReadFailed as exc:
         # A read the decision needed did not complete, so there IS no decision. Reported as a
         # failure rather than as "not entitled": refusing a paying subscriber because a read
@@ -3514,6 +3585,138 @@ def _signal_instant(source: Any, fallback: datetime) -> datetime:
     return fallback
 
 
+#: PAPER-15: base quantities are resolved to this precision, rounding DOWN so a resolved size
+#: never exceeds what the rule allows.
+SIZING_QUANTUM = Decimal("0.00000001")
+
+
+def _sizing_decimal(value: Any) -> Optional[Decimal]:
+    """An exact Decimal from a declared sizing number (an int, a decimal string, or the float a
+    JSON plan parameter decodes to - read via ``repr`` so 0.1 stays 0.1)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = value if isinstance(value, Decimal) else Decimal(
+            repr(value) if isinstance(value, float) else str(value)
+        )
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _is_spot_symbol(symbol: Any) -> bool:
+    """A ccxt spot symbol (``BTC/USDT``); derivatives carry a settle suffix (``BTC/USDT:USDT``)."""
+    text = str(symbol or "")
+    return "/" in text and ":" not in text
+
+
+def _spot_sell_capped_at_holding(
+    produced: Mapping[str, Any],
+    resolved: Optional[Decimal],
+    open_position: Any,
+    *,
+    symbol: Any,
+    session_id: Any,
+) -> Optional[Decimal]:
+    """A rule-sized SELL on a spot pair, capped at the LONG position actually held (PAPER-19).
+
+    A percent-of-equity SELL is sized from equity, not from the holding, so it lands a little
+    above or below what is held. Production session ed9d8cfe (2026-11-11) bought 0.01344 BTC and
+    then sold 0.01345: the fill closed the long and opened a 0.00001 BTC SHORT on a SPOT market,
+    which cannot exist. Earlier, 7a8d3df2 sold 0.01349 of 0.0135 and left dust.
+
+    On spot a sell can only dispose of what is held, so the size is capped at the open long and
+    an exit closes it exactly. With nothing held there is nothing to sell: ``None`` places no
+    order (the signal is still recorded), rather than opening a short. Derivative symbols and
+    explicitly sized orders are left exactly as they were.
+    """
+    if resolved is None or not _is_spot_symbol(symbol):
+        return resolved
+    decision = str(produced.get("decision") or produced.get("side") or "").upper()
+    if decision != "SELL":
+        return resolved
+    held = Decimal(0)
+    if (
+        open_position is not None
+        and getattr(open_position, "is_open", False)
+        and str(getattr(open_position, "side", "")).upper() == "LONG"
+    ):
+        held = _sizing_decimal(getattr(open_position, "size", None)) or Decimal(0)
+    if held <= 0:
+        logger.info(
+            "[paper-session] session %s: a SELL on spot %s with no long position held places no "
+            "order (a spot account cannot go short)",
+            session_id,
+            symbol,
+        )
+        return None
+    return min(resolved, held)
+
+
+def resolve_sizing_quantity(
+    sizing: Mapping[str, Any],
+    *,
+    account: Optional[Mapping[str, Any]],
+    price: Any,
+    position_size: Any = None,
+    quantity_precision: Any = None,
+) -> Optional[Decimal]:
+    """A strategy's sizing RULE as an exact base quantity for this paper session (PAPER-15).
+
+    The builder's default action block sizes as ``percent_of_equity``. The paper path only ever
+    used a base quantity, so such a strategy produced a signal and no order (and, through the
+    bug fixed alongside, briefly a 10 BTC order for "10%"). Resolved here, against the session's
+    OWN account and the closed candle's price - the same inputs a fill is priced from:
+
+    * ``percent_of_equity``        -> total_equity  x pct / 100 / price
+    * ``percent_of_free_balance``  -> available_balance x pct / 100 / price
+    * ``quote_notional``           -> amount / price
+    * ``percent_of_position``      -> open position size x pct / 100
+
+    ``None`` when the rule cannot be resolved (an unknown type, a missing number, no price or no
+    account); the caller then records a signal and places no order, which is what it did before.
+
+    PAPER-18: the result is rounded DOWN to ``quantity_precision`` decimal places - the market's
+    precision frozen in the session's config, which ``paper_simulator.static_rejection_reason``
+    holds every order to. Rounding to a fixed 1e-8 instead made every percent-sized order on
+    BTC/USDT a ``QUANTITY_PRECISION`` rejection in production (0.01357759 BTC, session 278cab3a).
+    Without a precision the 1e-8 floor still applies.
+    """
+    quantity_type = str(sizing.get("quantity_type") or "")
+    amount = _sizing_decimal(sizing.get("quantity"))
+    price_d = _sizing_decimal(price)
+    if amount is None or amount <= 0:
+        return None
+    if quantity_type == "percent_of_position":
+        size = _sizing_decimal(position_size)
+        base = None if size is None else abs(size) * amount / Decimal(100)
+    else:
+        if price_d is None or price_d <= 0 or account is None:
+            return None
+        if quantity_type == "percent_of_equity":
+            capital = _sizing_decimal(account.get("total_equity"))
+            base = None if capital is None else capital * amount / Decimal(100) / price_d
+        elif quantity_type == "percent_of_free_balance":
+            capital = _sizing_decimal(account.get("available_balance"))
+            base = None if capital is None else capital * amount / Decimal(100) / price_d
+        elif quantity_type == "quote_notional":
+            base = amount / price_d
+        else:
+            return None
+    if base is None:
+        return None
+    quantum = SIZING_QUANTUM
+    if quantity_precision is not None:
+        try:
+            places = int(quantity_precision)
+        except (TypeError, ValueError):
+            places = None
+        if places is not None and places >= 0:
+            quantum = max(SIZING_QUANTUM, Decimal(1).scaleb(-places))
+    base = base.quantize(quantum, rounding=ROUND_DOWN)
+    return base if base > 0 else None
+
+
 def paper_signal(produced: Any, *, event: MarketEvent) -> PaperSignal:
     """Project one value the evaluator produced onto :class:`PaperSignal`.
 
@@ -4199,7 +4402,43 @@ async def step_session(
             )
         )
 
+    sizing_account: Optional[Mapping[str, Any]] = None
+    sizing_account_read = False
     for produced in produced_values:
+        # PAPER-15: resolve a sizing RULE (e.g. 10% of equity) into an exact base quantity
+        # before the output becomes a PaperSignal. The account is read once per bar.
+        if (
+            isinstance(produced, Mapping)
+            and produced.get("quantity") is None
+            and isinstance(produced.get("sizing_intention"), Mapping)
+        ):
+            if not sizing_account_read:
+                sizing_account_read = True
+                # A failed read raises like every other read in this step; the caller's
+                # contained handler records it. Sizing never silently falls back.
+                sizing_account = repo.read_account(
+                    supabase,
+                    user_id,
+                    currency=session.get("currency") or "USD",
+                    session_id=session_id,
+                )
+            open_position = positions.get(produced.get("symbol") or event.symbol)
+            resolved = resolve_sizing_quantity(
+                produced["sizing_intention"],
+                account=sizing_account,
+                price=event.close,
+                position_size=getattr(open_position, "size", None),
+                quantity_precision=getattr(config, "quantity_precision", None),
+            )
+            resolved = _spot_sell_capped_at_holding(
+                produced,
+                resolved,
+                open_position,
+                symbol=produced.get("symbol") or event.symbol,
+                session_id=session_id,
+            )
+            if resolved is not None:
+                produced = {**produced, "quantity": resolved}
         try:
             signal = paper_signal(produced, event=event)
         except PaperSignalUnreadable as exc:
@@ -4419,6 +4658,15 @@ async def session_loop(
             break
         state = normalise_state(row.get("session_state"))
         if state == STATE_PAUSED:
+            # PAPER-04: a PAUSED session is alive -- its loop is sitting right here,
+            # polling -- so it beats too. Without this, a long pause would look exactly
+            # like a dead loop and the next boot would abandon it. The abandon predicate
+            # only selects RUNNING rows, so this is belt-and-braces rather than
+            # load-bearing; it is here because "PAUSED still beats" is the kind of fact
+            # that stops being true when someone later widens that predicate.
+            repo.touch_session_heartbeat(
+                supabase, user_id=user_id, session_id=session_id
+            )
             await asyncio.sleep(PAUSE_POLL_SECONDS)
             continue
         if state != STATE_RUNNING:
@@ -4430,6 +4678,18 @@ async def session_loop(
                 processed,
             )
             break
+
+        # PAPER-04: declare liveness BEFORE the step, not after.
+        #
+        # `step_session` blocks until the feed yields the next event, which on a 1-minute
+        # timeframe is up to a minute and on a quiet or degraded feed can be longer.
+        # Beating afterwards would make a healthy session's heartbeat age track its BAR
+        # INTERVAL rather than its liveness, so the staleness window would have to exceed
+        # the slowest timeframe the platform offers in order not to abandon live sessions
+        # -- and a window that wide cannot notice a real death promptly. Beating first
+        # makes the heartbeat mean "this loop reached the top of its iteration", which is
+        # the fact reconciliation needs.
+        repo.touch_session_heartbeat(supabase, user_id=user_id, session_id=session_id)
 
         try:
             step = await step_session(
@@ -4477,6 +4737,296 @@ async def session_loop(
             processed += 1
 
     return processed
+
+
+#: PAPER-04. How long a ``RUNNING`` session may go without a heartbeat before the next
+#: reconciliation pass calls it abandoned.
+#:
+#: The loop beats once per iteration, at the TOP of the iteration (see
+#: :func:`session_loop`), so a healthy session's heartbeat age is bounded by how long one
+#: iteration takes to come round -- not by its bar interval. 15 minutes is therefore many
+#: multiples of a healthy gap while still noticing a death inside the window an operator
+#: would care about. It is deliberately NOT tuned to the bar interval: a session on a 1d
+#: timeframe beats just as often as one on 1m, because the beat marks the loop reaching the
+#: top of its iteration rather than a bar arriving.
+#:
+#: Erring long is the safe direction. Too short abandons live sessions, which stops real
+#: in-flight paper trading; too long leaves an orphan reading as RUNNING for longer, which
+#: is the status quo this fixes and is merely slow rather than wrong.
+ABANDON_AFTER_SECONDS = float(os.environ.get("PAPER_ABANDON_AFTER_SECONDS", "900"))
+
+
+async def reconcile_orphaned_sessions(
+    supabase: Any,
+    *,
+    now: Optional[datetime] = None,
+    abandon_after_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Mark every ``RUNNING`` session whose loop has stopped beating as ``ABANDONED``.
+
+    PAPER-04's second half: "a boot-time reconciliation pass that resumes or fails a
+    RUNNING session whose task is gone". It fails them rather than resuming them, and
+    :data:`PAPER_SESSION_TRANSITIONS` records why there is no resume edge to take.
+
+    WHY THIS IS SAFE TO RUN FROM EVERY WEB WORKER, AND REPEATEDLY
+    ------------------------------------------------------------
+    ``startup.sh`` runs ``gunicorn --workers ${WORKERS:-2}``, so a naive boot sweep is a
+    worse defect than the one it fixes: worker B restarting while worker A healthily runs
+    sessions would abandon A's LIVE sessions and report real in-flight trading as a crash.
+    Two things prevent that, and neither depends on knowing which process owns a row:
+
+    * the population is HEARTBEAT-STALE rows, not RUNNING rows. A live loop in any process
+      keeps beating, so it is never eligible, whoever is asking.
+    * the write is ``repo.transition_session_state(from_state=RUNNING, ...)``, a guarded
+      UPDATE. Two workers racing the same orphan means one matches the row and the other
+      matches nothing, so the second is a no-op rather than a double write.
+
+    It needs no leader election for the same reason, which is the point: a lease would add
+    a Redis dependency to a correctness property that is already idempotent.
+
+    WHAT IT DOES NOT DO
+    -------------------
+    It does not restart anything. PAPER-04's first half -- running session loops outside
+    the web process -- needs the worker service INF-03 covers, and this pass is not a
+    substitute for it: it makes a death VISIBLE and the row's state TRUE, which is what
+    lets an operator and the owner see that it happened at all. Before this, an orphan sat
+    at ``RUNNING`` forever, counted against Requirement 27.4's concurrency cap, and read as
+    live to every client.
+
+    Never raises. A reconciliation pass that could fail a boot would make the thing that
+    reports damage into a cause of it; every outcome is counted and returned instead.
+    """
+    cutoff_seconds = (
+        ABANDON_AFTER_SECONDS if abandon_after_seconds is None
+        else float(abandon_after_seconds)
+    )
+    moment = now or datetime.now(timezone.utc)
+    cutoff = (moment - timedelta(seconds=cutoff_seconds)).isoformat()
+
+    summary: Dict[str, Any] = {
+        "examined": 0, "abandoned": 0, "raced": 0, "errors": 0,
+        "cutoff": cutoff, "abandon_after_seconds": cutoff_seconds,
+    }
+
+    try:
+        stale = repo.list_stale_running_sessions(supabase, stale_before=cutoff)
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning(
+            "[paper-session] PAPER-04 reconciliation could not read the stale RUNNING "
+            "sessions; no session was changed",
+            exc_info=True,
+        )
+        summary["errors"] = 1
+        return summary
+
+    summary["examined"] = len(stale)
+    if not stale:
+        logger.info(
+            "[paper-session] PAPER-04 reconciliation: no RUNNING session has a heartbeat "
+            "older than %ss",
+            cutoff_seconds,
+        )
+        return summary
+
+    for row in stale:
+        session_id = str(row.get("id"))
+        user_id = str(row.get("user_id"))
+        last_beat = row.get("last_heartbeat_at")
+        reason = (
+            f"no heartbeat since {last_beat or 'ever'}; the loop that was running this "
+            f"session no longer exists. Reconciled after {cutoff_seconds:.0f}s "
+            f"without a beat."
+        )
+        try:
+            repo.transition_session_state(
+                supabase,
+                user_id=user_id,
+                session_id=session_id,
+                from_state=STATE_RUNNING,
+                to_state=STATE_ABANDONED,
+                stopped_at=moment.isoformat(),
+                # Migration 054 created this column for exactly this sentence and its
+                # COMMENT says so. It was built here and passed only to logger.warning,
+                # so the column was inert and the row could not answer the question 054
+                # added it to answer: an operator reading an ABANDONED row could see THAT
+                # the host died but not WHEN it last beat or after how long we gave up.
+                abandoned_reason=reason,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # The guarded UPDATE matching no row is the EXPECTED outcome of two workers
+            # racing, or of the session having been stopped by its owner between the read
+            # and the write. Counted separately from a real error so the log distinguishes
+            # "someone else got there first" from "this is broken".
+            name = type(exc).__name__
+            if "Concurrency" in name or "Conflict" in name:
+                summary["raced"] += 1
+                logger.info(
+                    "[paper-session] PAPER-04: session %s was no longer RUNNING when the "
+                    "abandon landed (another worker or its owner got there first)",
+                    session_id,
+                )
+            else:
+                summary["errors"] += 1
+                logger.warning(
+                    "[paper-session] PAPER-04: could not abandon session %s",
+                    session_id,
+                    exc_info=True,
+                )
+            continue
+
+        summary["abandoned"] += 1
+        logger.warning(
+            "[paper-session] PAPER-04: session %s marked ABANDONED - %s",
+            session_id,
+            reason,
+        )
+
+    logger.warning(
+        "[paper-session] PAPER-04 reconciliation complete: %s examined, %s abandoned, "
+        "%s raced, %s error(s)",
+        summary["examined"],
+        summary["abandoned"],
+        summary["raced"],
+        summary["errors"],
+    )
+    return summary
+
+
+#: How often the reconciliation sweep runs while the process is alive.
+#:
+#: A THIRD of :data:`ABANDON_AFTER_SECONDS`, so an orphan is detected within one window
+#: plus one interval -- 900-1200s -- rather than "whenever something next boots". The
+#: boot-only pass this joins covered the redeploy case by accident: ``startup.sh`` uses
+#: ``--graceful-timeout 30``, so a redeploy produces a boot soon after, and the sweep ran
+#: then. What it did NOT cover is the sporadic death: a task killed by an escaped
+#: exception, a feed handle that never reconnects, or a gunicorn worker that survives
+#: while the task inside it does not. None of those produce a boot, so nothing ever
+#: looked, and the orphan sat at RUNNING indefinitely -- counting against Requirement
+#: 27.4's cap and reading as live -- which is the exact condition PAPER-04 describes.
+RECONCILE_INTERVAL_SECONDS = 300.0
+
+
+async def run_reconciliation_loop(
+    get_client: Any,
+    *,
+    interval: float = RECONCILE_INTERVAL_SECONDS,
+) -> None:
+    """Forever: reconcile, sleep. The timer the boot-only pass was missing. PAPER-04.
+
+    NO LEADER ELECTION, AND THAT IS THE EXISTING ARGUMENT RATHER THAN A NEW ONE.
+    :func:`reconcile_orphaned_sessions` is already safe to run from every worker and
+    repeatedly: it selects HEARTBEAT-STALE rows, so a live loop in any process is never
+    eligible whoever is asking, and it writes through a guarded UPDATE, so two workers
+    racing the same orphan means one matches and the other is a no-op. Adding
+    ``core.leader_lease`` here would put a Redis dependency in front of a property that is
+    already idempotent -- which that function's own docstring argues against, and it is
+    right. Running the sweep in every worker is therefore not duplication to be eliminated
+    but redundancy to be kept: one worker's dead event loop does not stop the others.
+
+    Never dies on a failed sweep, and never raises: cancelled on shutdown like every other
+    background loop. ``reconcile_orphaned_sessions`` already returns its failures as counts
+    rather than raising, so the ``except`` here is for a failure to RESOLVE the client.
+    """
+    import asyncio
+
+    while True:
+        try:
+            client = get_client() if callable(get_client) else get_client
+            if client is not None:
+                summary = await reconcile_orphaned_sessions(client)
+                if summary.get("abandoned"):
+                    logger.warning(
+                        "[paper-session] PAPER-04 periodic sweep abandoned %s orphaned "
+                        "session(s) (%s examined, %s raced, %s error(s))",
+                        summary.get("abandoned"), summary.get("examined"),
+                        summary.get("raced"), summary.get("errors"),
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[paper-session] PAPER-04 periodic reconciliation could not run: %s",
+                type(exc).__name__, exc_info=True,
+            )
+        await asyncio.sleep(interval)
+
+
+async def abandon_sessions_hosted_here(
+    supabase: Any,
+    sessions: Any,
+    *,
+    reason: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Mark sessions THIS process was hosting as ``ABANDONED``, because it is going away.
+
+    PAPER-04's hosting half, answered at the only moment the answer is certain.
+
+    WHY A SHUTDOWN HOOK AND NOT A WORKER SERVICE
+    --------------------------------------------
+    The finding asks for "a dedicated runtime worker service to run session loops outside
+    the web process". A worker service redeploys too, and nothing in this codebase resumes
+    a session -- so moving the loop there relocates the death rather than removing it, at
+    the cost of infrastructure that does not exist. What makes the death harmful is not
+    WHERE it happens but that the row goes on claiming to be RUNNING afterwards.
+
+    At shutdown this process knows something no sweep can know: exactly which sessions it
+    was hosting, and that their loops are ending NOW. So it records that directly, with an
+    accurate reason, instead of leaving a stale row for the staleness window to infer from
+    -- which turns a redeploy from "silently stops, discovered up to 1200s later" into
+    "marked at the moment it happens".
+
+    The periodic sweep remains the backstop for every death that gets no clean shutdown:
+    a SIGKILL, an OOM, a lost task. This is the prompt path, not the only one.
+
+    IT DOES NOT TOUCH A SESSION IT DOES NOT HOST. The population is this process's own
+    runtime registry, and each write is still the guarded
+    ``from_state=RUNNING`` UPDATE -- so a session the user stopped a moment earlier, or one
+    another worker has since taken over, is a no-op rather than a state this process had no
+    right to set.
+
+    Never raises: a shutdown must not fail because the thing recording damage could not run.
+    """
+    moment = now or datetime.now(timezone.utc)
+    summary: Dict[str, Any] = {"examined": 0, "abandoned": 0, "raced": 0, "errors": 0}
+    for session_id, user_id in list(sessions or []):
+        summary["examined"] += 1
+        try:
+            repo.transition_session_state(
+                supabase,
+                user_id=str(user_id),
+                session_id=str(session_id),
+                from_state=STATE_RUNNING,
+                to_state=STATE_ABANDONED,
+                stopped_at=moment.isoformat(),
+                abandoned_reason=reason,
+            )
+        except Exception as exc:  # noqa: BLE001
+            name = type(exc).__name__
+            if "Concurrency" in name or "Conflict" in name:
+                # Not RUNNING any more: its owner stopped it, or it was already
+                # reconciled. The expected outcome, not a failure.
+                summary["raced"] += 1
+            else:
+                summary["errors"] += 1
+                logger.warning(
+                    "[paper-session] PAPER-04: could not mark session %s ABANDONED on "
+                    "shutdown", session_id, exc_info=True,
+                )
+            continue
+        summary["abandoned"] += 1
+        logger.warning(
+            "[paper-session] PAPER-04: session %s marked ABANDONED - %s",
+            session_id, reason,
+        )
+    if summary["examined"]:
+        logger.warning(
+            "[paper-session] PAPER-04 shutdown drain: %s hosted session(s), %s abandoned, "
+            "%s already moved on, %s error(s)",
+            summary["examined"], summary["abandoned"], summary["raced"],
+            summary["errors"],
+        )
+    return summary
 
 
 def spawn_session_loop(
@@ -4601,6 +5151,7 @@ __all__ = [
     "OPERATION_TRANSITIONS",
     "PAPER_SESSION_TRANSITIONS",
     "PAUSE_POLL_SECONDS",
+    "RECONCILE_INTERVAL_SECONDS",
     "RESET_BALANCE_CAUSE",
     "RESET_SNAPSHOT_CAUSE",
     "SESSION_OPERATIONS",
@@ -4644,6 +5195,7 @@ __all__ = [
     "ValidatedCapital",
     "apply_operation",
     "assert_strategy_supports_market",
+    "abandon_sessions_hosted_here",
     "assert_version_deployable",
     "assert_within_session_limit",
     "can_operate",
@@ -4660,12 +5212,14 @@ __all__ = [
     "pause_session",
     "plan_markets",
     "read_strategy_version",
+    "reconcile_orphaned_sessions",
     "recorded_capital",
     "release_session_resources",
     "reset_session",
     "resolve_capital_maximum_major",
     "resolve_concurrency_limit",
     "resume_session",
+    "run_reconciliation_loop",
     "safe_signal_payload",
     "session_loop",
     "session_not_found",

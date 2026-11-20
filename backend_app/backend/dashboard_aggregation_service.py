@@ -16,7 +16,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend_app.core.dependencies import get_telemetry, create_request_supabase
@@ -405,6 +405,13 @@ _LATENCY_NORMAL_CEILING_MS = 500
 #: What a latency STATUS reads as when no probe measured one. The figure beside it is ``None``.
 LATENCY_UNAVAILABLE = "unavailable"
 
+#: The one spelling VAULT-01 introduces, taken from the module that defines it so this
+#: reader and the writer share a single source. Imported at module level and safe from a
+#: cycle: ``core.credential_key_integrity`` imports nothing from ``backend`` at import time.
+from backend_app.core.credential_key_integrity import (
+    UNREADABLE_STATUS as _UNREADABLE_CREDENTIAL_STATUS,
+)
+
 #: A venue a probe measured and reached, and whose credential nothing contradicts.
 VENUE_STATUS_CONNECTED = "connected"
 
@@ -429,8 +436,20 @@ _CREDENTIAL_VALID_STATUSES = frozenset({"valid", "validated", "verified", "activ
 #: ``validation_status`` spellings that assert it does not. ``unvalidated`` and ``pending`` are
 #: deliberately in NEITHER set: they are the unknown, and the unknown is not a negative fact
 #: about the credential - it just cannot support a ``can_trade`` of ``True``.
+#: ``unreadable`` is imported rather than spelled, so the writer that sets it
+#: (``scripts/quarantine_undecryptable_exchange_keys.py``) and this reader cannot drift --
+#: migration 056 deliberately adds no CHECK constraint on ``validation_status``, and this
+#: shared constant is what takes its place. It is a KNOWN NEGATIVE and belongs in this set:
+#: the stored ciphertext opens under no configured master key, so the credential is gone
+#: and the user must re-enter it (VAULT-01). It is deliberately a different word from
+#: ``revoked``/``invalid``, which say the VENUE rejected a key we could read -- the user's
+#: remedy is the same but the cause, and therefore the message, is not.
 _CREDENTIAL_INVALID_STATUSES = frozenset(
-    {"revoked", "invalid", "expired", "failed", "error", "unauthorized", "denied", "disabled", "inactive"}
+    {"revoked", "invalid", "expired", "failed", "error", "unauthorized", "denied", "disabled", "inactive",
+     _UNREADABLE_CREDENTIAL_STATUS,
+     # EXCH-STATE-02: written by the stored-key probe when the venue reports the key can
+     # withdraw. Spelled here (not imported) for the same reason the set above is literal.
+     "withdraw_enabled"}
 )
 
 
@@ -523,6 +542,20 @@ def venue_status(probe: Optional[Dict[str, Any]], validity: Optional[bool]) -> s
     return VENUE_STATUS_UNKNOWN
 
 
+def _dashboard_run_state(status: Any) -> str:
+    """DASH-02: a strategy's dashboard state from ``strategies.status``.
+
+    ``running`` / ``deploying`` are active, ``paused`` is paused, everything else (draft,
+    ready, stopped, failed, unknown) is idle - never "active" by default.
+    """
+    run_state = str(status or "").strip().lower()
+    if run_state in ("running", "deploying"):
+        return "active"
+    if run_state == "paused":
+        return "paused"
+    return "idle"
+
+
 class DashboardAggregationService:
     """
     Single source of truth for all Dashboard data.
@@ -588,12 +621,31 @@ class DashboardAggregationService:
         return self._telemetry
     
     async def _execute_sb_query(self, query):
-        """Execute a Supabase PostgREST query in a background thread to prevent blocking asyncio loop."""
+        """Execute a Supabase PostgREST query without blocking the event loop.
+
+        DASH-01. The request-scoped client in production is the ASYNC postgrest client
+        (``_PooledAsyncPostgrestClient``), whose builder is not awaitable but whose
+        ``execute`` is a coroutine function. This helper handed that to
+        ``asyncio.to_thread``, which CALLED it in a worker thread and returned the un-awaited
+        coroutine - no ``.data`` - so every one of this service's reads (strategies, signals,
+        exchange keys, notifications, risk, referrals, marketplace, usage) silently answered
+        "nothing" in production: the Dashboard showed "No strategies deployed" and "No
+        exchange connected" for an account with both (2026-11-13). An async ``execute`` is
+        now awaited on this loop; only a SYNC ``execute`` goes to a thread, as intended.
+        """
         if inspect.isawaitable(query):
             return await query
-        if hasattr(query, "execute"):
-            return await asyncio.to_thread(query.execute)
-        return query
+        execute = getattr(query, "execute", None)
+        if execute is None:
+            return query
+        if inspect.iscoroutinefunction(execute):
+            return await execute()
+        result = await asyncio.to_thread(execute)
+        # A sync-looking ``execute`` that still hands back an awaitable is awaited here, on
+        # this loop, rather than leaked as a result with no ``.data``.
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
@@ -1136,7 +1188,6 @@ class DashboardAggregationService:
         - today_pnl (today_realized + unrealized delta)
         - cumulative_pnl (lifetime total)
         """
-        from datetime import timezone
         now_utc = datetime.now(timezone.utc)
         today_utc_cutoff = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         
@@ -1157,7 +1208,42 @@ class DashboardAggregationService:
                 total_equity = _finite_float(acct.get("total_equity"))
                 available_balance = _finite_float(acct.get("available_balance"))
                 free_balance = available_balance
-                used_balance = float(acct.get("locked_balance", 0.0))
+                # PORT-01: "capital in use" was ``locked_balance`` - funds held by PENDING
+                # orders only - so every filled spot buy (cash moved into a position, nothing
+                # locked) reported 0.00 in use and 0.00 exposure while the same response listed
+                # a position worth $120.91 (production, 2026-11-13). It is now what the live
+                # branch reports (``max(0, total_equity - free_balance)``, below in this file):
+                # everything not free, i.e. position value plus any locked order funds. Absent
+                # when either side of the subtraction was not read.
+                used_balance: Optional[float] = (
+                    None
+                    if total_equity is None or available_balance is None
+                    else round(max(0.0, total_equity - available_balance), 2)
+                )
+                # PORT-01: exposure is the open positions' marked notional, read from the same
+                # ledger rows ``/api/paper/positions`` serves. ``None`` if any size or mark is
+                # unreadable - a partial sum would understate the exposure under this name. Its
+                # own ``try``: a positions read that fails absents THIS figure only, never the
+                # whole overview (the ``except`` below replaces every figure).
+                total_exposure_paper: Optional[float]
+                try:
+                    exposure_terms: List[Optional[float]] = []
+                    for position in paper_svc.get_positions(user["id"]) or []:
+                        size = _finite_float(position.get("size"))
+                        mark = _finite_float(position.get("current_price"))
+                        exposure_terms.append(
+                            None if size is None or mark is None else abs(size * mark)
+                        )
+                    total_exposure_paper = (
+                        None
+                        if any(term is None for term in exposure_terms)
+                        else round(float(sum(exposure_terms)), 2)
+                    )
+                except Exception as exposure_err:  # noqa: BLE001 - absent, and logged
+                    logger.warning(
+                        "Paper exposure could not be read for %s: %s", user["id"], exposure_err
+                    )
+                    total_exposure_paper = None
                 realized_pnl = float(acct.get("realized_pnl", 0.0))
                 unrealized_pnl = float(acct.get("unrealized_pnl", 0.0))
                 initial_capital = _finite_float(acct.get("initial_capital"))
@@ -1235,7 +1321,7 @@ class DashboardAggregationService:
                     "today_return_pct": today_return_pct,
                     "unrealized_pnl": unrealized_pnl,
                     "cumulative_pnl": cumulative_pnl,
-                    "total_exposure": used_balance,
+                    "total_exposure": total_exposure_paper,
                     "currency": "USD",
                     "environment": "paper",
                     "updated_at": now_utc.isoformat()
@@ -1398,7 +1484,6 @@ class DashboardAggregationService:
             response catch it and attach :func:`positions_degradation`; callers that cannot let
             it reach their route's 503. What no caller gets any more is ``[]``.
         """
-        from datetime import timezone
         now_iso = datetime.now(timezone.utc).isoformat()
         
         if environment == "paper":
@@ -1655,7 +1740,7 @@ class DashboardAggregationService:
         
         res = await self._execute_sb_query(
             sb.table("strategies")
-            .select("id, name, symbol, is_active, created_at")
+            .select("id, name, symbol, status, last_signal_at, created_at")
             .eq("user_id", user["id"])
         )
         strategies = res.data or [] if res and hasattr(res, "data") else []
@@ -1666,8 +1751,12 @@ class DashboardAggregationService:
                 "id": s.get("id"),
                 "name": s.get("name") or "Strategy",
                 "pair": s.get("pair") or s.get("symbol") or "BTC/USDT",
-                "status": "active" if s.get("is_active") else "paused",
-                "health": "healthy" if s.get("is_active") else "idle",
+                # DASH-02: the run state is ``strategies.status``, which the deployment
+                # lifecycle maintains. ``is_active`` defaults to TRUE and was true on all 192
+                # production strategies, so every strategy - drafts and never-deployed ones -
+                # was counted as an active bot.
+                "status": _dashboard_run_state(s.get("status")),
+                "health": "healthy" if _dashboard_run_state(s.get("status")) == "active" else "idle",
                 "today_pnl": float(s.get("today_pnl") or 0.0),
                 "today_return_pct": float(s.get("today_return_pct") or 0.0),
                 "last_signal_time": s.get("last_signal_at") or None,
@@ -1687,7 +1776,9 @@ class DashboardAggregationService:
         
         insights = []
         active_count = sum(1 for s in strategies if s["status"] == "active")
-        inactive_count = len(strategies) - active_count
+        # DASH-02: "currently paused" counts PAUSED strategies only; it used to count every
+        # non-active one, so an idle draft was announced as paused.
+        inactive_count = sum(1 for s in strategies if s["status"] == "paused")
         
         if inactive_count > 0:
             inactive_names = [s["name"] for s in strategies if s["status"] == "paused"]
@@ -1835,7 +1926,6 @@ class DashboardAggregationService:
         if environment == "paper":
             try:
                 from backend_app.backend.paper_trading_service import get_paper_trading_service
-                from datetime import timezone
                 paper_svc = get_paper_trading_service()
                 trades = paper_svc.get_trades(uid)
                 today_cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -1958,7 +2048,6 @@ class DashboardAggregationService:
             ``null`` ``risk.open_positions_count`` say the same thing from inside the risk
             section, for a consumer that reads only that.
         """
-        from datetime import timezone
         norm_env = environment.lower() if environment in ("live", "paper") else "live"
         dashboard_start = time.perf_counter()
         

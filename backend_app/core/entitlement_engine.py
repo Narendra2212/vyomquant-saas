@@ -19,7 +19,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 from backend_app.core.cache import redis_manager
-from backend_app.core.hard_quota_enforcer import HardQuotaEnforcer
+# QUOTA-01: the `HardQuotaEnforcer` import is gone with the unused attribute it fed. See the
+# note in `__init__` and that class's module docstring.
 from backend_app.core.tenant import TenantContext, TenantPlan, TenantQuota
 
 logger = logging.getLogger("EntitlementEngine")
@@ -221,7 +222,12 @@ class EntitlementEngine:
     """
     
     def __init__(self):
-        self.quota_enforcer = HardQuotaEnforcer()
+        # QUOTA-01: `self.quota_enforcer = HardQuotaEnforcer()` was here and was never read.
+        # The class docstring above still claims this engine "integrates with the existing
+        # hard_quota_enforcer for service-layer enforcement"; it never did — the attribute had
+        # no readers. Removed rather than left dormant because HardQuotaEnforcer is deprecated
+        # (fail-open usage counting; see that module's docstring). Quota enforcement for this
+        # product is `core/subscription_dependencies.py`.
         self.plan_mapper = PlanMapper()
         self.feature_entitlements = FeatureEntitlements()
         self._cache_ttl = 300  # 5 minutes

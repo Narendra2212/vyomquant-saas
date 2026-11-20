@@ -137,15 +137,20 @@
  * rendered directly at `--text-section` and `--text-body`, and the mismatch is recorded
  * here for whoever owns `ds/SectionHeader` next.
  *
- * `handleSelectPlan` IS CARRIED ACROSS UNCHANGED, INCLUDING ITS FAILURE PATH
+ * `handleSelectPlan`'S FAILURE PATH NO LONGER NAVIGATES TO THE DASHBOARD (FE-10)
  * ------------------------------------------------------------------------
- * Same `{ tier, currency: "INR" }` body, same `window.location.href` handover, same
- * `navigate("/app/dashboard")` on both the no-URL and the thrown branch. That last part is
- * a write-path finding — a trader whose checkout could not be opened is sent to the
- * dashboard as though the plan had been chosen — and it is recorded rather than taken
- * here, the way task 7.2 recorded `handleToggleSwitch`'s antipattern: changing when and
- * where a billing action lands is a behavioural change to a payment flow inside a commit
- * whose subject is typography and colour.
+ * Same `{ tier, currency: "INR" }` body, same `window.location.href` handover on a real
+ * checkout URL. What changed is the other two branches: a response with no `checkoutUrl`
+ * and a thrown request both used to call `navigate("/app/dashboard")` — the exact same
+ * call the SUCCESS path never even makes, since success leaves the SPA entirely via
+ * `window.location.href`. A trader whose checkout failed to open was sent to the dashboard
+ * as though they had successfully selected and paid for a plan: a billing-trust defect,
+ * not a cosmetic one. Both failure branches now set `checkoutError` instead and stay on
+ * this step; the step renders it as a `ds/Alert` (`severity="error"`) with a `Retry`
+ * action that calls `handleSelectPlan` again for the same plan, the same inline-error-plus-
+ * retry shape `pages/Billing.jsx` already uses for its own checkout failures. Navigation to
+ * `/app/dashboard` — or to a real payment page via `window.location.href` — happens ONLY
+ * when a `checkoutUrl` was actually returned.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THE 24 PIXEL SIZES, BY §2.4'S NINE QUESTIONS (Requirement 2.4)
@@ -211,10 +216,10 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, CheckCircle, Database, Mail, ShieldCheck, Wifi } from "lucide-react";
+import { Bell, CheckCircle, Database, ExternalLink, Mail, ShieldCheck } from "lucide-react";
 
+import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
-import { Field } from "../components/ds/Field";
 import { Metric, NotAvailableMarker } from "../components/ds/Metric";
 import { Panel } from "../components/ds/Panel";
 import { StatusBadge } from "../components/ds/StatusBadge";
@@ -255,9 +260,6 @@ const Marker = ({ field, reason }) => (
 
 /** The four steps, in order. Unchanged — the same four strings the page has always had. */
 const STEPS = Object.freeze(["Secure Account", "Demo Backtest", "Connect Exchange", "Choose Plan"]);
-
-/** The six exchanges the connect step offers. Unchanged. */
-const EXCHANGES = Object.freeze(["Binance", "Bybit", "OKX", "Kraken", "Coinbase", "KuCoin"]);
 
 /**
  * The demo backtest's payload, byte-identical to the one this page has always posted.
@@ -310,7 +312,11 @@ const SECURITY_ROWS = Object.freeze([
     on: null, // declared UNAVAILABLE: neither arm is reachable
     off: null,
     action: "Manage",
-    to: "/app/security-logs",
+    // SECLOG-REMOVED-01 (2026-11-15): was `/app/security-logs`, which no longer exists. The
+    // toggle this row is about -- *Security & Login Events* -- lives on the Profile page
+    // today, so *Manage* goes where the setting actually is rather than to a page that would
+    // redirect to the dashboard.
+    to: "/app/profile",
   }),
 ]);
 
@@ -342,10 +348,26 @@ const planPrice = (plan) => {
     : unavailable(FIELD.planPrice.reason);
 };
 
+/**
+ * A checkout failure's sentence for a trader, read off the error the way
+ * `pages/Billing.jsx`'s `writeFailureMessage` does for the same request — the server's own
+ * `detail` string first, then its coded `{error, message}` envelope, then the fallback.
+ */
+const checkoutFailureMessage = (err, fallback) => {
+  const detail = err?.data?.detail ?? err?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim() !== "") return detail;
+  const coded = detail?.message;
+  if (typeof coded === "string" && coded.trim() !== "") return coded;
+  return fallback;
+};
+
 export default function Wizard() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState("");
+  // The checkout failure shown inline on step 4 — `null` when there is none. Set by either
+  // failure branch of `handleSelectPlan`; never by its success branch, which leaves the SPA.
+  const [checkoutError, setCheckoutError] = useState(null);
   // Whether the trader has asked for the demo run. `usePanelState`'s `enabled` gate, so
   // no request is issued before the button is pressed and the panel is `idle` until it is.
   const [backtestRequested, setBacktestRequested] = useState(false);
@@ -439,23 +461,37 @@ export default function Wizard() {
       ? PANEL_STATES.EMPTY
       : plans.state;
 
-  // ── The write path. Carried across unchanged — see the header ────────────
+  // ── The write path. FE-10: neither failure branch navigates anywhere; see the header ──
   const handleSelectPlan = async (planId) => {
     if (planId === "free") {
       navigate("/app/dashboard");
       return;
     }
+    setCheckoutError(null);
     setIsCheckoutLoading(planId);
     try {
       const data = await api.billing.createCheckout({ tier: planId, currency: "INR" });
       if (data && data.checkoutUrl) {
+        // The only branch that leaves this step. Nothing past this line can run on this
+        // page again, so a success is structurally never confused with a failure.
         window.location.href = data.checkoutUrl;
       } else {
-        navigate("/app/dashboard");
+        setCheckoutError({
+          planId,
+          message:
+            "The payment gateway returned no way to complete this checkout. Nothing has "
+            + "been charged.",
+        });
       }
     } catch (err) {
       console.error("Wizard checkout error:", err);
-      navigate("/app/dashboard");
+      setCheckoutError({
+        planId,
+        message: checkoutFailureMessage(
+          err,
+          "Checkout could not be started. Nothing has been charged.",
+        ),
+      });
     } finally {
       setIsCheckoutLoading("");
     }
@@ -715,33 +751,35 @@ export default function Wizard() {
             <h2 className="mb-1 text-section font-semibold text-content-primary">
               Connect Your Exchange
             </h2>
-            {/* fontSize: 11 → --text-body (sentence — Q1). */}
+            {/* FE-07: the exchange-select buttons, the two "API Key"/"Secret Key" `Field`s
+                and the "Test Connection" button that used to live here had no `onClick` /
+                `value` / `onChange` at all -- nothing tracked which exchange was picked,
+                nothing captured a keystroke typed into either field, and "Test Connection"
+                tested nothing. "Next: Choose Plan" advanced regardless, so a trader who
+                filled this in reasonably believed they had connected an exchange; they had
+                not, and nothing they typed was kept anywhere, encrypted or otherwise,
+                despite the sentence below once promising exactly that.
+
+                The real save/test flow (`ExchangeManager`, `/app/exchange`) already exists,
+                already works, and already carries AUTH-01's AAL2/MFA step-up requirement on
+                the credential-save endpoint -- a requirement this one-screen wizard step has
+                no way to satisfy inline (a trader this early in onboarding has typically not
+                enrolled a TOTP factor yet). Linking out, rather than rebuilding that flow a
+                second time here, is this finding's own first offered option and the one that
+                does not risk silently discarding a key a second way. */}
             <p className="mb-5 text-body text-content-secondary">
-              Add API credentials to deploy bots. Keys are encrypted at rest.
+              Connect an exchange from Exchange Manager to deploy bots with real capital. You
+              can do this now or later — Paper Trading needs no exchange keys at all.
             </p>
-            {/* fontSize: 10 → `ds/CommandButton`'s own step; the declaration is removed
-                rather than mapped, because the step belongs to the primitive. All six
-                exchanges keep their button, their name and their tab stop. */}
-            <div className="mb-4 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-              {EXCHANGES.map((exchange) => (
-                <CommandButton key={exchange} intent="secondary" className="justify-center">
-                  {exchange}
-                </CommandButton>
-              ))}
-            </div>
-            <div className="mb-4 flex flex-col gap-3">
-              <Field id="wizard-api-key" label="API Key" placeholder="Paste your API key..." type="password" />
-              <Field
-                id="wizard-secret-key"
-                label="Secret Key"
-                placeholder="Paste your secret key..."
-                type="password"
-              />
-            </div>
+            <CommandButton
+              intent="secondary"
+              icon={ExternalLink}
+              onClick={() => navigate("/app/exchange")}
+              className="mb-4 w-full justify-center"
+            >
+              Open Exchange Manager
+            </CommandButton>
             <div className="flex gap-2">
-              <CommandButton intent="secondary" icon={Wifi}>
-                Test Connection
-              </CommandButton>
               <CommandButton
                 intent="primary"
                 onClick={() => setStep(3)}
@@ -764,6 +802,24 @@ export default function Wizard() {
             <p className="mb-6 text-center text-body text-content-secondary">
               Select a plan to unlock powerful features.
             </p>
+
+            {/* FE-10: a checkout that returned no URL, or threw, lands here instead of on
+                the dashboard — the trader stays mid-wizard and can retry the same plan. */}
+            {checkoutError ? (
+              <Alert
+                severity="error"
+                title="Checkout could not be opened"
+                action={{
+                  label: "Retry",
+                  onClick: () => handleSelectPlan(checkoutError.planId),
+                }}
+                onDismiss={() => setCheckoutError(null)}
+                dismissLabel="Dismiss this message"
+                className="mb-4"
+              >
+                {checkoutError.message}
+              </Alert>
+            ) : null}
 
             <Panel
               state={plansState}

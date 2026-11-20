@@ -148,7 +148,7 @@ from decimal import Decimal
 from typing import Any, Dict, Mapping, Tuple
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, Phase, example, given, settings
 from hypothesis import strategies as st
 
 from backend_app.backend.paper import paper_repository as repo
@@ -398,19 +398,162 @@ P12_1_LABELS: Dict[str, str] = {
     "sequence_length_10": "the maximum sequence length (10) was generated",
 }
 
+#: Buckets whose floor is an EXISTENCE claim about one particular drawn value, as opposed to a
+#: claim about the run's distribution. The distinction is the whole of this file's fix for
+#: TEST-05 and is derived from the floors rather than restated, so a newly added floor-1 bucket
+#: joins this set automatically and
+#: :func:`test_every_existence_floor_is_forced_rather_than_left_to_the_draw` immediately demands
+#: forced coverage for it.
+#:
+#: WHY THE TWO KINDS CANNOT BE GUARDED THE SAME WAY
+#: ------------------------------------------------
+#: Hypothesis's generation is tree-guided: it draws a novel PREFIX and then explores many
+#: children beneath it, varying the LATER draws while the EARLIER ones stay put. In this
+#: generator the later draws are the 1-9 element ``steps`` list and the filtered ``key`` text,
+#: which is a deep sub-tree, so one 100-example run visits only a handful of distinct
+#: ``(flavour, length)`` prefixes - measured at a mean of 8.33 of the 9 possible lengths, min 6
+#: (``staging/probe_test05_prefix_autocorrelation.py``). ``length`` is therefore NOT redrawn 100
+#: independent times, and an existence floor on one specific length is a bet on which prefixes
+#: this run happened to visit: ``sequence_length_10`` was measured at 0 in 12 of 150 runs (~8%),
+#: in ISOLATION as well as in a full suite (``staging/probe_test05_census_distribution.py``,
+#: ``staging/probe_test05_integers_bimodality.py``). A distribution floor survives the same
+#: mechanism because it is satisfied by any of many prefixes rather than one: measured minima
+#: over 60 runs are limit 31 / market 21 against floor 20, retry 191 / restart 182 against floor
+#: 50, and >=5 51 against floor 20 - between 1.05x and 3.8x headroom, never once short.
+#:
+#: So the existence floors are FORCED (:data:`DETERMINISTIC_COVERAGE`) and the distribution
+#: floors are left to the generated run, which is where they still mean something: forcing them
+#: would make them assertions about this file's own literals rather than about the sampler.
+EXISTENCE_FLOORS: Tuple[str, ...] = tuple(
+    sorted(key for key, floor in P12_1_FLOORS.items() if floor <= 1)
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#  DETERMINISTIC COVERAGE OF THE EXISTENCE FLOORS - forced, not hoped for (TEST-05's fix)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#
+# WHAT WENT WRONG, MEASURED RATHER THAN INFERRED
+# ----------------------------------------------
+# ``sequence_length_10`` is an existence floor on one drawn value, and the generated run does
+# not guarantee it. Measured over independent 100-example runs of this very generator:
+#
+#   * ``sequence_length_10 == 0`` in 12 of 150 runs (~8%), the census's exact failure mode,
+#     and it happens IN ISOLATION as readily as in a full suite - so the Phase 6-9 attribution
+#     to Hypothesis harvesting constants out of a larger ``sys.modules`` was not the cause.
+#     Isolation runs passing 8/8 was a 1-in-3 coincidence at this flake rate, not evidence.
+#   * the run visits a mean of 8.33 of the 9 possible lengths, min 6 - lengths are drawn in
+#     long runs of one value, not independently, because Hypothesis explores many children
+#     under one novel prefix while the early draws (``flavour``, ``length``) stay fixed and the
+#     late ones (the 1-9 element ``steps`` list, the filtered ``key`` text) vary.
+#   * ``st.integers(2, 10)`` ALONE is not the culprit: driven on its own, Hypothesis exhausts
+#     all nine values and draws 10 exactly once in 100% of runs. The shortfall is a property
+#     of the composite's prefix structure, not of the integer distribution.
+#   * raising ``max_examples`` is not a fix: at 200 the shortfall was still 1/30, and at 400 it
+#     was merely rarer, at 4x the runtime. ``max_examples`` is therefore left at 100.
+#
+# Evidence: ``staging/probe_test05_census_distribution.py``,
+# ``staging/probe_test05_integers_bimodality.py``,
+# ``staging/probe_test05_prefix_autocorrelation.py``, and
+# ``staging/PHASE10_TEST05_IDEMPOTENCY_REPORT.md``.
+#
+# WHAT THE FIX IS, AND WHAT IT IS NOT
+# -----------------------------------
+# The sequences below are supplied to the property as ``@example`` cases, so Hypothesis runs
+# them IN ADDITION to - and before - the 100 generated ones (verified: with
+# ``max_examples=1`` all three still run, 4 invocations total,
+# ``staging/probe_test05_forced_examples_run.py``). Every existence floor is then satisfied by
+# construction on every run, in every lane, at any seed.
+#
+# No floor is lowered, no assertion is relaxed, no test is skipped, ``max_examples`` is
+# unchanged, and nothing is mocked: a forced sequence goes through exactly the same
+# :func:`_assert_the_sequence_yields_exactly_one_order` - the same real
+# ``paper_simulator.submit_intent``, the same persistence double, the same duplicate-answer and
+# no-financial-movement oracles, the same direct ``uq_paper_order_idem`` probe - as a generated
+# one. ``test_the_forced_coverage_sequences_are_legal_generator_draws`` pins that each one is a
+# sequence the generator could itself have produced, so the forced cases cannot drift into a
+# shape the property was never written for.
+#
+# The DISTRIBUTION floors (``flavour_*``, ``step_*``, ``sequence_length_at_or_above_5``,
+# ``final_state_*``) are deliberately NOT forced - see :data:`EXISTENCE_FLOORS` for the measured
+# headroom that makes them honest, and for why forcing them would turn a guard on the sampler
+# into a guard on this file's own literals.
+#
+# Both flavours and both step kinds appear across the forced set, so the forced cases cannot
+# tip a distribution floor on their own either way.
+
+#: length 10 - the maximum, and the floor that actually failed.
+FORCED_LEN_10 = _RetrySequence(
+    key="forced-len10-" + "r" * 10, flavour="market", side="buy", quantity="1",
+    limit_price="100", close="100", fee_rate="0.001",
+    steps=("restart", "retry", "restart", "retry", "restart", "retry", "restart", "retry",
+           "restart"),  # 9 repeats -> total length 10
+)
+
+#: length 5 - the ``sequence_length_at_or_above_5`` boundary itself.
+FORCED_LEN_5 = _RetrySequence(
+    key="forced-len5-restart", flavour="limit", side="sell", quantity="2",
+    limit_price="120.50", close="100", fee_rate="0",
+    steps=("retry", "restart", "retry", "restart"),  # 4 repeats -> total length 5
+)
+
+#: length 2 - the minimum, task 12.1's own floor, and the non-vacuity case.
+FORCED_LEN_2 = _RetrySequence(
+    key="forced-len2-retry", flavour="limit", side="buy", quantity="0.25",
+    limit_price="50", close="50", fee_rate="0.0025",
+    steps=("retry",),  # 1 repeat -> total length 2
+)
+
+#: The forced set. Module-level rather than local to the test so the two guards below can read
+#: the same objects the property runs, and - via :func:`_forcing` - it IS what the property runs
+#: rather than a second list that happens to agree: stacking ``@example`` by hand would let this
+#: tuple and the decorators drift apart, and the guards would then be checking a tuple nobody
+#: executes.
+DETERMINISTIC_COVERAGE: Tuple[_RetrySequence, ...] = (
+    FORCED_LEN_10,
+    FORCED_LEN_5,
+    FORCED_LEN_2,
+)
+
+
+def _forcing(property_function: Any) -> Any:
+    """Register every :data:`DETERMINISTIC_COVERAGE` sequence as an ``@example`` on a property.
+
+    Exactly equivalent to stacking ``@example(seq=...)`` for each one - which is what this
+    replaces - but driven off the tuple, so the forced set and the cases Hypothesis actually
+    runs cannot disagree. Applied BELOW ``@settings`` and ABOVE ``@given``, which is where a
+    hand-written ``@example`` stack sits.
+    """
+    for seq in DETERMINISTIC_COVERAGE:
+        property_function = example(seq=seq)(property_function)
+    return property_function
+
+
+def _census_buckets_for(seq: _RetrySequence) -> Dict[str, int]:
+    """Every census bucket one sequence's SHAPE contributes, and how many times.
+
+    The single declaration of "which buckets does this sequence count towards", so the property
+    body and the coverage guards below read the same answer rather than two copies of it. Only
+    shape-derived buckets live here; ``final_state_*`` is decided by what the simulator actually
+    persisted and is marked by the body.
+    """
+    length = 1 + len(seq.steps)
+    buckets: Dict[str, int] = {"examples": 1, f"flavour_{seq.flavour}": 1}
+    for step in seq.steps:
+        buckets[f"step_{step}"] = buckets.get(f"step_{step}", 0) + 1
+    if length == MIN_SEQUENCE_LENGTH:
+        buckets["sequence_length_2"] = 1
+    if length >= 5:
+        buckets["sequence_length_at_or_above_5"] = 1
+    if length == MAX_SEQUENCE_LENGTH:
+        buckets["sequence_length_10"] = 1
+    return buckets
+
 
 def _assert_the_sequence_yields_exactly_one_order(seq: _RetrySequence, recorder: Recorder) -> None:
     """Task 12.1's two claims, over one generated sequence: exactly one row, one answer."""
-    recorder.mark("examples")
-    recorder.mark(f"flavour_{seq.flavour}")
-
-    length = 1 + len(seq.steps)
-    if length == MIN_SEQUENCE_LENGTH:
-        recorder.mark("sequence_length_2")
-    if length >= 5:
-        recorder.mark("sequence_length_at_or_above_5")
-    if length == MAX_SEQUENCE_LENGTH:
-        recorder.mark("sequence_length_10")
+    for bucket, times in _census_buckets_for(seq).items():
+        recorder.mark(bucket, times)
 
     supabase, session, account_id = _seed(capital=RICH)
     first_config = _config(fee_rate=Decimal(seq.fee_rate), slippage_rate=Decimal("0"))
@@ -429,9 +572,9 @@ def _assert_the_sequence_yields_exactly_one_order(seq: _RetrySequence, recorder:
 
     active_config = first_config
     active_intent: Mapping[str, Any] = first_intent
+    length = 1 + len(seq.steps)
 
     for index, step in enumerate(seq.steps, start=2):
-        recorder.mark(f"step_{step}")
         context = f"step {index} of {length} ({step}) for sequence {seq!r}"
 
         if step == "retry":
@@ -520,6 +663,7 @@ def test_order_idempotence_under_generated_retry_and_restart_sequences(request: 
     recorder = Recorder("task-12.1", P12_1_FLOORS, P12_1_LABELS)
 
     @PROPERTY_SETTINGS
+    @_forcing
     @given(seq=submit_retry_restart_sequences())
     def check(seq: _RetrySequence) -> None:
         recorder.start()
@@ -566,6 +710,108 @@ def test_this_module_never_constructs_a_live_venue_adapter() -> None:
         f"this module must drive the paper path only; found live/venue-looking imports: "
         f"{live_markers}"
     )
+
+
+def test_every_existence_floor_is_forced_rather_than_left_to_the_draw() -> None:
+    """TEST-05's fix, pinned: no existence floor may go back to being a bet on a draw.
+
+    Reads :data:`EXISTENCE_FLOORS` off :data:`P12_1_FLOORS` rather than naming the buckets, so
+    adding a new floor-1 bucket without forced coverage reds HERE - cheaply, deterministically -
+    instead of flaking in a full-suite run months later, which is exactly how TEST-05 was found.
+
+    Also pins the two things the forced coverage silently depends on: that ``Phase.explicit`` is
+    still enabled on the property's settings (with it off, ``@example`` cases never run and the
+    floors quietly go back to being a bet), and that ``max_examples`` was not raised instead of
+    the shortfall being forced.
+    """
+    assert EXISTENCE_FLOORS, (
+        "the census has no existence floor at all - either P12_1_FLOORS lost its floor-1 "
+        "buckets or EXISTENCE_FLOORS no longer derives from it"
+    )
+
+    forced_counts: Dict[str, int] = {}
+    for seq in DETERMINISTIC_COVERAGE:
+        for bucket, times in _census_buckets_for(seq).items():
+            forced_counts[bucket] = forced_counts.get(bucket, 0) + times
+
+    unforced = {
+        bucket: P12_1_FLOORS[bucket]
+        for bucket in EXISTENCE_FLOORS
+        if forced_counts.get(bucket, 0) < P12_1_FLOORS[bucket]
+    }
+    assert not unforced, (
+        f"TEST-05: these census buckets are EXISTENCE claims about one drawn value, which a "
+        f"tree-guided 100-example run does not guarantee, and nothing in "
+        f"DETERMINISTIC_COVERAGE forces them: {unforced}. Add a forced sequence that produces "
+        f"the case - do NOT lower the floor and do NOT raise max_examples. Forced census from "
+        f"DETERMINISTIC_COVERAGE: {forced_counts}"
+    )
+
+    assert Phase.explicit in PROPERTY_SETTINGS.phases, (
+        "the forced coverage is supplied as @example cases, so Phase.explicit must stay enabled "
+        f"on PROPERTY_SETTINGS; phases are {PROPERTY_SETTINGS.phases}"
+    )
+    assert PROPERTY_SETTINGS.max_examples == EXAMPLES == 100, (
+        "design.md requires at least 100 examples, and TEST-05 was NOT fixed by raising the "
+        f"budget (measured: still short 1/30 runs at 200); max_examples is "
+        f"{PROPERTY_SETTINGS.max_examples}"
+    )
+
+
+def test_the_forced_coverage_sequences_are_legal_generator_draws() -> None:
+    """Every forced sequence is one the generator could itself have produced.
+
+    This is what makes "the forced cases exercise the identical assertions, not a weaker path" a
+    checked claim rather than a comment. Each field is asserted to come from the very pool
+    :func:`submit_retry_restart_sequences` draws it from, so a later edit cannot quietly give a
+    forced case a quantity, price, fee, side, flavour, step kind, length or key shape that the
+    property was never written for - which would make the forced coverage cover the wrong thing.
+
+    The key is additionally checked against the generator's own filter AND against
+    ``chk_paper_order_idem_len`` (``backend_app/migrations/009_paper_trading.sql:737-738``,
+    length 1-128), because an over-long forced key would be refused by the database rather than
+    deduplicated by it.
+    """
+    assert DETERMINISTIC_COVERAGE, "the forced coverage set is empty"
+
+    for seq in DETERMINISTIC_COVERAGE:
+        where = f"forced sequence {seq!r}"
+
+        assert seq.flavour in ORDER_FLAVOURS, f"{where}: flavour not in ORDER_FLAVOURS"
+        assert seq.side in ("buy", "sell"), f"{where}: side is not a drawn side"
+        assert seq.quantity in SUBMIT_QUANTITIES, f"{where}: quantity not in SUBMIT_QUANTITIES"
+        assert seq.limit_price in SUBMIT_LIMIT_PRICES, f"{where}: limit not in SUBMIT_LIMIT_PRICES"
+        assert seq.close in SUBMIT_CLOSES, f"{where}: close not in SUBMIT_CLOSES"
+        assert seq.fee_rate in SUBMIT_FEE_RATES, f"{where}: fee_rate not in SUBMIT_FEE_RATES"
+
+        assert all(step in STEP_KINDS for step in seq.steps), (
+            f"{where}: a step is not one of STEP_KINDS {STEP_KINDS} - a forced sequence may not "
+            f"contain a step kind the generator cannot draw"
+        )
+        length = 1 + len(seq.steps)
+        assert MIN_SEQUENCE_LENGTH <= length <= MAX_SEQUENCE_LENGTH, (
+            f"{where}: total length {length} is outside the generator's own "
+            f"{MIN_SEQUENCE_LENGTH}-{MAX_SEQUENCE_LENGTH} range"
+        )
+
+        # The generator's own key constraints: printable non-space, 1-48 chars, strip-stable.
+        assert 1 <= len(seq.key) <= 48, f"{where}: key length {len(seq.key)} outside 1-48"
+        assert 1 <= len(seq.key) <= 128, (
+            f"{where}: key length {len(seq.key)} violates chk_paper_order_idem_len (1-128)"
+        )
+        assert seq.key.strip() == seq.key != "", f"{where}: key is not strip-stable and non-empty"
+        assert all(33 <= ord(ch) <= 126 for ch in seq.key), (
+            f"{where}: key has a character the generator's alphabet cannot draw"
+        )
+
+    assert len({seq.key for seq in DETERMINISTIC_COVERAGE}) == len(DETERMINISTIC_COVERAGE), (
+        "two forced sequences share an idempotency key; each forced case must be its own "
+        "first submission under its own key"
+    )
+    # Both flavours and both step kinds present, so the forced set cannot tip a DISTRIBUTION
+    # floor on its own in either direction.
+    assert {seq.flavour for seq in DETERMINISTIC_COVERAGE} == set(ORDER_FLAVOURS)
+    assert {step for seq in DETERMINISTIC_COVERAGE for step in seq.steps} == set(STEP_KINDS)
 
 
 def test_the_sequence_generator_never_places_a_second_first_submission() -> None:

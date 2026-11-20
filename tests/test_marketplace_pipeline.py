@@ -51,6 +51,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from fastapi.testclient import TestClient
 
+from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
+from backend_app.backend.marketplace import evidence_validator as _evidence_validator
 from backend_app.core.dependencies import get_admin_user, get_current_user, get_request_supabase
 from backend_app.core.subscription_dependencies import (
     require_marketplace_publish,
@@ -129,8 +131,15 @@ class FakeTable:
         self._op_data: Any = None
         self._single = False
         self._upsert_conflict: Optional[str] = None
+        self._count_mode: Optional[str] = None
+        self._range: Optional[tuple] = None
 
     def select(self, *args, **kwargs) -> "FakeTable":
+        self._count_mode = kwargs.get("count")
+        return self
+
+    def range(self, start: int, end: int) -> "FakeTable":
+        self._range = (start, end)
         return self
 
     def eq(self, col: str, val: Any) -> "FakeTable":
@@ -147,6 +156,13 @@ class FakeTable:
     def limit(self, *args, **kwargs) -> "FakeTable":
         return self
 
+    # MKT-07: a PROPERTY, not a method. supabase-py spells a negated predicate
+    # `.not_.is_(col, "null")`, so `not_` must return something carrying `is_`.
+    # As a method it returned a bound method, `.is_` on it raised AttributeError,
+    # and the Eligibility_Gate's fifth read collapsed the whole evaluation to
+    # `unevaluable` — which is how this double's shape, not the gate, failed
+    # three concurrency tests and four pipeline tests.
+    @property
     def not_(self) -> "FakeTable":
         return self
 
@@ -254,12 +270,18 @@ class FakeTable:
                 # Supabase returns data: None when single() finds no rows
                 return _Resp(None)
             return _Resp(result[0])
-        return _Resp(result)
+
+        total = len(result) if self._count_mode == "exact" else None
+        if self._range is not None:
+            start, end = self._range
+            result = result[start : end + 1]
+        return _Resp(result, count=total)
 
 
 class _Resp:
-    def __init__(self, data):
+    def __init__(self, data, count=None):
         self.data = data
+        self.count = count
 
 
 class FakeDB:
@@ -483,37 +505,97 @@ def _eligible_backtest_row(
     }
 
 
-def _three_eligible_backtests(owner_id: str, strategy_id: str) -> list:
-    """Three eligible, pairwise-distinct Backtest_Evidence rows (Requirement 3.1's minimum)."""
+def _eligible_backtests(owner_id: str, strategy_id: str) -> list:
+    """``MIN_CONDITIONS`` eligible, pairwise-distinct Backtest_Evidence rows.
+
+    The count is read from ``evidence_validator`` rather than written here, so MKT-07's move
+    from three to five did not need this builder edited and a future move will not either.
+
+    The windows are consecutive, non-overlapping half-years. Non-overlapping matters: five
+    windows must each span ``MIN_WINDOW_DAYS`` and intersect pairwise by at most 25 percent
+    (``MAX_OVERLAP_NUMERATOR``), so a set built by nudging one window five times would fail
+    ``EV_DISTINCT`` rather than exercise it.
+    """
+    windows = [
+        ("2024-01-01", "2024-06-30", "BTCUSD-2024H1", "chk-btc-h1"),
+        ("2024-07-01", "2024-12-31", "ETHUSD-2024H2", "chk-eth-h2"),
+        ("2023-01-01", "2023-06-30", "SOLUSD-2023H1", "chk-sol-h1"),
+        ("2023-07-01", "2023-12-31", "ADAUSD-2023H2", "chk-ada-h2"),
+        ("2022-01-01", "2022-06-30", "XRPUSD-2022H1", "chk-xrp-h1"),
+        ("2022-07-01", "2022-12-31", "DOTUSD-2022H2", "chk-dot-h2"),
+        ("2021-01-01", "2021-06-30", "LTCUSD-2021H1", "chk-ltc-h1"),
+        ("2021-07-01", "2021-12-31", "LNKUSD-2021H2", "chk-lnk-h2"),
+        ("2020-01-01", "2020-06-30", "BCHUSD-2020H1", "chk-bch-h1"),
+        ("2020-07-01", "2020-12-31", "ATOMUS-2020H2", "chk-atm-h2"),
+    ]
+    assert _evidence_validator.MIN_CONDITIONS <= len(windows), (
+        "MIN_CONDITIONS has risen past the distinct windows this builder declares. "
+        "Add windows rather than reusing one, or EV_DISTINCT stops being exercised."
+    )
     return [
         _eligible_backtest_row(
             str(uuid.uuid4()), owner_id, strategy_id,
-            start_date="2024-01-01", end_date="2024-06-30",
-            dataset="BTCUSD-2024H1", dataset_checksum="chk-btc-h1",
-        ),
-        _eligible_backtest_row(
-            str(uuid.uuid4()), owner_id, strategy_id,
-            start_date="2024-07-01", end_date="2024-12-31",
-            dataset="ETHUSD-2024H2", dataset_checksum="chk-eth-h2",
-        ),
-        _eligible_backtest_row(
-            str(uuid.uuid4()), owner_id, strategy_id,
-            start_date="2023-01-01", end_date="2023-06-30",
-            dataset="SOLUSD-2023H1", dataset_checksum="chk-sol-h1",
-        ),
+            start_date=start, end_date=end,
+            dataset=dataset, dataset_checksum=checksum,
+        )
+        for start, end, dataset, checksum in windows[
+            : _evidence_validator.MIN_CONDITIONS
+        ]
+    ]
+
+
+def _live_history_rows(owner_id: str, strategy_id: str, *, hours: float) -> list:
+    """Two verified live fills ``hours`` apart — what ``MP_LIVE_HISTORY`` measures (MKT-07).
+
+    Each row is a ``COMPLETED`` fill with an ``exchange_id`` and a positive ``filled_size``,
+    which is the gate's definition of a verified live execution. Two rows, not one: the
+    criterion is a *span*, and a single fill is one order rather than a day of trading.
+
+    ``filled_size`` is a string because ``execution_records.filled_size`` is
+    ``character varying`` in production — the gate parses it, and a double that handed back a
+    float would not exercise that parse.
+    """
+    latest = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    earliest = latest - timedelta(hours=hours)
+    return [
+        {
+            "execution_id": f"exec-{uuid.uuid4().hex[:12]}",
+            "strategy_id": strategy_id,
+            "tenant_id": owner_id,
+            "user_id": owner_id,
+            "status": "COMPLETED",
+            "exchange_id": "binance",
+            "is_sandbox": False,  # EXEC-ENV-01: a real-money fill
+            "filled_size": "0.0100",
+            "filled_at": stamp.isoformat(),
+            "submitted_at": stamp.isoformat(),
+            "created_at": stamp.isoformat(),
+        }
+        for stamp in (earliest, latest)
     ]
 
 
 def _seed_eligible_submission(db, owner_id: str, strategy_id: str) -> list:
-    """Seed a strategy's saved version and three eligible backtests; return their ids.
+    """Seed the saved version, the eligible backtests and the live history; return the ids.
 
     Leaves ``marketplace_submissions`` and ``library_strategies`` empty for this strategy, so
     MP_SUBMISSION_OPEN passes (no open Submission, no PUBLISHED Listing) and the Eligibility_Gate
     admits. The returned ids are exactly what a ``POST /api/library/submissions`` body carries.
+
+    MKT-07 added the ``execution_records`` seed. The span is one hour clear of the threshold
+    rather than exactly on it, so a boundary change in either direction shows up as a
+    deliberate edit here instead of flipping these tests by accident.
     """
     db.stores["strategy_versions"].append(_saved_version_row(strategy_id))
-    rows = _three_eligible_backtests(owner_id, strategy_id)
+    rows = _eligible_backtests(owner_id, strategy_id)
     db.stores["strategy_backtests"].extend(rows)
+    db.stores.setdefault("execution_records", []).extend(
+        _live_history_rows(
+            owner_id,
+            strategy_id,
+            hours=_eligibility_gate.MIN_LIVE_HISTORY_HOURS + 1,
+        )
+    )
     return [r["id"] for r in rows]
 
 
@@ -717,15 +799,15 @@ class TestMarketplacePipeline:
     without needing live JWT/Supabase authentication, exactly as test_admin_auth.py does.
     """
 
-    def test_01_submit_strategy_with_three_backtests(self, patched_db, patched_audit):
-        """Owner publishes via POST /api/library/submissions with three backtest ids (task 14.10).
+    def test_01_submit_strategy_with_the_required_backtests(self, patched_db, patched_audit):
+        """Owner publishes via POST /api/library/submissions (task 14.10, MKT-07).
 
         The publish path is no longer ``POST /api/library`` admitting on one
         ``strategies.backtest_result`` blob and returning ``suggested_price``/``eval_score``. It
-        is the Eligibility_Gate flow: three completed, distinct Backtest_Evidence runs of a
-        saved version. On admission a ``marketplace_submissions`` row is created and advanced to
-        SUBMITTED (Requirements 2.12, 3.1); nothing about a price or an evaluation score is
-        returned.
+        is the Eligibility_Gate flow: ``MIN_CONDITIONS`` completed, distinct Backtest_Evidence
+        runs of a saved version, plus ``MIN_LIVE_HISTORY_HOURS`` of verified live execution. On
+        admission a ``marketplace_submissions`` row is created and advanced to SUBMITTED
+        (Requirements 2.12, 3.1); nothing about a price or an evaluation score is returned.
         """
         backtest_ids = _seed_eligible_submission(patched_db, AUTHOR_ID, STRATEGY_UUID)
         with_user(AUTHOR_USER)
@@ -754,7 +836,7 @@ class TestMarketplacePipeline:
 
         # The immutable evidence copy carries one row per referenced backtest (Requirement 3.9).
         evidence = patched_db.stores["marketplace_backtest_evidence"]
-        assert len(evidence) == len(backtest_ids) == 3
+        assert len(evidence) == len(backtest_ids) == _evidence_validator.MIN_CONDITIONS
         # The DRAFT->SUBMITTED transition was recorded (Requirement 4.13).
         transitions = patched_db.stores["marketplace_submission_transitions"]
         assert any(
@@ -1183,8 +1265,9 @@ class TestMarketplacePipeline:
         """A submission whose referenced runs are not valid evidence is refused (task 14.10).
 
         The old ``publish_strategy`` admitted on one ``strategies.backtest_result`` blob and
-        rejected only its absence. The new flow admits on three completed, owner-scoped
-        ``strategy_backtests`` runs; a strategy with a saved version but whose referenced runs
+        rejected only its absence. The new flow admits on ``MIN_CONDITIONS`` completed,
+        owner-scoped ``strategy_backtests`` runs plus 24 hours of verified live execution; a
+        strategy with a saved version but whose referenced runs
         do not exist as the owner's completed runs is refused by the Eligibility_Gate with a 422
         naming the failed criteria (Requirements 2.4, 2.5, 3.1) — and NO Submission is created.
         """
@@ -1201,9 +1284,16 @@ class TestMarketplacePipeline:
         )
         # A saved version exists, so MP_VERSION_* pass — the failure is purely the evidence.
         patched_db.stores["strategy_versions"].append(_saved_version_row(no_bt_id))
-        # Three referenced backtest ids that are not the owner's completed runs (none seeded):
-        # the owner-scoped read returns nothing, exactly as it would for a foreign or absent run.
-        phantom_backtest_ids = [str(uuid.uuid4()) for _ in range(3)]
+        # Referenced backtest ids that are not the owner's completed runs (none seeded): the
+        # owner-scoped read returns nothing, exactly as it would for a foreign or absent run.
+        #
+        # The count is MIN_CONDITIONS, not a smaller number, deliberately. Sending fewer would
+        # be refused by `SubmissionCreateRequest`'s field bound before the gate ran, and this
+        # test is about what the GATE answers for evidence that cannot be read — a 422 from
+        # Pydantic carries no `error.code` and would assert nothing about eligibility.
+        phantom_backtest_ids = [
+            str(uuid.uuid4()) for _ in range(_evidence_validator.MIN_CONDITIONS)
+        ]
         with_user(AUTHOR_USER)
 
         resp = client.post(
@@ -1257,9 +1347,17 @@ class TestMarketplacePipeline:
                 "graph_json": {"schema_version": 99, "nodes": [], "edges": []},
             }
         )
-        # Valid backtest evidence referencing that same version, so only the version is at fault.
-        backtest_rows = _three_eligible_backtests(AUTHOR_ID, bad_version_id)
+        # Valid backtest evidence and sufficient live history referencing that same version, so
+        # only the version is at fault (MKT-07 added the live-history half for the same reason).
+        backtest_rows = _eligible_backtests(AUTHOR_ID, bad_version_id)
         patched_db.stores["strategy_backtests"].extend(backtest_rows)
+        patched_db.stores.setdefault("execution_records", []).extend(
+            _live_history_rows(
+                AUTHOR_ID,
+                bad_version_id,
+                hours=_eligibility_gate.MIN_LIVE_HISTORY_HOURS + 1,
+            )
+        )
         backtest_ids = [r["id"] for r in backtest_rows]
         with_user(AUTHOR_USER)
 

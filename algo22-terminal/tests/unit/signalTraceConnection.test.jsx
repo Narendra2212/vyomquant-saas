@@ -224,7 +224,15 @@ describe('the connection-state presentation vocabulary', () => {
       const presentation = SIGNAL_CONNECTION_PRESENTATION[state];
       expect(presentation.word.trim().length).toBeGreaterThan(0);
       expect(presentation.glyph.trim().length).toBeGreaterThan(0);
-      expect(presentation.color).toMatch(/^#[0-9a-f]{6}$/i);
+      // THEME-01: a colour token is now a `var(--color-…)` reference rather than
+      // a hex literal, so the browser can resolve it against the active theme.
+      // The property under test is unchanged — every state must carry a real
+      // colour from the token set, not an empty string or `undefined` — so this
+      // asserts the token FORM instead of the hex form. Accepting a bare hex
+      // would be a weaker assertion than before: it would let a hard-coded
+      // colour that ignores the theme pass, which is exactly what this change
+      // set out to remove.
+      expect(presentation.color).toMatch(/^var\(--color-[a-z0-9-]+\)$/);
     }
   });
 
@@ -438,7 +446,7 @@ describe('SignalTrace connection indicator', () => {
       });
     });
 
-    expect(screen.getByText('executed')).toBeTruthy();
+    expect(screen.getByText('FILLED')).toBeTruthy();
     expect(status()).toBe(SIGNAL_REALTIME_STATES.CONNECTED);
   });
 });

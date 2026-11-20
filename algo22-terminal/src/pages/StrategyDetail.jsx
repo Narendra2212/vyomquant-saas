@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import React, { useState, useEffect, useRef } from "react";
+import { useAutoRefresh, REFRESH } from "../hooks/useAutoRefresh";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft, Activity, BarChart2, Zap, Shield,
   Layers, Settings, Globe, Server, Play, Pause, Trash2,
@@ -13,18 +14,20 @@ import {
 // `StatusDot` stay: they are components, not colours, and task 27.2 owns re-pointing them.
 import { Tag2, StatusDot } from "../components/common/primitives";
 import { CONFIG } from "../config";
-import { get, post } from "../apiClient";
+import { get } from "../apiClient";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 // Imported from the modules directly rather than through `components/ds/index.js` — this
 // page charts nothing, and the barrel is what would otherwise put `ds/Chart`'s recharts
 // dependency in its import graph. Same reason `pages/Strategies.jsx` gives.
-import { Alert } from "../components/ds/Alert";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
+import { EmptyState } from "../components/ds/EmptyState";
+import { LoadingState } from "../components/ds/LoadingState";
 import { NotAvailableMarker } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { pnlToken } from "../design/semantic";
 import { token } from "../design/tokens";
+import { alpha } from "../design/alpha";
 import { deployPresentation } from "../lib/deployFlow";
 // The Minor_Units formatter, from the module that owns the ISO 4217 exponent table. The
 // creator-earnings ledger is served in integer Minor_Units per currency
@@ -33,6 +36,7 @@ import { deployPresentation } from "../lib/deployFlow";
 // opinion about money.
 import { formatMinorUnits } from "./paperTradingFormat";
 import ResearchConsole from "../components/ResearchConsole";
+import CreatorMarketplacePanel from "../components/marketplace/CreatorMarketplacePanel";
 import DeploymentConsole from "../components/DeploymentConsole";
 
 /**
@@ -202,8 +206,19 @@ const DEPLOY_ELSEWHERE_NOTE = "Choose Live or Backtest from the Strategies page"
 
 export default function StrategyDetail() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { strategyId } = useParams();
-  const [activeTab, setActiveTab] = useState("overview");
+  /*
+   * BT-04: `pages/Backtester.jsx`'s "Walk-forward optimization" link hands this page a
+   * `navigate` with `state: { activeTab: "research" }` so it lands directly on the tab
+   * that holds `components/ResearchConsole.jsx` rather than on Overview with the trader
+   * left to find Research themselves. Read once, at mount, the same way `location.state`
+   * already hands a strategy to `pages/Backtester.jsx` — a tab id this page does not
+   * recognise simply matches no entry below and `activeTab` behaves as it always has.
+   */
+  const [activeTab, setActiveTab] = useState(
+    () => (typeof location.state?.activeTab === "string" ? location.state.activeTab : "overview"),
+  );
   const [strategy, setStrategy] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState({});
@@ -230,8 +245,11 @@ export default function StrategyDetail() {
     loadStrategyDetail();
   }, [strategyId]);
 
-  const loadStrategyDetail = async () => {
-    setIsLoading(true);
+  // Keep status (running / stopped) and figures current without a manual refresh.
+  useAutoRefresh((background) => loadStrategyDetail(background), REFRESH.ACCOUNT);
+
+  const loadStrategyDetail = async (background = false) => {
+    if (!background) setIsLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/strategies/${strategyId}`, {
         headers: { "Authorization": `Bearer ${authToken}` }
@@ -243,7 +261,8 @@ export default function StrategyDetail() {
       setStrategy(data);
     } catch (err) {
       console.error("Error loading strategy detail:", err);
-      setStrategy(null);
+      // A background poll that fails keeps the page; only a first load blanks it.
+      if (!background) setStrategy(null);
     } finally {
       setIsLoading(false);
     }
@@ -413,9 +432,14 @@ export default function StrategyDetail() {
   ];
 
   if (isLoading) {
+    /*
+      LAYOUT-01: `100%`, not `100vh`. `/app/strategies/:strategyId` renders inside the
+      shell's `<main>`, so the height available is the viewport minus the TopBar and its
+      strip; `100vh` pushed this centred loader below the fold and scrolled the document.
+    */
     return (
-      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: token.content.muted }}>
-        Loading strategy detail...
+      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: 0 }}>
+        <LoadingState kind="page" label="Loading strategy detail" />
       </div>
     );
   }
@@ -423,10 +447,11 @@ export default function StrategyDetail() {
   if (!strategy) {
     return (
       <div style={{ padding: 20 }}>
-        <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={() => navigate("/app/strategies")}>
-          Back to Strategies
-        </Button>
-        <div style={{ marginTop: 20, color: token.content.muted }}>Strategy not found</div>
+        <EmptyState
+          headline="Strategy not found"
+          body="This strategy could not be loaded. It may have been deleted, or the read failed."
+          action={{ label: "Back to Strategies", onClick: () => navigate("/app/strategies") }}
+        />
       </div>
     );
   }
@@ -517,7 +542,7 @@ export default function StrategyDetail() {
           // The 8-bit alpha suffixes stay: `status.error.wash` is a 12% rgba and these two
           // washes are ~8% and ~19%, so only the SOURCE of the hue changes here. Guidance
           // note 4 — keep the composition, retarget where the colour comes from.
-          background: token.status.error.fg + "15", border: `1px solid ${token.status.error.fg}30`,
+          background: alpha(token.status.error.fg, 8), border: `1px solid ${alpha(token.status.error.fg, 19)}`,
           color: token.status.error.fg,
           // fontSize: 11 → --text-body (sentence). Q1: every string that reaches `actionError`
           // is a whole sentence from a refused deploy, delete or publish, and it wraps.
@@ -610,9 +635,9 @@ export default function StrategyDetail() {
               alignItems: "center",
               gap: 6,
               padding: "8px 12px",
-              background: activeTab === tab.id ? token.brand.base + "15" : "transparent",
+              background: activeTab === tab.id ? alpha(token.brand.base, 8) : "transparent",
               color: activeTab === tab.id ? token.brand.base : token.content.muted,
-              border: activeTab === tab.id ? `1px solid ${token.brand.base + "30"}` : "1px solid transparent",
+              border: activeTab === tab.id ? `1px solid ${alpha(token.brand.base, 19)}` : "1px solid transparent",
               borderRadius: 6,
               // fontSize: 11 → --text-title (control). Slice 1 recorded this strip and the
               // metrics time-range strip as controls rather than chips, and settled them here:
@@ -800,10 +825,13 @@ function OverviewTab({ strategy }) {
              * `status.neutral.fg`, the same `#8B95A5` — so the source becomes honest without
              * the hue moving.
              */
-            { l: "Total P&L", v: perf.today_pnl || 0, c: pnlToken(perf.today_pnl).fg },
-            { l: "ROI", v: perf.roi_pct || 0, c: pnlToken(perf.roi_pct).fg },
-            { l: "Win Rate", v: perf.win_rate || 0, c: token.brand.base },
-            { l: "Sharpe", v: perf.sharpe_ratio || 0, c: token.content.secondary },
+            // FE-06: `?? null` rather than `|| 0` -- the server not reporting a figure is
+            // not the same fact as the figure being genuinely zero, and `NotAvailableMarker`
+            // below renders the difference instead of a plausible-looking 0.
+            { l: "Total P&L", v: perf.today_pnl ?? null, c: pnlToken(perf.today_pnl).fg },
+            { l: "ROI", v: perf.roi_pct ?? null, c: pnlToken(perf.roi_pct).fg },
+            { l: "Win Rate", v: perf.win_rate ?? null, c: token.brand.base },
+            { l: "Sharpe", v: perf.sharpe_ratio ?? null, c: token.content.secondary },
           ].map(m => (
             <div key={m.l} style={{ background: token.surface.inset, borderRadius: 6, padding: 8 }}>
               <div style={{
@@ -818,7 +846,9 @@ function OverviewTab({ strategy }) {
                   as a tie-break of last resort, ties up. 14px IS `--text-title` exactly, and
                   the tile is a panel inside a panel, so it cannot be the tier-1 hero the
                   Metrics and Risk tabs' figures are. Same rendered size, now reader-relative. */}
-              <div style={{ color: m.c, fontSize: token.text.title, fontWeight: 900 }}>{m.v}</div>
+              <div style={{ color: m.c, fontSize: token.text.title, fontWeight: 900 }}>
+                {m.v == null ? <NotAvailableMarker label={m.l} reason="The server did not report this figure." /> : m.v}
+              </div>
             </div>
           ))}
         </div>
@@ -843,10 +873,19 @@ function OverviewTab({ strategy }) {
         <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Status</h3>
         {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, color: token.content.secondary }}>
+          {/* FE-06: these three used to default an ABSENT field to a reassuring "healthy" /
+              "active" / "connected" -- a trader reading an unreachable or stale response saw
+              a strategy reported as fine. An unreported field now says so. */}
           <MetaRow label="Status:">{strat.status}</MetaRow>
-          <MetaRow label="Health:">{strategy.health || "healthy"}</MetaRow>
-          <MetaRow label="Worker:">{strategy.worker_status || "active"}</MetaRow>
-          <MetaRow label="Exchange:">{strategy.exchange_status || "connected"}</MetaRow>
+          <MetaRow label="Health:">
+            {strategy.health != null ? strategy.health : <NotAvailableMarker label="Health" reason="The server did not report this strategy's health." />}
+          </MetaRow>
+          <MetaRow label="Worker:">
+            {strategy.worker_status != null ? strategy.worker_status : <NotAvailableMarker label="Worker" reason="The server did not report the worker's status." />}
+          </MetaRow>
+          <MetaRow label="Exchange:">
+            {strategy.exchange_status != null ? strategy.exchange_status : <NotAvailableMarker label="Exchange" reason="The server did not report the exchange connection status." />}
+          </MetaRow>
         </div>
       </Card>
     </div>
@@ -1104,7 +1143,7 @@ function VersionsTab({ strategyId }) {
       {error && (
         <div style={{
           marginBottom: 12, padding: "8px 12px", borderRadius: token.radius.md,
-          background: token.status.error.fg + "15", border: `1px solid ${token.status.error.fg}30`,
+          background: alpha(token.status.error.fg, 8), border: `1px solid ${alpha(token.status.error.fg, 19)}`,
           color: token.status.error.fg,
           // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1 — a restore or deploy
           // failure arrives as a sentence, and this is the one place the trader learns a
@@ -1118,7 +1157,7 @@ function VersionsTab({ strategyId }) {
       {compareWith && (
         <div style={{
           marginBottom: 12, padding: "8px 12px", borderRadius: 6,
-          background: token.brand.base + "15", border: `1px solid ${token.brand.base}30`,
+          background: alpha(token.brand.base, 8), border: `1px solid ${alpha(token.brand.base, 19)}`,
           color: token.brand.base,
           // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1: a finite verb and a
           // terminal full stop, and it is an instruction about what to do next. Not a word of
@@ -1321,9 +1360,9 @@ function MetricsTab({ strategyId }) {
             onClick={() => setTimeRange(range)}
             style={{
               padding: "6px 12px",
-              background: timeRange === range ? token.brand.base + "15" : "transparent",
+              background: timeRange === range ? alpha(token.brand.base, 8) : "transparent",
               color: timeRange === range ? token.brand.base : token.content.muted,
-              border: timeRange === range ? `1px solid ${token.brand.base + "30"}` : `1px solid ${token.line.default}`,
+              border: timeRange === range ? `1px solid ${alpha(token.brand.base, 19)}` : `1px solid ${token.line.default}`,
               borderRadius: 6,
               // fontSize: 10 → --text-title (control). Resolved with the tab strip above and for
               // the same reason: slice 1 recorded both as controls, not chips, and `ds/Tabs.jsx:328`
@@ -1342,17 +1381,18 @@ function MetricsTab({ strategyId }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 12 }}>
         {[
           // Same `pnlToken` correction as the Overview grid above, for the same reason.
-          { l: "Total P&L", v: metrics.today_pnl || 0, c: pnlToken(metrics.today_pnl).fg },
-          { l: "ROI", v: metrics.roi_pct || 0, c: pnlToken(metrics.roi_pct).fg },
-          { l: "Win Rate", v: metrics.win_rate || 0, c: token.brand.base },
-          { l: "Sharpe", v: metrics.sharpe_ratio || 0, c: token.content.secondary },
-          { l: "Sortino", v: metrics.sortino_ratio || 0, c: token.content.secondary },
-          { l: "Profit Factor", v: metrics.profit_factor || 0, c: token.brand.base },
+          // FE-06: `?? null`, not `|| 0` -- see the Overview grid's comment above for why.
+          { l: "Total P&L", v: metrics.today_pnl ?? null, c: pnlToken(metrics.today_pnl).fg },
+          { l: "ROI", v: metrics.roi_pct ?? null, c: pnlToken(metrics.roi_pct).fg },
+          { l: "Win Rate", v: metrics.win_rate ?? null, c: token.brand.base },
+          { l: "Sharpe", v: metrics.sharpe_ratio ?? null, c: token.content.secondary },
+          { l: "Sortino", v: metrics.sortino_ratio ?? null, c: token.content.secondary },
+          { l: "Profit Factor", v: metrics.profit_factor ?? null, c: token.brand.base },
           // A drawdown is reported as a magnitude, so `pnlToken` would call a positive one a
           // profit. `status.loss.fg` names what the figure is about instead — the same
           // `#EF5350` the `C.red` here resolved to.
-          { l: "Max Drawdown", v: metrics.max_drawdown || 0, c: token.status.loss.fg },
-          { l: "Total Trades", v: metrics.total_trades || 0, c: token.content.primary },
+          { l: "Max Drawdown", v: metrics.max_drawdown ?? null, c: token.status.loss.fg },
+          { l: "Total Trades", v: metrics.total_trades ?? null, c: token.content.primary },
         ].map(m => (
           <Card key={m.l} cls="p-4">
             <div style={{
@@ -1370,7 +1410,9 @@ function MetricsTab({ strategyId }) {
                 meet these would be a shrink chosen to avoid a layout change (§2.5 forbids that).
                 Each tab is its own view and its figure grid is that view's tier-1 region, so the
                 `figure` step is not being spent twice on one screen. */}
-            <div style={{ color: m.c, fontSize: token.text.figure, fontWeight: 900 }}>{m.v}</div>
+            <div style={{ color: m.c, fontSize: token.text.figure, fontWeight: 900 }}>
+              {m.v == null ? <NotAvailableMarker label={m.l} reason="The server did not report this figure." /> : m.v}
+            </div>
           </Card>
         ))}
       </div>
@@ -1411,17 +1453,29 @@ function RiskTab({ strategyId }) {
             and the largest text this page rendered. Nothing here declares a tier, so §2.2's
             tie-break resolves it inside Q7's three outcomes — `figure` at 28px against `title` at
             14px — and up. A genuine `0` still renders `0`; the `|| 0` is untouched. */}
-        <div style={{ color: token.status.loss.fg, fontSize: token.text.figure, fontWeight: 900 }}>{risk.max_drawdown || 0}%</div>
+        {/* FE-06: `?? null` -- a trader reading an unreported drawdown as "0%" believes the
+            account is flat when the server simply did not answer. */}
+        <div style={{ color: token.status.loss.fg, fontSize: token.text.figure, fontWeight: 900 }}>
+          {risk.max_drawdown == null ? <NotAvailableMarker label="Drawdown" reason="The server did not report this figure." /> : `${risk.max_drawdown}%`}
+        </div>
       </Card>
       <Card className="p-4">
         {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
         <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Exposure</h3>
-        {/* fontSize: 24 → --text-figure (value). As Drawdown above. */}
-        <div style={{ color: token.content.primary, fontSize: token.text.figure, fontWeight: 900 }}>{risk.current_exposure || 0}%</div>
+        {/* fontSize: 24 → --text-figure (value). As Drawdown above. FE-06: same `?? null` fix. */}
+        <div style={{ color: token.content.primary, fontSize: token.text.figure, fontWeight: 900 }}>
+          {risk.current_exposure == null ? <NotAvailableMarker label="Exposure" reason="The server did not report this figure." /> : `${risk.current_exposure}%`}
+        </div>
         {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. The limit is the twelfth
             `Label: value` row and the one that most needed splitting: it sat under a figure it
-            qualifies, at one step for both halves. */}
-        <div style={{ color: token.content.muted }}><MetaRow label="Limit:">{risk.exposure_limit || 100}%</MetaRow></div>
+            qualifies, at one step for both halves. FE-06: `exposure_limit || 100` used to tell a
+            trader they had full room to trade whenever the server reported nothing -- the
+            opposite of what an unknown limit should imply. */}
+        <div style={{ color: token.content.muted }}>
+          <MetaRow label="Limit:">
+            {risk.exposure_limit == null ? <NotAvailableMarker label="Limit" reason="The server did not report this limit." /> : `${risk.exposure_limit}%`}
+          </MetaRow>
+        </div>
       </Card>
       <Card className="p-4">
         {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
@@ -1459,10 +1513,19 @@ function ExecutionsTab({ strategyId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const [executionsReloadKey, setExecutionsReloadKey] = useState(0);
+  const executionsBackgroundRef = useRef(false);
+  useAutoRefresh(() => {
+    executionsBackgroundRef.current = true;
+    setExecutionsReloadKey((k) => k + 1);
+  }, REFRESH.ACCOUNT);
+
   useEffect(() => {
     let isMounted = true;
+    const background = executionsBackgroundRef.current;
+    executionsBackgroundRef.current = false;
     const fetchExecutions = async () => {
-      setLoading(true);
+      if (!background) setLoading(true);
       setError(null);
       try {
         const data = await get(`/api/orders/history?strategy_id=${strategyId}&limit=50`);
@@ -1481,7 +1544,7 @@ function ExecutionsTab({ strategyId }) {
     };
     fetchExecutions();
     return () => { isMounted = false; };
-  }, [strategyId]);
+  }, [strategyId, executionsReloadKey]);
 
   if (loading) {
     return (
@@ -1571,7 +1634,7 @@ function ExecutionsTab({ strategyId }) {
             // hand-rolled table now reads the same as every tokened one. It was a 5% pure
             // white, which is not in the palette. (The retired utility is not spelled out:
             // Tailwind v4 scans comments as text and would emit it as dead CSS.)
-            <tr key={ex.id || Math.random()} style={{ borderBottom: `1px solid ${token.line.default}15` }} className="hover:bg-surface-raised transition-colors">
+            <tr key={ex.id || Math.random()} style={{ borderBottom: `1px solid ${alpha(token.line.default, 8)}` }} className="hover:bg-surface-raised transition-colors">
               <td style={{ padding: "8px 14px", color: token.brand.base, fontWeight: 700 }}>
                 {ex.id ? (String(ex.id).length > 12 ? `${String(ex.id).slice(0, 8)}...` : ex.id) : "—"}
               </td>
@@ -1608,9 +1671,18 @@ function SignalsTab({ strategyId }) {
   const [signals, setSignals] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const [signalsReloadKey, setSignalsReloadKey] = useState(0);
+  const signalsBackgroundRef = useRef(false);
+  useAutoRefresh(() => {
+    signalsBackgroundRef.current = true;
+    setSignalsReloadKey((k) => k + 1);
+  }, REFRESH.ACCOUNT);
+
   useEffect(() => {
+    const background = signalsBackgroundRef.current;
+    signalsBackgroundRef.current = false;
     const fetchSignals = async () => {
-      setLoading(true);
+      if (!background) setLoading(true);
       try {
         const data = await get(`/api/signal-trace/signals?strategy_id=${strategyId}&limit=20`);
         setSignals(data?.signals || []);
@@ -1621,7 +1693,7 @@ function SignalsTab({ strategyId }) {
       }
     };
     fetchSignals();
-  }, [strategyId]);
+  }, [strategyId, signalsReloadKey]);
 
   return (
     <div>
@@ -1722,117 +1794,15 @@ function LogsTab({ strategyId }) {
 }
 
 function MarketplaceTab({ strategy }) {
+  // MKT-04: the gated path (listing -> evidence submission -> price), replacing a single
+  // "Publish to Library" button that read a field `/api/library/me` never returned and so
+  // always offered to publish again.
   const strat = strategy.strategy || {};
-  const isPublished = strat.is_published || false;
-  const [loading, setLoading] = useState(false);
-  const [libraryStatus, setLibraryStatus] = useState(null);
-  /*
-   * Task 10.4, found by the guard rather than by §1.8's table.
-   *
-   * `publishToLibrary` used to report both of its outcomes with `window.alert` — one for
-   * the success and one carrying `err.message`. §1.8 lists only this page's four
-   * `window.confirm` calls, but `guards/native-dialogs.js` matches `alert(` as well, and
-   * task 10.11's repo-wide guard allowlists exactly `pages/TwoFA.jsx` and
-   * `components/NotificationCenter.jsx` — so these two had to go for this page to reach
-   * zero. `window.alert` is unstyled, unfocusable, unreadable to assistive technology in
-   * context and blocks the whole tab (Requirement 18.3).
-   *
-   * Reported inline instead, beside the control that caused it, in the same shape the
-   * page's own `actionError` and `VersionsTab`'s `error` banners already use. The publish
-   * request itself is untouched: same `POST /api/library`, same payload, same
-   * `checkLibraryStatus` re-read, same `loading` flag.
-   */
-  const [notice, setNotice] = useState(null);
-
-  const checkLibraryStatus = async () => {
-    try {
-      const res = await get(`/api/library/me?strategy_id=${strat.id}`);
-      setLibraryStatus(res?.data || res);
-    } catch (err) {
-      console.debug('Failed to check library status:', err);
-    }
-  };
-
-  const publishToLibrary = async () => {
-    setLoading(true);
-    try {
-      const payload = {
-        strategy_id: strat.id,
-        name: strat.name,
-        description: strat.description,
-        category: 'custom',
-        difficulty: 'intermediate',
-        tags: [],
-        price: null,
-        currency: 'USD',
-        subscription_tier: 'free'
-      };
-      await post('/api/library', payload);
-      setNotice({ kind: 'ok', text: 'Strategy submitted for review.' });
-      checkLibraryStatus();
-    } catch (err) {
-      console.error(err);
-      setNotice({ kind: 'error', text: err?.message || 'Failed to publish' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (strat.id) {
-      checkLibraryStatus();
-    }
-  }, [strat.id]);
-
-  const hasLibraryEntry = libraryStatus && libraryStatus.strategies && libraryStatus.strategies.some(s => s.source_strategy_id === strat.id);
-
   return (
     <div>
       {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
-      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Marketplace Status</h3>
-
-      {/* What replaced the two `window.alert` calls.
-          `ds/Alert` rather than a hand-rolled banner: it already owns the severity token,
-          the icon, the border treatment and — the part that matters where an `alert` used
-          to be — the live-region role, `status` for the accepted case and `alert` for the
-          refusal, so the outcome is still announced without blocking the tab (Requirement
-          18.3). It also takes its hue from `statusToken` rather than from the `C` shim, so
-          this notice adds no legacy token reference and no colour literal. */}
-      {notice !== null && (
-        <div style={{ marginBottom: 12 }} data-testid="marketplace-notice">
-          <Alert
-            severity={notice.kind === "error" ? "error" : "info"}
-            title={notice.text}
-            onDismiss={() => setNotice(null)}
-            dismissLabel="Dismiss this message"
-          />
-        </div>
-      )}
-
-      <Card className="p-4">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{
-              color: token.content.primary,
-              fontWeight: 600,
-              // fontSize: 12 → --text-micro (label). Q4 — a field label naming the chip on the
-              // line beneath it — and the one legal SHRINK in this slice: it was rendered at the
-              // same 12px this page gives its panel `<h3>`s, so a field label was outranking the
-              // headings around it. `--text-micro` IS the floor, so it stops there, and no
-              // overflow in this diff is being avoided by it (§2.5).
-              fontSize: token.text.micro,
-            }}>Publication Status</div>
-            <Tag2 c={hasLibraryEntry ? "green" : "gray"}>
-              {hasLibraryEntry ? "Published to Library" : "Not Published"}
-            </Tag2>
-          </div>
-          {!hasLibraryEntry && (
-            <Button variant="primary" size="sm" onClick={publishToLibrary} disabled={loading}>
-              {loading ? 'Publishing...' : 'Publish to Library'}
-            </Button>
-          )}
-        </div>
-      </Card>
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Marketplace</h3>
+      <CreatorMarketplacePanel strategy={strat} />
     </div>
   );
 }
@@ -1867,6 +1837,133 @@ function MarketplaceTab({ strategy }) {
  * and where the server reports nothing they render `ds/Metric`'s not-available marker
  * instead of a number (Requirement 19.3). The path is unchanged.
  */
+/**
+ * MKT-07: the payout HALF of the creator ledger, read the same way the earnings half is.
+ *
+ * `GET /api/library/creator/payouts` (`creator_payout_history`, `routers/library.py`) answers
+ * the caller's own `marketplace_creator_payouts` rows — created weekly by the platform, never
+ * by a creator request — most recent first. `RevenueTab` already read what a creator has
+ * EARNED (`creator_analytics`); it never read what has been PAID, which is the gap MKT-06's
+ * backend closed without a reader on this side. This hook is that reader, and it fails the
+ * same way `useCreatorAnalytics` does: a read that does not complete reports `"failed"`
+ * rather than an empty list, so "no payouts yet" and "could not read your payouts" stay two
+ * different states.
+ */
+export function useCreatorPayouts() {
+  const [payouts, setPayouts] = useState(null);
+  const [state, setState] = useState("loading");
+
+  useEffect(() => {
+    let live = true;
+    const read = async () => {
+      try {
+        const res = await get('/api/library/creator/payouts');
+        if (!live) return;
+        const body = res?.data ?? res ?? null;
+        const rows = Array.isArray(body?.payouts) ? body.payouts : [];
+        setPayouts(rows);
+        setState("ready");
+      } catch (err) {
+        console.error('Failed to read creator payout history:', err);
+        if (!live) return;
+        setState("failed");
+      }
+    };
+    read();
+    return () => { live = false; };
+  }, []);
+
+  return { payouts, state };
+}
+
+/** `pending` | `completed` | `rejected` → the tone `AnalyticsFigure`-style figures use. */
+const PAYOUT_STATUS_TONE = {
+  completed: () => token.status.profit.fg,
+  rejected: () => token.status.error.fg,
+  pending: () => token.content.secondary,
+};
+
+/**
+ * One payout row — status, amount, currency and period, exactly as
+ * `CreatorPayoutRecord` (`routers/library.py`) reports it. No field here is computed: a
+ * payout the server did not settle carries no `settled_at`/`reference`, and this renders
+ * that absence rather than inventing one.
+ */
+function PayoutRow({ payout }) {
+  const amount = formatMinorUnits(payout.amount_minor, payout.currency);
+  const tone = (PAYOUT_STATUS_TONE[payout.status] ?? (() => token.content.primary))();
+  return (
+    <div
+      style={{
+        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16,
+        padding: "12px 16px", borderBottom: `1px solid ${token.line.default}`,
+      }}
+    >
+      <span style={{
+        fontFamily: "monospace", textTransform: "uppercase", letterSpacing: 1,
+        fontSize: token.text.micro, color: tone, minWidth: 90,
+      }}>
+        {payout.status}
+      </span>
+      <span style={{ fontWeight: 700, color: token.content.primary, minWidth: 120 }}>
+        {amount === null ? <NotAvailableMarker label="Amount" reason="The ledger did not report a readable amount for this currency." /> : amount}
+      </span>
+      <span style={{ color: token.content.secondary, fontSize: token.text.body }}>
+        {payout.period_start} → {payout.period_end}
+      </span>
+      {payout.status === "completed" && (
+        <span style={{ color: token.content.secondary, fontSize: token.text.body }}>
+          {payout.reference ? `Ref ${payout.reference}` : 'Settled, no reference recorded'}
+          {payout.settled_at ? ` · ${payout.settled_at}` : ''}
+        </span>
+      )}
+      {payout.status === "rejected" && payout.reason && (
+        <span style={{ color: token.status.error.fg, fontSize: token.text.body }}>
+          {payout.reason}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * MKT-07: the payout-history section inside `RevenueTab`. `RevenueTab` already shows what a
+ * creator has earned; this is what the platform has actually paid out of it, which is the
+ * half the audit found entirely absent from the product.
+ */
+export function PayoutsSection() {
+  const { payouts, state } = useCreatorPayouts();
+
+  if (state === "loading") {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
+        Reading your payout history…
+      </Card>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: token.status.error.fg, fontSize: token.text.body }}>
+        Your payout history could not be read. Nothing is shown rather than a record that is
+        not yours.
+      </Card>
+    );
+  }
+  if (payouts.length === 0) {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
+        No payouts have been created for you yet. Payouts are created weekly by the platform
+        from your settled earnings — there is nothing for you to request here.
+      </Card>
+    );
+  }
+  return (
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      {payouts.map((payout) => <PayoutRow key={payout.id} payout={payout} />)}
+    </Card>
+  );
+}
+
 function useCreatorAnalytics() {
   const [analytics, setAnalytics] = useState(null);
   const [state, setState] = useState("loading");
@@ -1932,10 +2029,12 @@ function AnalyticsFigure({ label, value, reason, tone = null }) {
 /** The shared loading / failed arms, so both tabs report a broken read the same way. */
 function AnalyticsReadState({ state }) {
   if (state === "loading") {
-    // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1.
+    // Presentation only — the affordance now goes through `ds/LoadingState` rather than
+    // static Card text with no spinner; the copy itself ("Reading your creator ledger…")
+    // is unchanged, and `state` still drives the same two-branch dispatch it always did.
     return (
-      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
-        Reading your creator ledger…
+      <Card className="p-8" style={{ textAlign: "center" }}>
+        <LoadingState kind="inline" label="Reading your creator ledger…" />
       </Card>
     );
   }
@@ -2070,6 +2169,12 @@ function RevenueTab() {
           })}
         </div>
       )}
+
+      {/* MKT-07: what the platform has actually PAID OUT of the earnings above. */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginTop: 24, marginBottom: 12 }}>
+        Payout History
+      </h3>
+      <PayoutsSection />
     </div>
   );
 }

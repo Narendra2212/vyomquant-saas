@@ -11,12 +11,14 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend_app.core.database import get_db
 from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase)
 from backend_app.core.models import NotificationSettingsRequest
+from backend_app.core.models.pydantic_models import MANDATORY_NOTIFICATION_EVENTS
 from supabase import Client as SupabaseClient
 
 router = APIRouter()
@@ -147,9 +149,45 @@ async def update_notif_settings(
         "channels": body.channels.model_dump(),
         "events": body.events.model_dump(),
     }
-    res = supabase.table("notification_settings").upsert(data).execute()
-    if inspect.isawaitable(res):
-        await res
+    try:
+        res = supabase.table("notification_settings").upsert(data).execute()
+        if inspect.isawaitable(res):
+            await res
+    except Exception as exc:  # noqa: BLE001 - classified below, never swallowed
+        # NOTIF-02. Before this, the upsert was unguarded, so any refusal became a 500 with
+        # no sentence a customer could act on — and from migration 073 onward there is a
+        # refusal this endpoint can legitimately provoke:
+        # `chk_notification_settings_mandatory_alerts`.
+        #
+        # The model's own validator should have caught that payload and answered 422 before
+        # reaching here, so arriving at this branch means the two disagree. It is still
+        # reported as the 409 it is rather than as a 500, because the customer's request IS
+        # the thing that was refused and they are entitled to know which switch did it.
+        text = str(exc)
+        if "chk_notification_settings_mandatory_alerts" in text:
+            logger.error(
+                "Notification settings write for user %s was refused by the mandatory-alert "
+                "floor, which means the request-model validator and the database constraint "
+                "disagree about %s. Payload keys: %s",
+                user["id"],
+                list(MANDATORY_NOTIFICATION_EVENTS),
+                sorted(data["events"].keys()),
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "These alerts cannot be switched off: "
+                    + ", ".join(sorted(MANDATORY_NOTIFICATION_EVENTS))
+                    + ". The platform delivers them regardless of preference."
+                ),
+            )
+        logger.error(
+            "Failed to store notification settings for user %s: %s", user["id"], exc
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Your notification preferences could not be saved. Please try again.",
+        )
     return {"status": "ok"}
 
 
@@ -193,4 +231,98 @@ async def get_security_logs(
         raise HTTPException(
             status_code=503,
             detail="Unable to retrieve security logs. Please try again later."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PRIV-01: account data export and account deletion
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/user/account/export")
+async def export_account(
+    user: dict = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_request_supabase),
+):
+    """Every category of this user's own data this product knows how to read.
+
+    See ``backend/account_lifecycle.py``'s own module docstring for exactly which
+    categories are covered and why connected exchanges are listed by name only.
+    """
+    if not supabase:
+        raise HTTPException(
+            status_code=503, detail="Unable to export account data. Please try again later."
+        )
+    from backend_app.backend.account_lifecycle import export_account_data
+
+    try:
+        return await export_account_data(supabase, user_id=user["id"])
+    except Exception as e:
+        logger.error(f"Failed to export account data for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to export account data. Please try again later."
+        )
+
+
+class DeleteAccountRequest(BaseModel):
+    """Requires the caller to type a confirmation phrase, so a client bug or a stray
+    DELETE call cannot destroy account access by accident (Requirement-shaped: there is
+    no undo for the PII anonymisation half of this operation)."""
+    confirm: str = Field(
+        ..., description='Must be exactly "DELETE MY ACCOUNT" to proceed.'
+    )
+
+
+@router.delete("/user/account")
+async def delete_account_endpoint(
+    body: DeleteAccountRequest,
+    user: dict = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_request_supabase),
+):
+    """Stop runtimes, revoke exchange keys, anonymise PII, lock the account.
+
+    See ``backend/account_lifecycle.py``'s own module docstring for exactly what this does
+    and does not do, and why: this anonymises the profile and freezes the account rather
+    than physically cascade-deleting every historical row that references this user.
+    """
+    if body.confirm != "DELETE MY ACCOUNT":
+        raise HTTPException(
+            status_code=422,
+            detail='confirm must be exactly "DELETE MY ACCOUNT" to proceed.',
+        )
+    if not supabase:
+        raise HTTPException(
+            status_code=503, detail="Unable to delete account. Please try again later."
+        )
+    from backend_app.backend.account_lifecycle import delete_account
+
+    # Step 4 of delete_account freezes the account and anonymises its email. Both are
+    # platform-controlled columns that the guard trigger on `public.profiles` refuses to
+    # let the `authenticated` role write -- it has to, because a role that can SET
+    # is_frozen can also CLEAR it (SEC-07). So the one privileged step gets a service-role
+    # client; steps 1-3 keep `supabase` because RLS is what scopes them to this user.
+    # Resolved here rather than inside delete_account so tests keep injecting one double.
+    service_supabase = None
+    try:
+        from backend_app.core.dependencies import get_service_supabase_async
+
+        service_supabase = await get_service_supabase_async()
+    except Exception as e:  # noqa: BLE001 - absence is handled by the fallback below
+        logger.warning(
+            f"Service-role client unavailable for account deletion of {user['id']}: {e}"
+        )
+
+    try:
+        return await delete_account(
+            supabase,
+            user_id=user["id"],
+            user=user,
+            service_supabase=service_supabase,
+        )
+    except Exception as e:
+        logger.error(f"Failed to delete account for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to delete account. Please try again later."
         )

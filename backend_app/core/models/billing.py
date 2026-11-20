@@ -3,9 +3,25 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Uuid
 
 from backend_app.core.database import Base
+
+#: `payment_methods.user_id` is `uuid` in the database since alembic `d4e5f6a7b8c9`
+#: (BUG-049), which also declared `fk_bug049_payment_methods_user_id -> profiles(id)
+#: ON DELETE RESTRICT`. The model has to agree or every read through it breaks.
+#:
+#: `as_uuid=False` is deliberate and is the same choice `core/models/execution_tables.py`
+#: made for `TenantId`. With `as_uuid=True` SQLAlchemy returns `uuid.UUID` objects, and
+#: every comparison of the form `row.user_id != user["id"]` -- where the right side is a
+#: string from a JWT claim -- would silently become false. That exact mistake, with
+#: `as_uuid=True`, would have made `routers/dag_tasks.py:149` reject every legitimate
+#: owner. Returning `str` keeps those comparisons working and keeps the API's JSON shape
+#: unchanged.
+#:
+#: Also note `as_uuid=False` still VALIDATES on write: a non-UUID string is rejected by
+#: the database, which is the integrity guarantee BUG-049 was about.
+CustomerId = Uuid(as_uuid=False)
 
 
 # DEPRECATED: SubscriptionModel and InvoiceModel removed
@@ -23,8 +39,12 @@ class PaymentMethodModel(Base):
     """
     __tablename__ = "payment_methods"
 
+    # `id` is still `character varying(36)` in the database. Left alone on purpose:
+    # BUG-049 is about CUSTOMER IDENTITY columns, and a surrogate primary key on a local
+    # fallback table is neither a customer identity nor referenced by anything. Widening
+    # the change to cover it would mean altering a primary key for tidiness.
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), nullable=False, index=True)
+    user_id = Column(CustomerId, nullable=False, index=True)
     payment_method_id = Column(String(64), nullable=False)
     # Real card metadata — sourced from Stripe, no defaults allowed
     brand = Column(String(32), nullable=False)

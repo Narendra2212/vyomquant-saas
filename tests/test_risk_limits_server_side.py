@@ -547,3 +547,8 @@ def test_leverage_is_not_a_parameter_of_open_position() -> None:
     assert "leverage" not in open_position_params
     assert "leverage" not in can_open_position_params
     assert "leverage" not in inspect.getsource(engine_module.ExecutionEngine.open_position).lower()
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

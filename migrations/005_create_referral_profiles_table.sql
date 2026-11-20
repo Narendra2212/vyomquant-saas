@@ -20,13 +20,44 @@ CREATE TABLE IF NOT EXISTS referral_profiles (
     paid_earnings DECIMAL(20, 8) DEFAULT 0.0,
     lifetime_earnings DECIMAL(20, 8) DEFAULT 0.0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
-    -- Foreign key to profiles table
-    CONSTRAINT fk_referral_profiles_user_id 
-        FOREIGN KEY (user_id) 
-        REFERENCES profiles(id) 
-        ON DELETE CASCADE
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+    -- ══════════════════════════════════════════════════════════════════════
+    -- REMOVED: CONSTRAINT fk_referral_profiles_user_id
+    -- ══════════════════════════════════════════════════════════════════════
+    -- It read:
+    --
+    --     CONSTRAINT fk_referral_profiles_user_id
+    --         FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+    --
+    -- and it cannot be created. `referral_profiles.user_id` is declared `TEXT`
+    -- four lines above; `public.profiles.id` is `uuid`. PostgreSQL refuses a
+    -- foreign key between mismatched types:
+    --
+    --     42804 DatatypeMismatch: foreign key constraint
+    --           "fk_referral_profiles_user_id" cannot be implemented
+    --
+    -- So this file has never been applied as written either. Found by
+    -- provisioning staging from source; verified against the live staging
+    -- catalogue that `profiles.id` is in fact `uuid`.
+    --
+    -- WHY THE COLUMN STAYS `TEXT` RATHER THAN BECOMING `uuid`. This file's own
+    -- RLS policy, thirty lines below, is:
+    --
+    --     USING (auth.uid()::text = user_id)
+    --     WITH CHECK (auth.uid()::text = user_id)
+    --
+    -- It casts `auth.uid()` TO TEXT to compare it. That is only written that way
+    -- if `user_id` is meant to be text, so the column type is the deliberate
+    -- part and the foreign key is the mistake. Changing the column to `uuid`
+    -- would also require rewriting that policy and any application code that
+    -- round-trips the value as a string, which is a larger change than the
+    -- defect warrants.
+    --
+    -- Referential integrity for this column is therefore application-enforced.
+    -- That is a real gap and it is recorded as such in the launch readiness
+    -- report rather than hidden by a constraint that cannot exist. The correct
+    -- long-term fix is to migrate the column to `uuid` and restore the key.
 );
 
 -- ══════════════════════════════════════════════════════════════════════════

@@ -56,7 +56,20 @@ USING (auth.uid() = user_id);
 
 -- Grant necessary permissions
 GRANT SELECT, INSERT, UPDATE, DELETE ON notifications TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE notifications_id_seq TO authenticated;
+
+-- REMOVED: GRANT USAGE, SELECT ON SEQUENCE notifications_id_seq TO authenticated;
+--
+-- There is no such sequence. `notifications.id` is declared forty lines above as
+-- `UUID PRIMARY KEY DEFAULT gen_random_uuid()`, so no sequence is created for it --
+-- `notifications_id_seq` would only exist if the column were `SERIAL`/`BIGSERIAL`.
+-- PostgreSQL refuses the grant:
+--
+--     42P01 UndefinedTable: relation "notifications_id_seq" does not exist
+--
+-- which means this file has never been applied as written. Found by provisioning
+-- staging from source. The grant is removed rather than the sequence created: the UUID
+-- primary key is the deliberate design (every other table in this schema uses the same
+-- shape), and inventing a sequence to satisfy a stale grant would add an unused object.
 
 -- Add helpful comment
 COMMENT ON TABLE notifications IS 'User notifications for trading events, system alerts, and account updates';

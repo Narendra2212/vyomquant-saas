@@ -161,11 +161,50 @@ FORBIDDEN_MODULE = "backend_app.backend.exchange_simulator"
 #:   word ``random``. There is no reconnect jitter and no id draw on any path this call reaches -
 #:   ``PAPER_FAMILY.channel()`` is a regex match and an f-string.
 #:
+#: * ``backend_app.backend.paper_trading_service``  (PAPER-01) the CANONICAL paper ledger —
+#:   ``PaperTradingService``, which owns the default-account order/fill/position write path the
+#:   six ``/api/paper/*`` endpoints read. ``paper/bot_paper_ledger.py`` reaches it through a
+#:   FUNCTION-LOCAL import in ``BotPaperLedger.service()``, so importing the paper package pulls
+#:   stdlib only; the edge exists because PAPER-01 was closed by routing BotRunner paper fills
+#:   through the EXISTING implementation rather than writing a second one, and a second paper
+#:   accounting path in this package is precisely the thing that must not exist.
+#:
+#:   **Read, in full, for this list.** It contains no occurrence of the word ``random``, imports
+#:   neither ``random`` nor ``numpy``, and its module-scope first-party imports are all inside
+#:   this package and already enumerated here (``paper.paper_accounting``, ``paper.paper_repository``,
+#:   ``paper.errors``, ``paper.paper_order_state``). Its two function-local first-party
+#:   dependencies are ``backend_app.core.dependencies`` (builds the Supabase client) and
+#:   ``backend_app.routers.risk`` (``get_user_risk_settings_store``, ``is_user_kill_switched``,
+#:   ``_user_strategy_limits``); **neither contains ``import random``, ``from random`` or any
+#:   ``numpy.random`` access**, and neither produces a price, a quantity, a fee or a fill
+#:   decision — ``routers.risk`` returns a verdict that can REFUSE an order, and a refusal is not
+#:   a figure Requirements 14.9, 16.12 or 28.3 are about.
+#:
+#:   **The fill model is deterministic, which is the part that matters here.**
+#:   ``_execute_fill`` applies retained ADVERSE slippage as a fixed fraction —
+#:   ``drift = slippage_rate if side == "buy" else -slippage_rate`` then
+#:   ``fill_price = price(reference * (1 + drift))`` — and the fee as
+#:   ``fill_qty * fill_price * fee_rate``. No draw reaches either. The idempotency key is
+#:   ``hashlib`` over the canonical intent and its own docstring records that it "carries no
+#:   clock and no random draw".
+#:
+#:   **It now draws nothing at all, and that is a change since this entry was written.** When
+#:   the module was first added to this list it minted
+#:   ``fill_event_id = f"exec_paper_{uuid.uuid4().hex[:12]}"`` - an EVENT IDENTIFIER rather
+#:   than a price, quantity, fee or fill decision, so it was admitted as the same class of
+#:   value this list already permits in ``ws_channels`` (which imports ``uuid``). The finding
+#:   recorded beside that admission was that a RANDOM fill-level id cannot deduplicate
+#:   anything, leaving ``uq_paper_fill_event`` inert on the default-account path. PAPER-02's
+#:   phase fixed it: the id is now ``f"exec_paper_{order_id}"``, derived from the order alone,
+#:   so the index recognises a repeated fill. ``uuid`` is no longer reached on any path the
+#:   paper package enters.
+#:
 #: A new entry here is a decision, which is the point: the transitive half of "no ``random``
 #: under the paper package" cannot be settled by parsing this package alone, so the package's
 #: dependency list is pinned instead and every addition has to be argued for in review.
 PERMITTED_FIRST_PARTY_IMPORTS: Set[str] = {
     "backend_app.api_ws.ws_manager",
+    "backend_app.backend.paper_trading_service",
     "backend_app.backend.asset_universe",
     "backend_app.backend.market_data_contract",
     "backend_app.backend.market_data_latency",

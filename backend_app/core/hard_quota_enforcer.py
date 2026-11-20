@@ -1,21 +1,71 @@
 """
-core/hard_quota_enforcer.py — Hard Quota Enforcement for Service Layer.
+core/hard_quota_enforcer.py — DEPRECATED. DO NOT WIRE. See QUOTA-01.
 
-Enforces quotas inside DAG engine, execution engine, and portfolio manager.
-Ensures limits are respected even if middleware is bypassed.
+THIS MODULE IS NOT THE PRODUCT'S QUOTA ENFORCEMENT AND MUST NOT BECOME IT
+========================================================================
+Quotas ARE enforced, before the side effect, by ``core/subscription_dependencies.py``,
+carried as FastAPI ``Depends(...)`` on the mutation routes. This class is a parallel,
+never-invoked second implementation of overlapping limits. It has zero call sites and is
+kept only because several of the DIMENSIONS it names (orders per minute, daily trades,
+active orders, aggregate capital, concentration) have no counterpart anywhere else, so
+deleting the file would also delete the written record of those gaps.
 
-Features:
-  - Hard enforcement at service layer
-  - Structured error throwing
-  - Comprehensive violation logging
-  - Support for concurrent operation tracking
-  - Daily limit tracking
-  - Capital allocation limits
+The audit finding QUOTA-01 originally read "15 HardQuotaEnforcer methods with zero real
+call sites", and the natural inference — that quotas are unenforced — was wrong. The
+prescribed remediation, wiring this class, would have been a DEFECT. Three reasons, the
+third decisive:
+
+1. ITS LIMITS COME FROM A DIFFERENT CATALOGUE. ``tenant.quota`` is ``TenantQuota``
+   (``core/tenant.py``), keyed by a separate plan ladder (``TenantPlan``: free/basic/
+   professional/enterprise) from the subscription catalogue the wired path reads
+   (``SubscriptionEngine._PLANS``, keyed by ``Plan``). Two sources of truth for one
+   number means a user could be refused by one and admitted by the other depending on
+   which ran first.
+
+2. ITS TENANT MODEL IS THE VESTIGIAL ONE. ``core/dependencies.py`` collapses
+   ``tenant_id`` to ``user_id``, which is the model finding TENANT-01 documents.
+
+3. ITS USAGE COUNTING FAILS OPEN. This is the one that settles it, and it is NOT
+   visible from the ``except`` blocks in this file — read alone, ``_get_current_count``
+   and ``_increment_count`` look fail-CLOSED, because each raises in production when
+   Redis misbehaves. Those branches never execute. The facade swallows first:
+   ``core/cache/redis_manager.py``'s ``get()`` catches every exception, logs
+   "Cache GET failed" and returns ``None``; its ``incr()`` catches and returns ``0``. No
+   exception ever reaches this module. So during a Redis outage every count here reads
+   ZERO and every limit ADMITS.
+
+   The wired path does the opposite: an unreadable usage figure raises ``UsageReadFailed``
+   and becomes a 503 (``subscription_dependencies.py``, "a figure that could not be read
+   is not a figure of zero"). Wiring this class would therefore have installed a
+   FAIL-OPEN quota path alongside a working fail-closed one — strictly worse than the
+   gap it was supposed to close.
+
+CONSEQUENCES OF THAT DECISION, IN CODE
+--------------------------------------
+* Instantiating this class emits a ``DeprecationWarning`` naming this docstring, so a
+  future attempt to wire it surfaces at the first test run rather than in an audit.
+* The two live services that constructed it and never used it
+  (``core/dag_task_queue.py``, ``core/entitlement_engine.py``) no longer do.
+* ``tests/test_quota01_enforcement_is_wired.py`` asserts the call-site list stays empty
+  and that the fail-open mechanism above is still what the code does.
+
+IF THESE LIMITS ARE WANTED, THIS IS NOT THE WAY TO GET THEM
+-----------------------------------------------------------
+The order-rate, daily-trade and active-order ceilings are real gaps and matter the moment
+live trading is certified. Closing them means adding the resource to the subscription
+catalogue and enforcing it on the wired, fail-closed path — not reviving this file. See
+``staging/QUOTA_ENFORCEMENT_MAP.md`` §4 and
+``staging/PHASE10_WSC_QUOTA_CONNECTION_SAFETY.md``.
+
+Original description, retained for reference:
+  Enforces quotas inside DAG engine, execution engine, and portfolio manager.
+  Ensures limits are respected even if middleware is bypassed.
 """
 
 import asyncio
 import logging
 import os
+import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -57,19 +107,41 @@ class EnforcementContext:
         }
 
 
+#: The sentence the deprecation warning carries. Named so a test can assert on it without
+#: duplicating the wording, and so the warning and the module docstring cannot drift.
+DEPRECATION_MESSAGE = (
+    "HardQuotaEnforcer is DEPRECATED and must not be wired (finding QUOTA-01). Quotas are "
+    "enforced before the side effect by core/subscription_dependencies.py, which fails CLOSED "
+    "on an unreadable usage figure. This class reads usage through the fail-SOFT redis_manager "
+    "facade, so a Redis outage makes every count read zero and every limit admit; its limits "
+    "also come from TenantQuota rather than the subscription catalogue. Wiring it would add a "
+    "fail-open quota path beside a working fail-closed one. See the module docstring."
+)
+
+
 class HardQuotaEnforcer:
     """
-    Hard quota enforcer for service-layer protection.
-    
-    This enforcer operates independently of middleware to ensure
-    quotas are enforced even when:
-    - Middleware is bypassed
-    - Internal service calls are made
-    - Admin functions are invoked
-    - Direct database access occurs
+    DEPRECATED — do not wire. See the module docstring and :data:`DEPRECATION_MESSAGE`.
+
+    Retained as the written record of the limit DIMENSIONS this platform does not yet enforce
+    (order rate, daily trades, active orders, aggregate capital, concentration, storage,
+    websockets, DAG resources). Not retained as an enforcement mechanism: its usage counting
+    fails open, which is why it is deprecated rather than wired.
+
+    Original description, retained for reference:
+      Hard quota enforcer for service-layer protection. This enforcer operates independently
+      of middleware to ensure quotas are enforced even when middleware is bypassed, internal
+      service calls are made, admin functions are invoked, or direct database access occurs.
+      (The "even if middleware is bypassed" claim was never true in this repository: the class
+      has never had a call site.)
     """
-    
+
     def __init__(self):
+        # `stacklevel=2` points the warning at whoever constructed this, which is the line that
+        # would need removing. DeprecationWarning rather than a hard raise because the module
+        # singleton below is built at import time, and an import-time exception in
+        # `core/` would take the application down for a lint-level concern.
+        warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
         self._violation_count: Dict[str, int] = {}
         self._lock = asyncio.Lock()
     
@@ -702,5 +774,27 @@ class HardQuotaEnforcer:
         }
 
 
-# Global singleton instance
-hard_quota_enforcer = HardQuotaEnforcer()
+# ══════════════════════════════════════════════════════════════════════════
+#  The singleton — now LAZY, so importing this module is not itself deprecated use
+# ══════════════════════════════════════════════════════════════════════════
+#
+# This was `hard_quota_enforcer = HardQuotaEnforcer()` at module scope, which with the
+# deprecation warning on `__init__` would fire on IMPORT — including the imports that only
+# want the error types or this docstring, and including any test that merely reads the module.
+# A warning that fires when nobody is doing anything wrong is a warning people filter out.
+#
+# So the instance is built on first access instead. `__getattr__` on a module is consulted only
+# for names that are not already defined (PEP 562), so touching `hard_quota_enforcer` is what
+# constructs it — and that IS the deprecated use the warning is for. The name is preserved so
+# that nothing importing it breaks.
+
+_hard_quota_enforcer_singleton: Optional["HardQuotaEnforcer"] = None
+
+
+def __getattr__(name: str) -> Any:
+    if name == "hard_quota_enforcer":
+        global _hard_quota_enforcer_singleton
+        if _hard_quota_enforcer_singleton is None:
+            _hard_quota_enforcer_singleton = HardQuotaEnforcer()
+        return _hard_quota_enforcer_singleton
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -75,6 +75,20 @@
  * found two of five and reported the tree 60% cleaner than it is. That is the
  * second reason the detector is shared rather than re-written per caller.
  *
+ * UPDATE (FE-11): TWO OF THE FIVE ARE NOW MIGRATED
+ * ---------------------------------------------------------------------------
+ * `pages/TwoFA.jsx` and `pages/ExchangeManager.jsx` both now use
+ * `ds/ConfirmDialog` — the same primitive `pages/StrategyDetail.jsx`'s own
+ * deploy/delete/restore-version dialogs use — in place of the native dialog
+ * this header above still narrates for the historical record. Both entries
+ * are held at `0` below rather than removed (see "HOW TO CHANGE IT"), and
+ * `tests/unit/guards/no-native-dialogs.test.js`'s `KNOWN_DIALOGS` fixed-point
+ * list was shortened to the two that remain:
+ * `components/NotificationCenter.jsx` and `components/admin/AdminDashboard.jsx`.
+ * The allowlist is still five files — `components/legal/CookieConsent.jsx` is
+ * the fifth, as the next section explains — but only three of them still carry
+ * a live dialog.
+ *
  * ---------------------------------------------------------------------------
  * THE TWO GROUPS
  * ---------------------------------------------------------------------------
@@ -131,7 +145,6 @@ export const IN_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
   // The other nine entered the guard clean. They are listed anyway, for the
   // reason in this group's header.
   'pages/Dashboard.jsx': 0,
-  'pages/Portfolio.jsx': 0,
   'pages/Strategies.jsx': 0,
   'pages/TradeHistory.jsx': 0,
   'pages/LiveTrading.jsx': 0,
@@ -161,26 +174,37 @@ export const IN_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
  * Everything else. Budgeted so it cannot grow; no promise in this spec that it
  * shrinks, and no emptiness assertion over it.
  *
- * All five entries are pages and components design.md §17.2 defers by name, and
- * all five hold exactly one dialog. Each note below records the call, its line as
- * seeded, and the interaction it guards — so that when one of these surfaces is
+ * Every entry holds exactly one dialog. Each note below records the call, its line
+ * as seeded, and the interaction it guards — so that when one of these surfaces is
  * eventually migrated, the person doing it knows what they are replacing without
  * re-deriving it.
+ *
+ * Four of the five are pages and components design.md §17.2 defers BY NAME. The
+ * fifth, `components/legal/CookieConsent.jsx`, is not: it arrived with the LEGAL-01
+ * consent work after this group was written. It is called out in its own note rather
+ * than quietly joining the list, because "§17.2 defers it" was the entry criterion
+ * and this one does not meet it — and a budget whose membership rule has silently
+ * widened is a budget that no longer refuses anything.
  */
 export const OUT_OF_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
-  // -- Deferred pages (§17.2) ------------------------------------------------
-  // `window.confirm("Are you sure you want to reset your MFA configuration?")`
-  // at line 202, guarding `handleResetFactor`. Auth/2FA is deferred by §17.2, and
-  // this is the one file tasks.md's hazard note named correctly. Destructive and
-  // security-relevant, so it is the entry most worth migrating first if §17.2
-  // ever reopens — a reset that cannot be focus-trapped or read out is exactly
-  // Requirement 18.3's complaint.
-  'pages/TwoFA.jsx': 1,
-  // Bare `confirm(\`… disconnect ${exchangeName.toUpperCase()}? This action
-  // cannot be undone.\`)` at line 233. No `window.` receiver — this is one of the
-  // three the plan's `window.confirm` grep would have missed. Exchange Manager is
-  // deferred by §17.2.
-  'pages/ExchangeManager.jsx': 1,
+  // -- Deferred pages (§17.2), migrated off the native dialog -------------
+  // FE-11 replaced both of these with `ds/ConfirmDialog`, so both now measure `0`.
+  // The entries STAY per this file's own rule (an out-of-scope entry lowered to 0
+  // by a migration is kept, not deleted, so the file stays held there) rather than
+  // reverting to "unlisted" and relying on the unbudgeted-file default.
+  //
+  //   * `pages/TwoFA.jsx` — was `window.confirm("Are you sure you want to reset
+  //     your MFA configuration?")`, guarding `handleResetFactor`. Now opens
+  //     `ds/ConfirmDialog` from `handleResetFactor`; only the dialog's own
+  //     explicit confirm reaches `handleConfirmResetFactor`, which performs the
+  //     unenroll/re-enroll.
+  //   * `pages/ExchangeManager.jsx` — was the bare `confirm(\`… disconnect
+  //     ${exchangeName.toUpperCase()}? This action cannot be undone.\`)`, one of
+  //     the three the plan's `window.confirm` grep would have missed. Now opens
+  //     `ds/ConfirmDialog` from `handleDeleteSaved`; only the dialog's own
+  //     explicit confirm reaches `handleConfirmDisconnect`.
+  'pages/TwoFA.jsx': 0,
+  'pages/ExchangeManager.jsx': 0,
   // `pages/Landing.jsx` was here at 1 — a bare `alert("Demo request submitted! …")`
   // in the demo-modal submit handler, and one of the three bare forms a
   // `window.confirm` grep would have missed. **retail-ui-simplification task 9.2
@@ -201,6 +225,29 @@ export const OUT_OF_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
   // Bare `confirm('Delete this entry permanently?')` at line 71, guarding the
   // waitlist delete. The Admin dashboard is deferred by §17.2. Bare form again.
   'components/admin/AdminDashboard.jsx': 1,
+  // `window.alert('Analytics turned off. No further data will be sent. Reload the
+  // page to fully unload scripts that were already running.')` at line 137, in the
+  // consent-toggle's `onClick` when the visitor turns analytics OFF. Arrived with
+  // the LEGAL-01 cookie-consent work, which is NOT a §17.2 deferral — this is the
+  // first entry in this group that §17.2 does not name, and it is recorded as a
+  // deliberate exception rather than silently absorbed.
+  //
+  // WHY IT IS BUDGETED AND NOT MIGRATED HERE. The two replacements this guard names
+  // both have a problem on this particular surface:
+  //
+  //   * `window.showToast` is installed by `AppShell`, and this toggle renders in
+  //     the footer on PUBLIC routes too, where `AppShell` is not mounted. Routing
+  //     the message through a transport that may not exist would silently drop a
+  //     caveat that exists for a legal reason — strictly worse than a dialog.
+  //   * `ds/Alert` is an in-page block, which this component has nowhere to put: it
+  //     renders as a single inline `<button>` inside a footer line.
+  //
+  // THE RIGHT FIX, recorded so it is not re-derived: render the caveat inline next
+  // to the toggle in a polite live region, which needs no transport, cannot be
+  // dismissed before it is read, and is reachable by a screen reader — none of which
+  // a `window.alert` is. That is a change to the consent surface's layout and copy
+  // placement, so it belongs to whoever owns that surface, not to a lint fix.
+  'components/legal/CookieConsent.jsx': 1,
 });
 
 /**

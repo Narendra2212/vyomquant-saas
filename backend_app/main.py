@@ -27,6 +27,7 @@
 """
 
 
+import asyncio
 from datetime import datetime, timezone
 import logging
 import os
@@ -38,7 +39,6 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import Optional
 
-import sentry_sdk
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,9 +77,13 @@ from backend_app.core.config import print_config_status, settings
 # ── Runtime Services ────────────────────────────────────────────────
 from backend_app.core.consistency_checker import (PositionConsistencyChecker,
                                                   get_consistency_checker)
-# Database imports — ALL SQLAlchemy models must be imported here so that
-# Base.metadata.create_all() registers their tables at startup.
-from backend_app.core.database import Base, SessionLocal, engine
+from backend_app.backend.paper_limit_order_sweeper import (
+    PaperLimitOrderSweeper, get_paper_limit_order_sweeper)
+# Database imports. The SQLAlchemy model imports below this line are kept for the
+# modules that actually use them (routers, Alembic's own `env.py` target_metadata) -
+# API-05 removed only the `Base.metadata.create_all(bind=engine)` DDL call this comment
+# used to justify; see that removal's own note, further down, for why.
+from backend_app.core.database import SessionLocal
 from backend_app.core.http_metrics import \
     MarketplacePaperHttpMetricsMiddleware
 from backend_app.core.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
@@ -92,6 +96,10 @@ from backend_app.core.position_model import PositionModel  # noqa: F401
 from backend_app.core.rate_limit import limiter
 from backend_app.core.reconciliation_scheduler import (
     start_reconciliation_scheduler, stop_reconciliation_scheduler)
+from backend_app.core.creator_payout_scheduler import (
+    start_creator_payout_scheduler, stop_creator_payout_scheduler)
+from backend_app.core.runtime_env import (deployment_environment,
+                                          local_state_is_acceptable)
 #  SYSTEM FREEZE: Import safety config FIRST to block all execution
 # This must be imported before any engine that could execute trades
 from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
@@ -99,22 +107,16 @@ from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 from backend_app.core.dependencies import get_admin_user
 #  Router imports 
-from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard, distributed_execution,
-                                 exchange, health, health_websocket, library, market, metrics, notifications,
-                                 orders, paper_trading, portfolio, referral, risk, security, signal_trace,
-                                 signals, strategies, strategy_operations, support, user)
+from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard,
+                                 exchange, health, health_websocket, legal, library, market, metrics,
+                                 notifications, orders, paper_trading, portfolio, referral, risk, security,
+                                 signal_trace, signals, strategies, strategy_operations, support, user)
 # DAG task queue
 from backend_app.routers.dag_tasks import router as dag_tasks_router
 
-# Initialize Telemetry
-sentry_dsn = os.environ.get("SENTRY_DSN")
-if sentry_dsn:
-    sentry_sdk.init(
-        dsn=sentry_dsn,
-        traces_sample_rate=1.0,
-        profiles_sample_rate=1.0,
-    )
-    print("Telemetry: Sentry initialized.")
+# Telemetry: initialised once, in the lifespan, by `initialize_sentry` (environment + release
+# tags, 10% tracing, a scrubbing before_send, no PII). OBS-01 removed a second, module-level
+# init here that sampled 100% of traces and profiles with no scrubbing and ran first.
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -133,8 +135,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "https://js.sentry-cdn.com "
             "https://www.googletagmanager.com "
             "https://www.clarity.ms "
-            "https://checkout.razorpay.com "
-            "https://js.stripe.com"
+            "https://checkout.razorpay.com"
         )
         
         connect_src = (
@@ -147,8 +148,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "https://*.sentry.io "
             "https://*.clarity.ms "
             "https://www.google-analytics.com "
-            "https://api.stripe.com "
-            "https://api.razorpay.com"
+            "https://api.razorpay.com "
+            "https://lumberjack.razorpay.com"
         )
         
         style_src = (
@@ -218,11 +219,22 @@ except Exception as e:
     _execution_router_import_error = e
 
 
-#  Logging setup 
+#  Logging setup
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s  %(message)s"
 )
 logger = logging.getLogger("Algo22")
+
+# LOG-01: core/observability.py's RedactingLogFilter only ever protected the thirteen
+# marketplace/paper logger names in GUARDED_LOGGER_NAMES -- billing, exchange,
+# execution and auth loggers carried no secret redaction at all. Attaching the same
+# filter to the handler basicConfig just installed on the root logger covers every
+# OTHER logger too, since a Handler's filters run for every record that propagates to
+# it regardless of which logger originated it (unlike a Logger's own filters, which
+# apply only to that logger's own records).
+from backend_app.core.observability import install_root_log_redaction
+
+install_root_log_redaction()
 
 
 
@@ -249,16 +261,62 @@ except ImportError:
 # Shared runtime service status — populated during lifespan startup, read by /health/services
 _runtime_service_status: dict = {}
 
+# BILL-01: handle of the plan-expiry sweep task started in lifespan
+_plan_expiry_task = None
+#: PAPER-04's periodic reconciliation sweep. Cancelled on shutdown like `_plan_expiry_task`.
+_paper_reconcile_task = None
+# RT-08: handle of the resume-after-restart task started in lifespan
+_resume_task = None
+_orphan_sweep_task = None
+
 
 # ── Lifespan: boot + graceful shutdown ──────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize Sentry early
+    #
+    # ENV-06: `environment` is the DEPLOYMENT environment and `trading_mode` is the trading
+    # mode. This call used to read `environment=get_vyomquant_mode("production")` — a
+    # trading mode supplying Sentry's environment tag — so with the documented production
+    # setting `VYOMQUANT_MODE=paper` every production event was filed under an environment
+    # called `paper`, mixed in with developer machines, and no `production` environment
+    # existed for an alert rule to select. Same substitution as API-03 (`core/rate_limit`)
+    # and the `redis_manager` fix, on the reporting side.
+    #
+    # Both dimensions are now recorded independently: `deployment_environment()` reads
+    # ENV/ENVIRONMENT and never a trading mode, and the trading mode is attached as its own
+    # global tag. `"unknown"` rather than a plausible-looking default, because a process
+    # that has not declared where it runs should be visibly unlabelled.
+    # Regression: tests/test_api05_documentation_exposure_matrix.py
     initialize_sentry(
         dsn=os.getenv("SENTRY_DSN"),
-        environment=get_vyomquant_mode("production"),
-        release="2.4.0"
+        environment=deployment_environment() or "unknown",
+        release="2.4.0",
+        trading_mode=get_vyomquant_mode("safe"),
     )
+    # NOTIF-05: hand this loop to synchronous producers.
+    #
+    # `backend/execution_engine.py` and the bot runner are SYNCHRONOUS and cannot
+    # discover a running loop from their own thread -- `asyncio.get_event_loop()`
+    # raises there, which is why the previous sync entry point was deleted. The loop
+    # has to be handed over from the async side exactly once, and this is the only
+    # place that is guaranteed to run inside it.
+    #
+    # Registered BEFORE the long startup work below, so a producer firing during
+    # recovery is queued rather than silently dropped.
+    try:
+        import asyncio as _asyncio
+
+        from backend_app.core.notification_dispatcher import register_dispatch_loop
+
+        register_dispatch_loop(_asyncio.get_running_loop())
+    except Exception as _loop_exc:  # noqa: BLE001 - never block boot on telemetry
+        logger.warning(
+            "[NOTIF-05] could not register the dispatch loop; synchronous producers "
+            "will not be able to queue notifications: %s",
+            _loop_exc,
+        )
+
     # Print configuration status at startup
     print_config_status()
     missing_settings = settings.validate_required()
@@ -266,6 +324,37 @@ async def lifespan(app: FastAPI):
         logger.critical(f"FATAL: Missing required environment variables: {', '.join(missing_settings)}")
         raise RuntimeError(f"FATAL: Missing required environment variables: {', '.join(missing_settings)}")
     
+    # ══════════════════════════════════════════════════════════════════════
+    #  JWT SECRET STRENGTH  (BUG-012) — fails the boot, not just the log
+    # ══════════════════════════════════════════════════════════════════════
+    # `validate_required` above only checks that JWT_SECRET is PRESENT. Its strength
+    # used to be two `logger.warning` calls that the application started straight
+    # through, so the 24-byte secret this deployment actually had shipped with nothing
+    # but a line in the boot log.
+    #
+    # Placed here, immediately after the required-variables check and before any
+    # service is initialised or any port is bound, so a deployment with an unfit secret
+    # never accepts a request. The raised message names every problem and no part of the
+    # secret.
+    # Regression: tests/test_jwt_secret_is_production_grade.py
+    settings.assert_jwt_secret_is_production_grade()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  CREDENTIALS ARE CONFIGURED, NOT MERELY PRESENT  (ENV-03)
+    # ══════════════════════════════════════════════════════════════════════
+    # `validate_required` above is spelled `if not v`, and
+    # `bool("YOUR_SUPABASE_SERVICE_ROLE_KEY")` is True — so the placeholders committed in
+    # `backend_app/.env` satisfied it completely. This is the check that tells a template
+    # value from a credential: MISSING, EMPTY and PLACEHOLDER are all refused for a
+    # deployed environment, and a local run with `ENV=development` or `DEV_MODE=true` keeps
+    # its documented behaviour (reported by `print_config_status` above, not fatal).
+    #
+    # Placed immediately after the JWT check and before any service is initialised or any
+    # port is bound, so a misconfigured deployment never answers a request. The raised
+    # message names every unfit variable and no part of any value.
+    # Regression: tests/test_env03_placeholder_secrets_are_invalid.py
+    settings.assert_credentials_are_production_grade()
+
     # Security check: DEV_MODE should not be enabled in production-like environments
     if settings.DEV_MODE and settings.ENV.lower() in ("production", "staging"):
         logger.critical(
@@ -276,7 +365,36 @@ async def lifespan(app: FastAPI):
             f"FATAL: DEV_MODE=true is not allowed in {settings.ENV.upper()} environment. "
             "Set DEV_MODE=false or use ENV=development/ENV=testing for local development."
         )
-    
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THE MASTER KEY CAN STILL READ WHAT IT PROTECTS  (VAULT-01)
+    # ══════════════════════════════════════════════════════════════════════
+    # A master encryption key was once replaced without re-encrypting the credentials
+    # it protected, and nothing detected it -- not a health check, not a test, not an
+    # alarm. The four affected ciphertext values are permanently unrecoverable; the
+    # cost was nil only because live trading is hard-gated off and two rows were
+    # affected. The same event after launch silently breaks every funded exchange
+    # connection, and the first symptom would be a ValueError from
+    # APIKeyVault._decrypt at order time.
+    #
+    # Placed here, after the configuration checks and before any service is
+    # initialised or any port is bound, so a deployment whose key cannot read the
+    # vault never accepts a request. That is the entire point: it makes a wrong key a
+    # FAILED DEPLOYMENT -- ECS keeps the previous task definition, which has the key
+    # that works -- instead of a data disaster discovered at first order.
+    #
+    # Unlike the checks above this one, it reaches the database. So it refuses the
+    # boot on exactly one verdict, KEY_MISMATCH, where rows were read and EVERY
+    # in-scope value failed. An unreadable sample (UNDETERMINED) and a partial
+    # failure (DEGRADED) are logged loudly and allowed through, because refusing to
+    # start on a dependency blip or on one poisoned row would be a self-inflicted
+    # outage. See the module docstring for why each verdict behaves as it does.
+    # Regression: tests/test_vault01_master_key_decryptability_check.py
+    from backend_app.core.credential_key_integrity import (
+        assert_master_key_can_read_stored_credentials,
+    )
+    assert_master_key_can_read_stored_credentials()
+
     logger.info(" ALGO22 server starting up...")
     
     # 
@@ -365,10 +483,21 @@ async def lifespan(app: FastAPI):
         _consistency_checker = get_consistency_checker()
         await _consistency_checker.start()
         service_status["consistency_checker"] = "ACTIVE"
-        logger.info(" ConsistencyChecker: ACTIVE (interval=10s, kill-switch armed)")
+        logger.info(" ConsistencyChecker: started (interval=10s) - NOT a working safety net yet (RT-18)")
     except Exception as e:
         service_status["consistency_checker"] = "INACTIVE"
         logger.warning(f" ConsistencyChecker: INACTIVE — {e}")
+
+    # ── Runtime Service: PaperLimitOrderSweeper (PAPER-07) ───────────
+    _paper_limit_sweeper: Optional[PaperLimitOrderSweeper] = None
+    try:
+        _paper_limit_sweeper = get_paper_limit_order_sweeper()
+        await _paper_limit_sweeper.start()
+        service_status["paper_limit_order_sweeper"] = "ACTIVE"
+        logger.info(" PaperLimitOrderSweeper: started (interval=30s)")
+    except Exception as e:
+        service_status["paper_limit_order_sweeper"] = "INACTIVE"
+        logger.warning(f" PaperLimitOrderSweeper: INACTIVE — {e}")
 
     # ── Runtime Service: OrderWatchdog ───────────────────────────────
     _order_watchdog: Optional[OrderWatchdog] = None
@@ -407,10 +536,126 @@ async def lifespan(app: FastAPI):
     try:
         await start_reconciliation_scheduler()
         service_status["reconciliation_scheduler"] = "ACTIVE"
-        logger.info(" ReconciliationScheduler: ACTIVE (poll=30s, kill-switch armed)")
+        logger.info(" ReconciliationScheduler: started (poll=30s) - NOT a working safety net yet (RT-18)")
     except Exception as e:
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
+
+    # ── PAPER-04: mark paper sessions whose loop died as ABANDONED ───────────
+    #
+    # A ONE-SHOT PASS AT BOOT, not a loop, which is why it belongs here and does not
+    # repeat PAPER-04's own recorded defect. The session LOOPS still run in this process
+    # and still die on redeploy -- that half needs the worker service INF-03 covers, and
+    # this is not a substitute for it. What this fixes is that the death used to be
+    # INVISIBLE: the row sat at RUNNING forever, counted against Requirement 27.4's
+    # concurrency cap, and read as live to every client while no figure it reported would
+    # ever advance again.
+    #
+    # Safe to run from every gunicorn worker concurrently, which matters because
+    # startup.sh runs `--workers ${WORKERS:-2}`: the population is heartbeat-STALE rows
+    # rather than RUNNING rows, so a session another worker is healthily running is never
+    # eligible, and the write is a guarded UPDATE so a race is a no-op rather than a
+    # double write. Needs no leader election for that reason.
+    #
+    # Awaited rather than spawned: it is bounded (one indexed read plus one UPDATE per
+    # orphan, and RUNNING is capped at 20 per user), and a startup that reported ACTIVE
+    # before reconciling would serve its first requests with sessions still lying about
+    # their state.
+    try:
+        from backend_app.backend.paper.paper_session_service import (
+            reconcile_orphaned_sessions, run_reconciliation_loop)
+        from backend_app.core.dependencies import get_service_supabase
+
+        _paper_recon = await reconcile_orphaned_sessions(get_service_supabase())
+        service_status["paper_session_reconciliation"] = (
+            "ACTIVE" if not _paper_recon.get("errors") else "DEGRADED"
+        )
+        logger.info(
+            " PaperSessionReconciliation: %s examined, %s abandoned, %s raced, %s error(s)",
+            _paper_recon.get("examined"),
+            _paper_recon.get("abandoned"),
+            _paper_recon.get("raced"),
+            _paper_recon.get("errors"),
+        )
+
+        # ── AND THEN KEEP SWEEPING (PAPER-04) ───────────────────────────────
+        # The boot pass above covered the redeploy case by accident: `--graceful-timeout
+        # 30` means a redeploy produces a boot soon after, so the sweep ran then. It did
+        # NOT cover a death that produces no boot -- a task killed by an escaped
+        # exception, a feed handle that never reconnects, a gunicorn worker that survives
+        # while the task inside it does not. Nothing re-ran the sweep, so those orphans
+        # sat at RUNNING indefinitely, counting against Requirement 27.4's cap and
+        # reading as live: the condition PAPER-04 describes, left in place by the half of
+        # it that shipped.
+        #
+        # Spawned rather than awaited, unlike the boot pass: this one never finishes.
+        # Deliberately runs in EVERY worker with no leader election -- the sweep selects
+        # heartbeat-stale rows and writes through a guarded UPDATE, so it is already
+        # idempotent, and one worker's dead event loop must not stop the others.
+        global _paper_reconcile_task
+        _paper_reconcile_task = asyncio.create_task(
+            run_reconciliation_loop(get_service_supabase)
+        )
+    except Exception as e:
+        # `reconcile_orphaned_sessions` does not raise; this catches a failure to RESOLVE
+        # it or the Persistence_Layer handle. Either way a boot must not fail because the
+        # thing that reports damage could not run.
+        service_status["paper_session_reconciliation"] = "INACTIVE"
+        logger.warning(f" PaperSessionReconciliation: INACTIVE — {e}")
+
+    # ── MKT-06: CreatorPayoutScheduler — weekly marketplace creator payouts ──
+    try:
+        await start_creator_payout_scheduler()
+        service_status["creator_payout_scheduler"] = "ACTIVE"
+        logger.info(
+            " CreatorPayoutScheduler: started (poll=1h, sweep interval=7d) — "
+            "creates payout rows only, never moves money; settlement is manual "
+            "and admin-only (PUT /api/library/creator-payouts/{id}/settle)"
+        )
+    except Exception as e:
+        service_status["creator_payout_scheduler"] = "INACTIVE"
+        logger.warning(f" CreatorPayoutScheduler: INACTIVE — {e}")
+
+    # ── BILL-01: expire lapsed one-time (Razorpay) plan purchases ───────────
+    global _plan_expiry_task
+    try:
+        from backend_app.core.dependencies import get_service_supabase
+        from backend_app.core.plan_expiry import run_plan_expiry_loop
+        _plan_expiry_task = asyncio.create_task(run_plan_expiry_loop(get_service_supabase))
+        service_status["plan_expiry_sweep"] = "ACTIVE"
+    except Exception as e:
+        service_status["plan_expiry_sweep"] = "INACTIVE"
+        logger.warning(f" PlanExpirySweep: INACTIVE — {e}")
+
+    # ── RT-08: resume deployments the database says are running ────────────
+    # Runs in the background so a slow venue cannot delay readiness. Live deployments are
+    # only resumed when the operator opted in (RESUME_LIVE_DEPLOYMENTS); otherwise their
+    # rows are marked failed.
+    #
+    # RT-23: this used to also skip when USE_TEE was set, deferring resumption to a
+    # separate runtime (backend_app/tee/main.py). That module is deleted -- it crashed on
+    # import and real AWS evidence confirmed it was never actually deployed -- so the
+    # branch this guarded is now permanently unreachable rather than conditionally
+    # skipped. No production behaviour changes: USE_TEE was never set to "true" anywhere
+    # in this deployment (nothing could have consumed it), so this path already ran
+    # unconditionally in practice.
+    global _resume_task, _orphan_sweep_task
+    try:
+        if getattr(app_state, "fleet", None):
+            from backend_app.backend.deployment_runtime import (
+                resume_running_deployments, sweep_orphaned_deployments_forever)
+            _resume_task = asyncio.create_task(resume_running_deployments(app_state.fleet))
+            # RESUME-SWEEP-01: the boot pass runs once; this restarts `running` bots that a
+            # process stopped after it (a rolling deploy's old task) left without an owner.
+            _orphan_sweep_task = asyncio.create_task(
+                sweep_orphaned_deployments_forever(app_state.fleet)
+            )
+            service_status["deployment_resume"] = "ACTIVE"
+        else:
+            service_status["deployment_resume"] = "INACTIVE"
+    except Exception as e:
+        service_status["deployment_resume"] = "INACTIVE"
+        logger.warning(f" DeploymentResume: INACTIVE — {e}")
 
     # ── Runtime Service: PortfolioCacheUpdater ─────────────────────────────
     try:
@@ -454,11 +699,72 @@ async def lifespan(app: FastAPI):
 
     # Publish to module-level dict so /health/services can read it without request context
     _runtime_service_status.update(service_status)
+    # OBS-01: stamp the snapshot so /health/services can report its age rather than
+    # presenting boot-time state as live state.
+    _runtime_service_status["_captured_at"] = datetime.now(timezone.utc).isoformat()
 
     yield  #  Server is live and accepting requests here
 
     #  Graceful shutdown 
     logger.info(" Shutdown initiated  terminating all bots...")
+
+    # RESUME-SWEEP-01: stop this process's orphan sweep FIRST, before the fleet below stops
+    # its bots and releases their claims -- otherwise the sweep here could restart a bot this
+    # very shutdown just stopped. Other processes' sweeps are what pick those bots up.
+    if _orphan_sweep_task is not None:
+        _orphan_sweep_task.cancel()
+        try:
+            await _orphan_sweep_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  PAPER-04: RECORD THE DEATH OF THE SESSIONS THIS PROCESS WAS HOSTING
+    # ══════════════════════════════════════════════════════════════════════
+    # FIRST in the shutdown sequence, before any engine is stopped and while the database
+    # handle still works. Every paper session loop in this process is about to end, and
+    # this is the only moment anything knows WHICH sessions those are: the row says
+    # RUNNING, but `gunicorn --workers ${WORKERS:-2}` means "a RUNNING row" and "a row
+    # this process is running" are different sets, and draining the first would abandon
+    # another worker's live sessions.
+    #
+    # Without this, a redeploy left the row claiming RUNNING until the staleness window
+    # plus a sweep interval had passed -- up to 1200s of a session reading as live after
+    # its loop had stopped, which is PAPER-04's "die silently" exactly. With it, the row
+    # is accurate at the moment of the redeploy and carries a reason that names it.
+    #
+    # The periodic sweep stays the backstop for every death that gets NO clean shutdown:
+    # SIGKILL, OOM, a lost task. This is the prompt path, not the only one.
+    #
+    # Never raises: a shutdown must not fail because the thing recording damage could not
+    # run, and a session left at RUNNING is still visible to the sweep.
+    try:
+        from backend_app.routers.paper_trading import drain_sessions_hosted_here
+
+        _paper_drain = await drain_sessions_hosted_here(
+            "the web process hosting this session's loop shut down (redeploy or worker "
+            "restart). No bar was processed after this point; the session did not end on "
+            "its own terms and nothing resumed it."
+        )
+        if _paper_drain.get("examined"):
+            logger.info(
+                " PaperSessionDrain: %s hosted, %s abandoned, %s already moved on, "
+                "%s error(s)",
+                _paper_drain.get("examined"), _paper_drain.get("abandoned"),
+                _paper_drain.get("raced"), _paper_drain.get("errors"),
+            )
+    except Exception as e:
+        logger.warning(f" PaperSessionDrain shutdown error: {e}")
+
+    # PAPER-04: stop the periodic reconciliation sweep
+    if _paper_reconcile_task is not None:
+        _paper_reconcile_task.cancel()
+        try:
+            await _paper_reconcile_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f" PaperSessionReconciliation shutdown error: {e}")
 
     # Runtime Service: ConsistencyChecker — stop background check loop
     try:
@@ -467,6 +773,14 @@ async def lifespan(app: FastAPI):
             logger.info(" ConsistencyChecker: stopped")
     except Exception as e:
         logger.warning(f" ConsistencyChecker shutdown error: {e}")
+
+    # Runtime Service: PaperLimitOrderSweeper — stop background sweep loop
+    try:
+        if _paper_limit_sweeper is not None:
+            await _paper_limit_sweeper.stop()
+            logger.info(" PaperLimitOrderSweeper: stopped")
+    except Exception as e:
+        logger.warning(f" PaperLimitOrderSweeper shutdown error: {e}")
 
     # Runtime Service: OrderWatchdog — cancel background monitoring task
     try:
@@ -492,6 +806,24 @@ async def lifespan(app: FastAPI):
         logger.info(" ReconciliationScheduler: stopped")
     except Exception as e:
         logger.warning(f" ReconciliationScheduler shutdown error: {e}")
+
+    # MKT-06: CreatorPayoutScheduler — stop background sweep loop
+    try:
+        await stop_creator_payout_scheduler()
+        logger.info(" CreatorPayoutScheduler: stopped")
+    except Exception as e:
+        logger.warning(f" CreatorPayoutScheduler shutdown error: {e}")
+
+    # BILL-01: stop the plan-expiry sweep
+    try:
+        if _plan_expiry_task is not None:
+            _plan_expiry_task.cancel()
+            try:
+                await _plan_expiry_task
+            except asyncio.CancelledError:
+                pass
+    except Exception as e:
+        logger.warning(f" PlanExpirySweep shutdown error: {e}")
 
     # Runtime Service: PortfolioCacheUpdater — stop background update loop
     try:
@@ -520,6 +852,31 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f" Fleet shutdown error: {e}")
 
+    # CONN-01: drain the exchange connection pool.
+    # ------------------------------------------------------------------------------------
+    # Every block above stops a service that OPENED venue connections; none of them closed
+    # one. `backend/connection_engine.py::_exchange_pool` holds one authenticated ccxt client
+    # per (user, venue) pair, each with a live aiohttp session and a plaintext credential in
+    # memory, and nothing in this lifespan reached it — so every pooled client survived until
+    # the process died, which is where the "Unclosed client session" / "ccxt requires you to
+    # release all resources" noise at shutdown came from.
+    #
+    # Placed AFTER `fleet.shutdown_all()` deliberately: the bots are the main consumers of
+    # these connections, so closing the sockets before their tasks have stopped would pull the
+    # transport out from under an in-flight call. Placed BEFORE the Redis disconnect because a
+    # close may still want to record telemetry.
+    #
+    # Failures are logged, never raised: shutdown must continue to the remaining engines.
+    # Regression: tests/test_conn01_pool_lifecycle_and_shutdown.py
+    try:
+        from backend_app.backend.connection_engine import (close_all_exchanges,
+                                                           exchange_pool_size)
+        pooled = exchange_pool_size()
+        closed = await close_all_exchanges()
+        logger.info(f" Exchange pool: closed {closed} of {pooled} pooled venue client(s)")
+    except Exception as e:
+        logger.warning(f" Exchange pool drain error: {e}")
+
     # Engine B  close QuestDB connection pool
     try:
         await app_state.telemetry.disconnect()
@@ -541,25 +898,106 @@ async def lifespan(app: FastAPI):
     logger.info(" All engines stopped. Server offline.")
 
 
+def _interactive_docs_allowed() -> bool:
+    """Whether this process may serve ``/docs`` and ``/redoc``.
+
+    WHAT WAS WRONG. Both URL helpers decided with::
+
+        os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
+
+    -- a **trading mode** supplying the default for a **deployment environment**. That is
+    the API-03 defect, which ``core/rate_limit.py`` was fixed for and this was not. With
+    ``ENV`` unset and the documented production setting ``VYOMQUANT_MODE=paper``, the
+    expression evaluated ``"paper" in ("production", "prod", "live")`` -> ``False``, so the
+    interactive docs were served. And the mirror image was just as wrong in the other
+    direction: ``VYOMQUANT_MODE=live`` made ``is_prod`` true and hid the docs on a machine
+    that had declared no environment at all. The docs followed what the system was allowed
+    to do with money.
+
+    WHAT IT DOES NOW. ``runtime_env.local_state_is_acceptable()`` -- the single precedence
+    rule (RUNTIME-01), which reads ``ENV`` / ``ENVIRONMENT`` / ``DEV_MODE`` and never a
+    trading mode. Docs are served only where that returns ``True``: a declared
+    development/test environment, or a silent one that says ``DEV_MODE=true``.
+
+    This is never looser than the old behaviour, case by case:
+
+        ENV=development                  served  ->  served      (unchanged)
+        ENV=production                   hidden  ->  hidden       (unchanged)
+        ENV=production + DEV_MODE=true   hidden  ->  hidden       (unchanged)
+        ENV=staging                      SERVED  ->  hidden       (stricter)
+        ENV unset + VYOMQUANT_MODE=paper SERVED  ->  hidden       (stricter)
+        ENV unset, no DEV_MODE           SERVED  ->  hidden       (stricter)
+        ENV unset + DEV_MODE=true        served  ->  served       (unchanged)
+
+    ``ENABLE_DOCS`` remains an explicit operator override in both directions and is
+    consulted first, because an operator who names the behaviour outranks an inference.
+
+    Regression: tests/test_environment_precedence_is_centralised.py
+    """
+    return local_state_is_acceptable()
+
+
 def _get_docs_url():
-    is_prod = os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
     enable_docs = os.getenv("ENABLE_DOCS")
     if enable_docs is not None:
         return "/docs" if enable_docs.lower() in ("true", "1", "yes") else None
-    return None if is_prod else "/docs"
+    return "/docs" if _interactive_docs_allowed() else None
 
 def _get_redoc_url():
-    is_prod = os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
     enable_docs = os.getenv("ENABLE_DOCS")
     if enable_docs is not None:
         return "/redoc" if enable_docs.lower() in ("true", "1", "yes") else None
-    return None if is_prod else "/redoc"
+    return "/redoc" if _interactive_docs_allowed() else None
 
 def _get_openapi_url():
+    """``/openapi.json``: the schema follows the pages it feeds (API-05).
+
+    THE POLICY, STATED. There are two distinct surfaces here and they were being governed
+    by two different rules by accident rather than by decision:
+
+      * ``/docs`` and ``/redoc`` are the INTERACTIVE, browser-executable consoles. Served
+        only where ``runtime_env.local_state_is_acceptable()`` is true (ENV-05).
+      * ``/openapi.json`` is the MACHINE-READABLE SCHEMA those consoles render from. It
+        enumerates every path, method, parameter and model in the application.
+
+    Hiding the console while publishing the schema discloses exactly the surface the hiding
+    withholds, so the schema now follows the same rule. ``ENABLE_OPENAPI`` remains an
+    explicit operator override in BOTH directions and is consulted first, which is the
+    escape hatch for a deployed environment that genuinely has a schema consumer.
+
+    DOCUMENTATION IS NOT DISABLED EVERYWHERE. In a declared development or test
+    environment — and on any machine that says ``DEV_MODE=true`` — all three URLs are
+    served exactly as before. What changes is production and staging, and only by default.
+
+    WHY THIS WAS DEFERRED BEFORE, AND WHAT THE EVIDENCE NOW SAYS. The earlier pass left it
+    alone because unmounting the schema can break a generated client, a contract test or an
+    API-gateway import. Measured since:
+
+      * NOTHING in this repository fetches ``/openapi.json`` over HTTP. The frontend
+        mentions it only in comments (``algo22-terminal/.env.production``, two test
+        docstrings); no CI workflow references it; and ``tests/test_route_contract.py``
+        reads ``app.openapi()`` IN PROCESS, so it is unaffected by this URL.
+      * CloudFront distribution EEOXECPHQ8SR0 does carry an explicit ``/openapi.json`` cache
+        behaviour (``infra/rollback/cloudfront-...-pre-domain.json``,
+        ``scripts/update_cloudfront_policies.py``, ``infra/dns.md``), and
+        ``core/tenant_middleware.py`` and ``core/subscription_middleware.py`` both list the
+        path as public. Those are ROUTING and AUTH facts, and they predate the ENV-05
+        change: they exist because ``/docs`` used to be served in production and had to be
+        reachable unauthenticated for the page to work. Once the console became local-only
+        the schema's publication lost its reason.
+
+    CONSEQUENCE, SPELLED OUT. In production ``/openapi.json`` now answers 404, and the
+    CloudFront behaviour for it becomes a no-op forwarding to a 404. Neither the CDN
+    behaviour nor the middleware allowlists are removed here — deleting a deployed cache
+    behaviour is an infrastructure change, and a routed path that answers 404 is harmless.
+    ``ENABLE_OPENAPI=true`` restores the previous behaviour with one variable.
+
+    Regression: tests/test_api05_documentation_exposure_matrix.py
+    """
     enable_openapi = os.getenv("ENABLE_OPENAPI")
     if enable_openapi is not None:
         return "/openapi.json" if enable_openapi.lower() in ("true", "1", "yes") else None
-    return "/openapi.json"
+    return "/openapi.json" if _interactive_docs_allowed() else None
 
 #  FastAPI app 
 app = FastAPI(
@@ -633,12 +1071,27 @@ if CorrelationIdMiddleware:
 
     app.add_middleware(CorrelationIdMiddleware, validator=_is_acceptable_request_id)
 
-# Create database tables (skip if database not available)
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception as e:
-    logger.warning(f"Database not available at startup: {e}")
-    logger.warning("Backend will start without database connection")
+# API-05: `Base.metadata.create_all(bind=engine)` used to run here, unconditionally, at
+# IMPORT time. Removed. Two reasons, not one:
+#
+# 1. This is a THIRD schema-management mechanism alongside the hand-written numbered SQL
+#    migrations (`backend_app/migrations/*.sql`, which declare RLS policies, triggers,
+#    check constraints and explicit grants this ORM layer knows nothing about) and
+#    Alembic (`backend_app/alembic/`, whose own `env.py` already targets this same
+#    `Base.metadata`). `create_all` only creates a table that does not already exist, so
+#    in any environment where the real migrations have not yet been applied - a fresh
+#    database, a developer machine, a broken deploy - it would silently materialise
+#    whatever a SQLAlchemy model class here declares: no RLS, no triggers, no grants, no
+#    check constraints. A caller that later checks "does this table exist" would get a
+#    truthful yes for a table missing every safety property the real migration gives it.
+# 2. It ran at IMPORT, inside `main.py`'s own module body - every process that imports
+#    this module (the web server, a worker, a test collection run) attempted a
+#    schema-mutating DDL statement against whatever `DATABASE_URL` it happened to
+#    resolve, merely by being imported. A test suite or a short-lived worker has no
+#    business issuing DDL as a side effect of `import backend_app.main`.
+#
+# The migrations are the only source of truth for schema now; nothing here replaces
+# that, because nothing here should.
 
 #  CORS — origins are strictly env-var driven; no hardcoded fallbacks to prevent domain-hijack vulnerability.
 _cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:1420,http://localhost:3000,http://127.0.0.1:1420,http://127.0.0.1:3000")
@@ -674,22 +1127,45 @@ app.include_router(user.router, prefix="/api", tags=["User"])
 app.include_router(referral.router, prefix="/api", tags=["Referral"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin / God Mode"])
-# Test endpoint to verify basic routing works - must be before router includes
-@app.get("/api/test-basic")
-async def test_basic():
-    return {"status": "ok", "message": "Basic routing works"}
-
 app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
-app.include_router(distributed_execution.router, prefix="/api/distributed-execution", tags=["Distributed Execution"])
+#  RT-11: distributed_execution.router WAS mounted here. Removed: `execution_orchestrator`
+#  was never initialized or started anywhere in this codebase, so every submission already
+#  refused with 400 before that fix. That refusal closed the dangerous failure mode (a job
+#  silently accepted and never processed), but left a fully-documented, "institutional-grade
+#  reliability" HTTP surface mounted for a queue nothing drains -- confusing to any caller
+#  and worth removing rather than leaving reachable-but-useless. No frontend caller ever
+#  existed (grepped algo22-terminal/src/).
+#
+#  HY-02 then DELETED the subsystem outright. This comment previously said the router and
+#  the `backend/distributed_execution/` package were "intentionally left in place, not
+#  deleted", because several tests imported them by path to pin the orchestrator's
+#  unstarted state. That is no longer true and the reasoning no longer applies: an AST walk
+#  of every tracked .py found the router itself to be the ONLY non-test importer of the
+#  package, and the router was already unmounted here -- so all 40 modules plus the router
+#  went, 1.02 MB, and the tests that pinned "it exists but is inert" were replaced by
+#  tests/test_hy02_distributed_execution_is_gone.py, which asserts it is ABSENT. That is a
+#  stronger guarantee: an unmounted router can be re-mounted by one line, a deleted one
+#  cannot. Measured: reachability went from 107 dead files to 65 with `reachable` unchanged
+#  at 248, and nothing newly flagged, so no live import chain was touched.
+#
+#  The reconciliation loops in the old `exchange_reconciliation_engine.py` went with it.
+#  They were never wired to anything; HY-02's entry records exchange_reconciliation.py and
+#  fee_engine.py (different, still-present modules) as the revive-or-delete decision that
+#  remains open.
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health_websocket.router, prefix="/health", tags=["Health"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 app.include_router(signal_trace.router, prefix="/api/signal-trace", tags=["Signal Trace"])
 app.include_router(copilot.router, prefix="/api/v1/copilot", tags=["AI Copilot"])
 app.include_router(support.router, prefix="/api/support", tags=["Support"])
+# LEGAL-01: records which version of the Terms/Privacy/Risk/Refund documents each
+# user accepted. Before this existed the signup checkbox was client-side state
+# that was never persisted, so the platform could not answer that question for
+# any of its 182 accounts.
+app.include_router(legal.router, prefix="/api/legal", tags=["Legal"])
 app.include_router(metrics.router, tags=["Observability"])
 
 #  Mount Production Execution router 
@@ -813,11 +1289,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch all unhandled exceptions and return a normalized 500 error response."""
-    import traceback
-    print(f"GLOBAL EXCEPTION HANDLER: {type(exc).__name__}: {exc}")
-    print(f"TRACEBACK: {traceback.format_exc()}")
-    traceback.print_exc()
+    """Catch all unhandled exceptions and return a normalized 500 error response.
+
+    API-04. This used to write the exception type, message and full traceback to stdout
+    via three separate bare ``print()``/``traceback.print_exc()`` calls -- bypassing the
+    application's own logging configuration entirely (no level, no handler routing, no
+    structured format for whatever ingests this process's logs) and, in many deployments,
+    landing in the SAME raw, unredacted stream any other stdout write would. Routed
+    through this module's own ``logger`` instead: ``logger.exception`` logs at ERROR and
+    attaches the current exception's traceback the same way ``traceback.format_exc()``
+    did, through the one path every other error in this codebase already reports through.
+    The response body is unchanged -- it already said only "Internal server error" and
+    never echoed ``exc`` to the caller.
+    """
+    logger.exception(
+        "Unhandled exception on %s: %s: %s",
+        request.scope.get("path"),
+        type(exc).__name__,
+        exc,
+    )
     from backend_app.core.schemas import create_api_error_response
     body = create_api_error_response(
         status_code=500,
@@ -874,12 +1364,29 @@ async def health():
     except Exception as e:
         service_status["supabase"] = f"failed: {str(e)[:50]}"
     
-    # Overall status - ok if at least core functions work
+    # Overall status.
+    #
+    # OBS-01: this considered only supabase and questdb, so REDIS BEING DOWN STILL
+    # REPORTED "ok" — and Redis is not a cache here, it backs the rate limiter (API-03)
+    # and the distributed execution locks. The redis probe above was already running and
+    # its result was simply discarded.
+    #
+    # Redis is only counted when this environment actually requires it, using the same
+    # detector as the rate limiter and the readiness gate, so a developer with no Redis
+    # does not see a permanently degraded dashboard.
+    from backend_app.core.runtime_env import local_state_is_acceptable
+
+    _redis_required = not local_state_is_acceptable()
+    _redis_state = str(service_status.get("redis", ""))
+    _redis_ok = (not _redis_required) or _redis_state == "connected"
+
     all_ok = (
         service_status.get("supabase") in ("connected", "fallback")
         and not str(service_status.get("supabase", "")).startswith("failed")
         and service_status.get("questdb") != "failed"
+        and _redis_ok
     )
+    service_status["redis_required"] = _redis_required
     
     return {
         "status": "ok" if all_ok else "degraded",
@@ -888,8 +1395,13 @@ async def health():
     }
 
 
-#  Runtime Services health endpoint 
-@app.get("/health/services", tags=["System"])
+#  Runtime Services health endpoint
+# API-07: per-service internal state (ConsistencyChecker/OrderWatchdog/PnLEngine) is
+# operational detail, not the liveness/readiness signal a load balancer needs -- confirmed
+# via deploy-archive/k8s/ingress.yaml (ALB health check is /health) and healthcheck.sh
+# (Docker's own check is /health/live), neither of which names this path. Gated behind
+# get_admin_user rather than left public.
+@app.get("/health/services", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def health_services():
     """Per-service ACTIVE/INACTIVE status for ConsistencyChecker, OrderWatchdog, PnLEngine."""
     runtime = _runtime_service_status
@@ -907,12 +1419,42 @@ async def health_services():
         "pnl_engine":                _classify(runtime.get("pnl_engine", "")),
         "reconciliation_scheduler": _classify(runtime.get("reconciliation_scheduler", "")),
     }
+    # RT-18: these two start and loop but do no work today (the checker iterates an empty
+    # list of positions; the scheduler reads a table nothing writes). Reporting ACTIVE, with a
+    # claim of an armed halt, told operators a reconciliation safety net existed. Until RT-16
+    # implements real venue reconciliation they are reported for what they are.
+    for _noop in ("consistency_checker", "reconciliation_scheduler"):
+        if services[_noop] == "ACTIVE":
+            services[_noop] = "NOT_IMPLEMENTED"
+
     active_count   = sum(1 for s in services.values() if s == "ACTIVE")
     inactive_count = sum(1 for s in services.values() if s == "INACTIVE")
     failed_count   = sum(1 for s in services.values() if s == "FAILED")
+    not_implemented_count = sum(1 for s in services.values() if s == "NOT_IMPLEMENTED")
 
-    overall = "ok" if failed_count == 0 and inactive_count == 0 else (
+    overall = "ok" if failed_count == 0 and inactive_count == 0 and not_implemented_count == 0 else (
               "degraded" if failed_count == 0 else "failed")
+
+    # OBS-01: this snapshot is written ONCE, during lifespan startup, and never
+    # refreshed. A service that died an hour ago still reports ACTIVE, so the answer is
+    # not "are these services running" but "did these services start" — and those are
+    # different questions that were being conflated.
+    #
+    # Refreshing it properly means each service publishing a heartbeat, which is what
+    # `WorkerBase.report_health` now does for workers after OBS-04 (it was writing
+    # nowhere at all). These four are not WorkerBase subclasses, so the honest fix
+    # available here is to STOP PRESENTING A BOOT SNAPSHOT AS LIVE STATE: the age is
+    # reported, and `as_of` says plainly what the reading is.
+    _age_seconds = None
+    _captured = _runtime_service_status.get("_captured_at")
+    if _captured:
+        try:
+            _age_seconds = round(
+                (datetime.now(timezone.utc)
+                 - datetime.fromisoformat(_captured)).total_seconds(), 1
+            )
+        except Exception:  # noqa: BLE001
+            _age_seconds = None
 
     return {
         "status": overall,
@@ -920,9 +1462,21 @@ async def health_services():
             "active":   active_count,
             "inactive": inactive_count,
             "failed":   failed_count,
+            "not_implemented": not_implemented_count,
         },
         "services": services,
-        "raw": runtime,
+        "raw": {k: v for k, v in runtime.items() if not k.startswith("_")},
+        # The honesty fields. A consumer that treats `services` as live state is wrong,
+        # and now has the information to know it.
+        "as_of": "process_startup",
+        "captured_at": _captured,
+        "age_seconds": _age_seconds,
+        "note": (
+            "These values are a BOOT-TIME snapshot, not live state: they are written "
+            "once during startup and never refreshed, so a service that has since died "
+            "still reads ACTIVE. Use /health/ready for a traffic decision and "
+            "worker:health:* (see WorkerBase.report_health) for live worker liveness."
+        ),
     }
 
 
@@ -936,96 +1490,221 @@ async def health_live():
 #  Readiness probe (Docker HEALTHCHECK / K8s readiness) 
 @app.get("/health/ready", tags=["System"])
 async def health_ready():
-    """Minimal readiness probe — returns 200 if the process is ready to serve traffic."""
-    return {"status": "ready"}
+    """OBS-01: readiness now MEASURES its required dependencies.
+
+    This returned `{"status": "ready"}` unconditionally -- it checked nothing -- so an
+    orchestrator would route production traffic to a pod with no database and no Redis.
+
+    Required: the database (every authenticated request resolves identity and RLS through
+    it) and Redis outside a declared local environment (it backs the rate limiter per
+    API-03 and the distributed execution locks). Telemetry is NOT required: it degrades to
+    a mock by design, and making readiness depend on an optional service turns a metrics
+    outage into a total outage.
+
+    **503 when not ready.** A 200 carrying a sad body is invisible to every load balancer,
+    which is the whole reason the old version was harmless-looking and useless.
+
+    Liveness (`/health/live`) stays dependency-free: a pod whose database is down is not a
+    broken pod, and restarting it does not fix the database.
+    """
+    from backend_app.core.readiness import evaluate_readiness
+
+    report = await evaluate_readiness()
+    return JSONResponse(status_code=report.http_status, content=report.to_dict())
 
 
-@app.get("/api/system/readiness", tags=["System"])
-async def system_readiness():
-    """System readiness check — confirms critical dependencies are operational."""
-    from backend_app.core.exchange_certification import get_exchange_certification_registry
-    registry = get_exchange_certification_registry()
-    
-    dependencies = {
-        "database": "HEALTHY",
-        "redis": "HEALTHY",
-        "risk_engine": "HEALTHY",
-        "execution_engine": "HEALTHY",
-        "reconciliation": "HEALTHY",
-        "certified_exchanges": registry.get_certification_matrix()["total_certified_level_5"],
-    }
-    
+# CI-03: release provenance -- the backend counterpart to 06-frontend-deploy.yml's
+# dist/release.json. That workflow already stamps the deployed UI with the commit it was
+# built from; this reads back the SAME shape ({"sha", "built_at"}) for the backend image,
+# baked in at build time by Dockerfile's GIT_SHA/BUILT_AT ARGs (set from 02-build.yml's own
+# IMAGE_TAG -- the commit SHA already used to tag the image in ECR). This is deliberately
+# the SHA of the running IMAGE, not of whatever source tree happens to be checked out --
+# that is the comparison a "does the deployed frontend match the deployed backend" check
+# actually needs. "unknown" (the Dockerfile ARG's own default) means the image was built
+# without passing --build-arg, e.g. a local `docker build` outside this CI pipeline, not a
+# broken endpoint.
+#
+# Registered at BOTH /release.json and /api/release.json. The real production CloudFront
+# distribution (confirmed against the live account, not just terraform source) only proxies
+# /api/*, /ws/*, /health*, /metrics* and /openapi.json to the ALB; every other path -- this
+# includes a bare /release.json -- falls through to CloudFront's default behaviour, which
+# serves the FRONTEND's own static dist/release.json from S3. So on the real public domain,
+# GET https://<domain>/release.json can only ever return the frontend's own stamp -- the
+# backend's endpoint at that exact path is unreachable through the real routing, silently
+# defeating the FE/BE version-match comparison this pair of endpoints exists for. The /api/
+# alias is what 06-frontend-deploy.yml's new comparison step (added alongside this) actually
+# fetches; the bare /release.json stays for direct-to-backend callers (local dev, a health
+# dashboard hitting the ALB/task directly) where no such collision exists.
+def _release_info() -> dict:
     return {
-        "status": "READY",
-        "mode": "DEV_MODE" if os.environ.get("DEV_MODE", "").lower() == "true" else "production",
-        "dependencies": dependencies,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "sha": os.environ.get("GIT_SHA", "unknown"),
+        "built_at": os.environ.get("BUILT_AT", "unknown"),
     }
 
 
-@app.get("/api/system/health", tags=["System"])
+@app.get("/release.json", tags=["System"])
+async def release_info():
+    return _release_info()
+
+
+@app.get("/api/release.json", tags=["System"])
+async def release_info_api():
+    return _release_info()
+
+
+@app.get("/api/system/trading-capabilities", tags=["System"])
+async def system_trading_capabilities():
+    """FE-03 / RT-15: tell the UI whether LIVE execution is available on this platform.
+
+    ``live_trading_available`` is true only when the platform is in live mode AND live
+    trading is explicitly enabled - the same two conditions the order gate enforces
+    (``core.live_execution_gate.assert_platform_live_trading_enabled``). The gate also
+    applies a per-tenant allowlist, which is deliberately not reported here: this is a
+    public, unauthenticated probe and says nothing about any account. The UI uses it to
+    avoid offering Live when the server would refuse it; the server remains the authority.
+    """
+    from backend_app.core.safety_config import (get_live_trading_confirmation,
+                                                get_vyomquant_mode)
+
+    mode = str(get_vyomquant_mode("safe") or "").strip().lower()
+    enabled = str(get_live_trading_confirmation("false") or "").strip().lower() == "true"
+    live_mode = mode in ("live", "live_trading")
+    return {
+        "mode": mode if mode in ("safe", "paper", "live", "live_trading") else "safe",
+        "live_trading_available": bool(live_mode and enabled),
+    }
+
+
+@app.get("/api/system/readiness", tags=["System"], dependencies=[Depends(get_admin_user)])
+async def system_readiness():
+    """System readiness check — confirms critical dependencies are operational.
+
+    OBS-01: this returned the literal string "HEALTHY" for database, redis, risk_engine,
+    execution_engine and reconciliation, and `"status": "READY"` always. Nothing was
+    probed. It now reports the same measured dependency set as `/health/ready` and
+    carries the same 503.
+
+    CLAIM-02: `certified_exchanges` below is NOT a measured fact either -- it is
+    `exchange_certification.py`'s own count of venues it marks LEVEL_5, and that file's
+    levels were themselves hardcoded overclaims until this finding corrected them (see
+    its module docstring). This count is included for backwards compatibility with
+    whatever reads this endpoint today; as of the correction it reads 0, honestly,
+    because no venue has ever had a sandbox or live order placed against it
+    (staging/EXCHANGE_SANDBOX_CERTIFICATION.md, Phase 10, 2026-10-10).
+
+    API-07: this is a diagnostic duplicate of `/health/ready` (the actual LB/K8s gate,
+    confirmed still public -- deploy-archive/k8s/ingress.yaml names /health as the ALB
+    target, not this path) carrying extra operational detail. Gated behind get_admin_user.
+    """
+    from backend_app.core.exchange_certification import \
+        get_exchange_certification_registry
+    from backend_app.core.readiness import evaluate_readiness
+
+    report = await evaluate_readiness()
+    body = report.to_dict()
+
+    try:
+        registry = get_exchange_certification_registry()
+        body["certified_exchanges"] = (
+            registry.get_certification_matrix()["total_certified_level_5"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Informational only; it must not change the readiness verdict.
+        body["certified_exchanges"] = None
+        body["certified_exchanges_error"] = type(exc).__name__
+
+    body["mode"] = (
+        "DEV_MODE" if os.environ.get("DEV_MODE", "").lower() == "true" else "production"
+    )
+    body["timestamp"] = datetime.now(timezone.utc).isoformat()
+    return JSONResponse(status_code=report.http_status, content=body)
+
+
+@app.get("/api/system/health", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_health():
-    """Comprehensive system health across runtime workers and dependencies."""
+    """Comprehensive system health across runtime workers and dependencies.
+
+    API-07: gated behind get_admin_user -- this is `health()`'s own, more detailed
+    report, not the LB/K8s liveness target (that is the bare `/health`, still public).
+    """
     return await health()
 
 
-@app.get("/api/system/dependencies", tags=["System"])
+@app.get("/api/system/dependencies", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_dependencies():
-    """Dependencies health status."""
+    """Dependency health, measured.
+
+    OBS-01: every value here was a hardcoded literal — `"HEALTHY"` for all five, plus
+    fabricated detail (`"circuit_breaker": "ARMED"`, `"idempotency_guard": "ACTIVE"`)
+    that was never read from anything. `risk_engine`, `execution_engine` and
+    `reconciliation_scheduler` are in-process components rather than things we talk to, so
+    reporting them as reachable dependencies was category error on top of fabrication;
+    worker/service state is at `/health/services`.
+
+    Always 200: this is a diagnostic, not a gate. `/health/ready` is the gate.
+    """
+    from backend_app.core.readiness import evaluate_readiness
+
+    report = await evaluate_readiness()
     return {
-        "database": {"status": "HEALTHY", "driver": "supabase/postgres"},
-        "redis": {"status": "HEALTHY", "driver": "redis-py"},
-        "risk_engine": {"status": "HEALTHY", "circuit_breaker": "ARMED"},
-        "execution_engine": {"status": "HEALTHY", "idempotency_guard": "ACTIVE"},
-        "reconciliation_scheduler": {"status": "HEALTHY", "poll_interval_sec": 30},
+        "dependencies": report.to_dict()["dependencies"],
+        "ready": report.ready,
+        "blocking": list(report.blocking),
+        "checked_at": report.checked_at,
+        "note": (
+            "In-process components (risk engine, execution gateway, reconciliation "
+            "scheduler) are reported at /health/services, not here: they are not "
+            "external dependencies and cannot be probed by reachability."
+        ),
     }
 
 
-@app.get("/api/system/workers", tags=["System"])
+@app.get("/api/system/workers", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_workers():
-    """Background workers operational status."""
+    """Background workers operational status. API-07: gated behind get_admin_user."""
     return await health_services()
 
 
-@app.get("/api/system/exchanges", tags=["System"])
+@app.get("/api/system/exchanges", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_exchanges():
-    """Certified exchanges status matrix."""
+    """Certified exchanges status matrix. API-07: gated behind get_admin_user."""
     from backend_app.core.exchange_certification import get_exchange_certification_registry
     return get_exchange_certification_registry().get_certification_matrix()
 
 
-#  Stats endpoint 
+#  Stats endpoint
 @app.get("/api/stats", tags=["Stats"])
 async def get_stats():
-    """Get system trading statistics calculated from live database records."""
+    """Platform-wide trading statistics. Public and unauthenticated BY DESIGN -- this is
+    not any one account's data (see ``algo22-terminal/src/design/pageFields.js``'s
+    documentation of ``pages/Profile.jsx``'s *Automation Account Context* card, which
+    already labels these four figures as the platform's aggregate, not the caller's).
+
+    API-03. This used to call the PER-USER dashboard aggregator with a sentinel
+    ``user={"id": "public"}`` identity that owns nothing -- most figures came back as
+    that non-existent account's empty state, ``total_pnl`` was actually today's P&L
+    under a mislabelled key, and a failed read answered 200 with every figure forced to
+    0, indistinguishable from a genuinely idle platform. See
+    ``backend_app.backend.platform_stats`` for the real, service-role aggregation this
+    now calls instead, and why a failure here is a 503, not a false "all zero".
+    """
+    from backend_app.backend.platform_stats import (
+        PlatformStatsUnavailable,
+        get_platform_stats,
+    )
+    from backend_app.core.dependencies import get_service_supabase
+
     try:
-        from backend_app.backend.dashboard_aggregation_service import get_dashboard_service
-        svc = await get_dashboard_service()
-        data = await svc.get_dashboard_data(user={"id": "public"}, equity_days=30)
-        overview = data.get("overview", {})
-        bots = data.get("bots", {})
-        return {
-            "total_trades": overview.get("total_trades", 0),
-            "total_pnl": float(overview.get("today_pnl", 0.0)),
-            "win_rate": float(overview.get("win_rate", 0.0)),
-            "active_bots": int(bots.get("running", 0)),
-            "total_strategies": int(bots.get("total", 0)),
-            "daily_pnl": float(overview.get("today_pnl", 0.0)),
-            "weekly_pnl": float(overview.get("today_pnl", 0.0)),
-            "monthly_pnl": float(overview.get("today_pnl", 0.0)),
-        }
-    except Exception as e:
-        logger.warning(f"Error fetching stats from dashboard service: {e}")
-        return {
-            "total_trades": 0,
-            "total_pnl": 0.0,
-            "win_rate": 0.0,
-            "active_bots": 0,
-            "total_strategies": 0,
-            "daily_pnl": 0.0,
-            "weekly_pnl": 0.0,
-            "monthly_pnl": 0.0,
-        }
+        return await get_platform_stats(get_service_supabase())
+    except PlatformStatsUnavailable as exc:
+        logger.error(f"Platform stats unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PLATFORM_STATS_UNAVAILABLE",
+                "message": "Platform-wide statistics could not be computed.",
+            },
+        )
 
 
 # NOTE: Auth routes (/api/auth/register, /api/auth/login) are registered via

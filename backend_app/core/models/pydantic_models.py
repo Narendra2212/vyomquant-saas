@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator, validator
 
 # ── AUTH ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,23 @@ class ExchangeKeysRequest(BaseModel):
     password: Optional[str] = None
     uid: Optional[str] = None
     label: Optional[str] = None
+
+    #: EXCH-06. Whether this credential is for the venue's SANDBOX/testnet
+    #: environment rather than production.
+    #:
+    #: THIS FIELD WAS MISSING WHILE THE UI OFFERED IT. `core/
+    #: exchange_connection_schema.py` declares a `field_id="sandbox"` BOOLEAN
+    #: labelled "Testnet / Sandbox Mode" for binance and four other venues, and
+    #: this model -- the body of the `POST /api/exchange/keys` endpoint that
+    #: stores the credential -- had nowhere to receive it. With no
+    #: `extra="forbid"`, pydantic's default `ignore` applied: a client that
+    #: posted `sandbox: true` got HTTP 200 and the answer was discarded, so the
+    #: trader was told their credential was on testnet and it was on production.
+    #:
+    #: `False` is the default because that is exactly the behaviour every
+    #: existing caller already gets, so adding this field changes no request
+    #: that works today.
+    sandbox: bool = False
 
 
 class TestConnectionRequest(BaseModel):
@@ -417,6 +434,28 @@ class GlobalKillRequest(BaseModel):
         return v.strip()
 
 
+class PlatformReinitializeRequest(BaseModel):
+    """ADM-01. Body for ``POST /api/admin/reinitialize``.
+
+    This is the reset half of the global kill switch: it exists so an operator cannot
+    clear a halt without stating why and without acknowledging every independent hold
+    `GlobalKillSwitch.deactivate()` currently has registered (see
+    `backend_app/core/global_safety.py`'s ``HOLDS_KEY`` mechanism). ``acknowledge_holds``
+    defaults to empty, which is correct when nothing is holding the switch — `deactivate()`
+    itself refuses if any live hold was not named here.
+    """
+
+    confirm_code: str
+    reason: str = Field(..., min_length=3, description="Logged justification for clearing the halt")
+    acknowledge_holds: List[str] = Field(default_factory=list)
+
+    @validator("reason", pre=True, always=True)
+    def validate_reason_non_empty(cls, v):
+        if not v or not isinstance(v, str) or not v.strip():
+            raise ValueError("Reason must be a non-empty string.")
+        return v.strip()
+
+
 # ── STRATEGY LIMITS ───────────────────────────────────────────────────────
 
 
@@ -455,14 +494,43 @@ class PaymentMethod(BaseModel):
 
 
 class AddPaymentMethodRequest(BaseModel):
-    payment_method_id: str  # Stripe payment method ID (e.g., pm_xxx)
+    """The declared body of ``POST /api/billing/payment-methods``, WHICH ALWAYS REFUSES.
+
+    The route answers a coded 501: VyomQuant does not store payment instruments. Razorpay
+    collects the card inside Razorpay Checkout each time a subscription is bought, and there
+    is no Razorpay equivalent of a PaymentMethod object to copy card attributes out of.
+
+    THE MODEL IS KEPT ON PURPOSE even though the handler refuses. FastAPI validates the
+    shape before the handler runs, so a malformed request is answered by the platform's own
+    422 rather than by a hand-rolled check inside a route that was going to refuse anyway.
+    See ``tests/regression/baseline/billing_payment_methods.json``'s
+    ``_baseline_note_parameters`` for why the ``db`` dependency was dropped and this body
+    was not.
+
+    THE FIELD DESCRIPTIONS NAMED STRIPE, AND THEY ARE API DOCUMENTATION. Each read "... from
+    Stripe", and these strings are the ``description`` values that land in the OpenAPI schema
+    and in any generated client, so they told an integrator to source four values from a
+    provider this platform does not have. (Production serves no ``openapi.json`` -- it 404s
+    by design -- so they were not publicly exposed, but they were still the declared
+    contract.) They are now provider-neutral and say what the route actually does.
+    """
+
+    payment_method_id: str = Field(
+        ...,
+        description=(
+            "A provider payment-instrument identifier. Not used: this endpoint refuses and "
+            "stores nothing."
+        ),
+    )
     set_as_default: bool = False
-    # Real card metadata — must be sourced from Stripe PaymentMethod response,
-    # NOT hardcoded. Required to prevent fake/test card data persisting in prod.
-    brand: str = Field(..., description="Card network brand from Stripe (e.g., 'visa', 'mastercard')")
-    last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of card from Stripe")
-    expiry_month: int = Field(..., ge=1, le=12, description="Expiry month (1-12) from Stripe")
-    expiry_year: int = Field(..., ge=2024, description="Expiry year (4-digit) from Stripe")
+    # Card metadata. Still REQUIRED by the schema so the refusal cannot be mistaken for a
+    # validation pass, and still never persisted: no caller has ever had a provider
+    # PaymentMethod response to populate these from, which is why the route refuses instead
+    # of blaming the caller for omitting them.
+    brand: str = Field(..., description="Card network brand (e.g. 'visa', 'mastercard')")
+    last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of the card")
+    expiry_month: int = Field(..., ge=1, le=12, description="Expiry month (1-12)")
+    expiry_year: int = Field(..., ge=2024, description="Expiry year (4-digit)")
 
 
 # ── SUPPORT ───────────────────────────────────────────────────────────────
@@ -525,6 +593,36 @@ class NotificationChannels(BaseModel):
     mobile: bool = False
 
 
+#: NOTIF-02 — the alerts a preference may not switch off.
+#:
+#: `components/NotificationPreferences.jsx` ends with "Mandatory risk alerts (global kill
+#: switch triggers) cannot be disabled", and until migration 073 nothing enforced it: the
+#: panel offered the switch that disabled them. These three are the floor, and the reason each
+#: is on the list rather than the others is that its suppression leaves a customer unaware
+#: that their money is at risk or their account was reached.
+#:
+#:   * `kill_switch_activated` — the emergency halt. `routers/risk.py:849` is the only
+#:     `severity="critical"` dispatch in the tree, and it is the switch the sentence names.
+#:   * `stop_loss_triggered` — a stop-loss firing.
+#:   * `new_login_detected` — an authentication event; the person who would want it is not
+#:     necessarily the person who turned it off.
+#:
+#: Deliberately NOT here, because a floor that swallows everything stops being a floor:
+#: `api_key_expiring` (a maintenance warning a customer may legitimately mute),
+#: `trade_executed`, `daily_pnl_summary`, `bot_state_change`, `backtest_complete`, and all
+#: three delivery channels.
+#:
+#: Declared beside the model rather than in the router so the schema constraint
+#: (`chk_notification_settings_mandatory_alerts`), the API refusal and any later reader all
+#: name one list. `tests/test_notif02_mandatory_alert_floor_postgres.py` asserts this tuple
+#: and the constraint's predicate still agree.
+MANDATORY_NOTIFICATION_EVENTS: tuple = (
+    "kill_switch_activated",
+    "stop_loss_triggered",
+    "new_login_detected",
+)
+
+
 class NotificationEvents(BaseModel):
     trade_executed: bool = True
     stop_loss_triggered: bool = True
@@ -534,6 +632,32 @@ class NotificationEvents(BaseModel):
     new_login_detected: bool = True
     api_key_expiring: bool = True
     backtest_complete: bool = False
+
+    @model_validator(mode="after")
+    def mandatory_alerts_stay_on(self) -> "NotificationEvents":
+        """Refuse a payload that switches a mandatory safety alert off (NOTIF-02).
+
+        Refused rather than silently coerced to ``True``. A coercion would store the right
+        value and tell the customer their change was saved, so the switch would spring back on
+        the next read with no explanation — which is the behaviour the panel's own error
+        handling calls out as the only signal a trader used to get.
+
+        This is the readable refusal, not the control: the database constraint is what holds
+        when a payload reaches the table by another route.
+        """
+        disabled = [
+            name
+            for name in MANDATORY_NOTIFICATION_EVENTS
+            if getattr(self, name, True) is False
+        ]
+        if disabled:
+            raise ValueError(
+                "These alerts cannot be switched off: "
+                + ", ".join(sorted(disabled))
+                + ". They report an emergency halt, a stop-loss firing and a new sign-in, "
+                "and the platform delivers them regardless of preference."
+            )
+        return self
 
 
 class NotificationSettingsRequest(BaseModel):

@@ -25,7 +25,7 @@ Any state can transition to: FAILED, CANCELLED, REJECTED
 """
 
 import logging
-import asyncio
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
@@ -110,36 +110,35 @@ class OrderStateMachine:
     - State consistency across concurrent operations
     """
     
-    def __init__(self):
-        self._current_states: Dict[str, OrderState] = {}
-        self._transition_history: Dict[str, List[StateTransition]] = {}
-        self._lock_prefix = "order_state_lock"
-        self._state_prefix = "order_state"
-    
-    async def _acquire_state_lock(self, execution_id: str) -> bool:
-        """Acquire Redis lock for atomic state transition."""
-        try:
-            lock_key = f"{self._lock_prefix}:{execution_id}"
-            redis_client = await redis_manager.get_client()
-            if redis_client:
-                # Use Redis SET NX for lock acquisition
-                result = await redis_client.set(lock_key, "locked", nx=True, ex=30)
-                return bool(result)
-            return False
-        except Exception as e:
-            logger.error(f"Failed to acquire state lock for {execution_id}: {e}")
-            return False
-    
-    async def _release_state_lock(self, execution_id: str) -> None:
-        """Release Redis lock after state transition."""
-        try:
-            lock_key = f"{self._lock_prefix}:{execution_id}"
-            redis_client = await redis_manager.get_client()
-            if redis_client:
-                await redis_client.delete(lock_key)
-        except Exception as e:
-            logger.error(f"Failed to release state lock for {execution_id}: {e}")
-    
+    # RT-25: the previous implementation took a Redis lock with ``asyncio.run()`` from inside
+    # ``transition()``. ``transition()`` is synchronous but is called from async code (the
+    # venue-reconciliation loop and the event router), and ``asyncio.run()`` raises
+    # ``RuntimeError: asyncio.run() cannot be called from a running event loop`` there - so
+    # every reconciliation update crashed before it touched an order. It was also advisory
+    # only (a failed acquire "proceeded with caution"). The state this guards
+    # (``_current_states`` / ``_transition_history``) lives in THIS process's memory, so an
+    # in-process lock is the correct and sufficient primitive; it is safe to call from sync
+    # code, from a coroutine, and from worker threads, and it can never block on I/O.
+    def _state_lock_for(self, execution_id: str) -> "threading.RLock":
+        with self._locks_guard:
+            lock = self._locks.get(execution_id)
+            if lock is None:
+                lock = self._locks[execution_id] = threading.RLock()
+            return lock
+
+    def _prune_locks(self) -> None:
+        """Bound the lock table: drop idle locks for executions no longer tracked."""
+        if len(self._locks) <= 2 * self.max_history_entries:
+            return
+        with self._locks_guard:
+            for eid in [e for e in self._locks if e not in self._current_states]:
+                lock = self._locks[eid]
+                if lock.acquire(blocking=False):  # idle -> safe to drop
+                    try:
+                        del self._locks[eid]
+                    finally:
+                        lock.release()
+
     # Valid state transitions
     VALID_TRANSITIONS: Dict[OrderState, Set[OrderState]] = {
         OrderState.CREATED: {
@@ -183,7 +182,13 @@ class OrderStateMachine:
         self._current_states: OrderedDict[str, OrderState] = OrderedDict()
         self._pre_transition_hooks: List[Callable] = []
         self._post_transition_hooks: List[Callable] = []
-        
+        # RT-25: per-execution in-process locks (see _state_lock_for). The class used to carry
+        # a SECOND, dead __init__ above this one that set the Redis-lock attributes; this one
+        # shadowed it, so the old lock helpers always failed with AttributeError and the
+        # "lock" never actually locked anything.
+        self._locks: Dict[str, "threading.RLock"] = {}
+        self._locks_guard = threading.Lock()
+
         logger.info("OrderStateMachine initialized")
     
     def can_transition(self, from_state: OrderState, to_state: OrderState) -> bool:
@@ -225,13 +230,8 @@ class OrderStateMachine:
         # Returns: StateTransition record
         # Raises: InvalidStateTransitionError if transition is invalid and not forced
         # ATOMICITY: Acquire lock for atomic state transition
-        lock_acquired = asyncio.run(self._acquire_state_lock(execution_id))
-        
-        if not lock_acquired:
-            logger.warning(f"Failed to acquire state lock for {execution_id}, retry or skip")
-            # In production, this might need retry logic or raise exception
-            # For now, proceed with caution
-        
+        state_lock = self._state_lock_for(execution_id)
+        state_lock.acquire()
         try:
             # Validate current state matches
             current_stored_state = self._current_states.get(execution_id)
@@ -301,7 +301,8 @@ class OrderStateMachine:
             return transition_record
         finally:
             # ATOMICITY: Release lock after transition (success or failure)
-            asyncio.run(self._release_state_lock(execution_id))
+            state_lock.release()
+            self._prune_locks()
     
     def _log_transition(self, transition: StateTransition):
         # STEP 3.9: Log state transition with full context

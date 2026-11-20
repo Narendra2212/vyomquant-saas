@@ -203,10 +203,22 @@ class DistributedRateLimiter:
             )
         
         except Exception as e:
-            logger.error(f"STEP 6: Rate limit check failed: {e}")
-            # Fail-safe: allow request on error
+            # RL-01: a blanket fail-open here meant a Redis outage silently dropped
+            # EVERY rate limit this class protects, including ORDERS_PER_MINUTE -- the
+            # one whose whole job is keeping this user's own order submissions under
+            # whatever a venue's real API limit allows. Exceeding that is not a cosmetic
+            # inconvenience; it risks the exchange banning the account outright, which
+            # is categorically worse than refusing a request this check could not verify.
+            # SIGNALS_PER_MINUTE/API_CALLS_PER_SECOND/WEBSOCKET_CONNECTIONS stay fail-open
+            # -- internal, UI-facing limits where refusing a legitimate request on a
+            # transient Redis blip is a worse outcome than letting it through.
+            fail_closed = limit_type is RateLimitType.ORDERS_PER_MINUTE
+            logger.error(
+                f"STEP 6: Rate limit check failed for {limit_type.value}: {e}. "
+                f"{'Failing CLOSED (venue-rate-limit-relevant).' if fail_closed else 'Failing open (cosmetic limit).'}"
+            )
             return RateLimitStatus(
-                allowed=True,
+                allowed=not fail_closed,
                 current_count=0,
                 limit=0,
                 remaining=0,
