@@ -556,28 +556,39 @@ class OrderWatchdog:
                             f"Exchange filled={result.filled_size}"
                         )
                         
+                        # Read both fills BEFORE the update overwrites the local one.
+                        res_filled_dec = _qty(result.filled_size) or Decimal("0")
+                        order_filled_dec = _qty(order.filled_size) or Decimal("0")
+                        contradiction = self._is_contradiction(order, result)
+
                         # Update order from exchange status
                         await self._update_order_from_status(order, result)
 
-                        # Trigger alert for fill
-                        res_filled_dec = Decimal(result.filled_size or "0")
-                        order_filled_dec = Decimal(order.filled_size or "0")
-                        if res_filled_dec > order_filled_dec:
-                            fill_amount = res_filled_dec - order_filled_dec
+                        if not contradiction:
+                            # RECON-FILL-01: the venue moved the order FORWARD (a resting
+                            # order filled, or filled further). That is the normal life of a
+                            # limit order, not a discrepancy: no mismatch row, no critical
+                            # "Order Stuck Alert". Production 2026-11-20: every delayed
+                            # Testnet fill produced both.
+                            logger.info(
+                                "STEP 9: Order %s progressed on the venue: %s -> %s, filled %s -> %s",
+                                order.execution_id, order_status_val, res_status_val,
+                                order_filled_dec, res_filled_dec,
+                            )
+                        else:
                             await self._trigger_alert(
                                 order,
-                                f"STEP 9: Order fill detected via reconciliation. "
-                                f"Filled {fill_amount} @ {result.avg_price}"
+                                f"STEP 9: Venue contradicts local state: "
+                                f"local status={order_status_val} filled={order_filled_dec}, "
+                                f"venue status={res_status_val} filled={res_filled_dec}"
                             )
-
-                        # RT-16: this is the discrepancy ReconciliationScheduler exists to
-                        # escalate, and until now nothing ever wrote one for it to find.
-                        self._record_reconciliation_mismatch(
-                            order, order_status_val, res_status_val,
-                            order_filled_dec, res_filled_dec,
-                        )
-
-                        discrepancy_count += 1
+                            # RT-16: this is the discrepancy ReconciliationScheduler exists
+                            # to escalate.
+                            self._record_reconciliation_mismatch(
+                                order, order_status_val, res_status_val,
+                                order_filled_dec, res_filled_dec,
+                            )
+                            discrepancy_count += 1
                     
                     reconciled_count += 1
                     
@@ -690,6 +701,29 @@ class OrderWatchdog:
         
         return orders
     
+    def _is_contradiction(self, order: ExecutionRecordModel, result) -> bool:
+        """RECON-FILL-01: does the venue's answer CONTRADICT local state, or just advance it?
+
+        Forward progress -- the venue status means `executing` or `completed`, the venue
+        fill is not smaller than the local one, and a `completed` order has a non-zero
+        fill -- is how every resting limit order ends, and is not a discrepancy.
+
+        Everything else is: a fill that went backwards, a venue cancel / reject / expiry
+        the platform did not record, a "completed" with nothing filled, or a status this
+        file does not know. Those are what the mismatch table and alert exist for.
+        """
+        venue_raw = result.status.value if hasattr(result.status, "value") else str(result.status)
+        venue = _VENUE_STATUS_AS_LOCAL.get(str(venue_raw).lower())
+        if venue not in ("executing", "completed"):
+            return True
+        venue_fill = _qty(result.filled_size)
+        local_fill = _qty(order.filled_size) or Decimal("0")
+        if venue_fill is None or venue_fill < local_fill:
+            return True
+        if venue == "completed" and venue_fill <= 0:
+            return True
+        return False
+
     def _has_order_changed(self, order: ExecutionRecordModel, result) -> bool:
         """
         STEP 9: Check if order status has changed on exchange.

@@ -113,7 +113,10 @@ class TestMismatchIsRecorded:
     async def test_a_status_divergence_writes_one_medium_row(self, sqlite_db):
         session, maker = sqlite_db
         _seed_order(session, status=ExecutionStatus.EXECUTING, filled_size="0")
-        w = _watchdog(session, _FakeExecutor(status="completed", filled_size="1"))
+        # RECON-FILL-01: a venue cancel the platform never recorded is a real divergence.
+        # (executing -> completed with a fill is normal progress and writes nothing; see
+        # tests/test_recon_fill01_a_fill_is_not_a_mismatch.py.)
+        w = _watchdog(session, _FakeExecutor(status="canceled", filled_size="0"))
 
         await w._reconcile_open_orders()
 
@@ -144,9 +147,9 @@ class TestMismatchIsRecorded:
 
     async def test_the_field_names_filled_size_when_that_is_what_diverged(self, sqlite_db):
         session, maker = sqlite_db
-        _seed_order(session, status=ExecutionStatus.EXECUTING, filled_size="0")
-        # Same status, different fill - the earlier branch of _has_order_changed.
-        w = _watchdog(session, _FakeExecutor(status="executing", filled_size="0.5"))
+        _seed_order(session, status=ExecutionStatus.EXECUTING, filled_size="0.5")
+        # Same status, the venue's fill went BACKWARDS - a contradiction (RECON-FILL-01).
+        w = _watchdog(session, _FakeExecutor(status="executing", filled_size="0.2"))
 
         await w._reconcile_open_orders()
 
@@ -156,7 +159,7 @@ class TestMismatchIsRecorded:
     async def test_a_record_failure_is_logged_and_does_not_raise(self, sqlite_db, monkeypatch):
         session, maker = sqlite_db
         order = _seed_order(session, status=ExecutionStatus.EXECUTING, filled_size="0")
-        w = _watchdog(session, _FakeExecutor(status="completed", filled_size="1"))
+        w = _watchdog(session, _FakeExecutor(status="canceled", filled_size="0"))
 
         def _boom(self, *a, **k):
             raise RuntimeError("table locked")
