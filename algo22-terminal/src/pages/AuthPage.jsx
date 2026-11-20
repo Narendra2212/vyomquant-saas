@@ -343,7 +343,13 @@ import { getAuthRedirectUrl } from "../config";
 import { api } from "../api";
 import { LEGAL_VERSION, SIGNUP_REQUIRED_DOCUMENTS } from "../legal/documents";
 import { COUNTRIES } from "../legal/countries";
-import { capturePendingReferral } from "../lib/pendingReferral";
+import {
+  capturePendingReferral,
+  clearPendingReferral,
+  readPendingReferral,
+  setPendingReferral,
+  validateReferralCode,
+} from "../lib/pendingReferral";
 
 // LEGAL-01: mirrored here only to refuse early in the form. The SERVER holds the
 // authoritative list (backend_app/core/restricted_jurisdictions.py) and refuses
@@ -478,9 +484,55 @@ export default function AuthPage({ mode = "signin" }) {
 
   // REF-ATTR-01: `/signup?ref=CODE` is the referral link. Remember the code until the
   // account's first signed-in session claims it (AuthGuard -> POST /api/referral/claim).
-  useEffect(() => {
-    capturePendingReferral(typeof window !== "undefined" ? window.location.search : "");
-  }, []);
+  // REF-UI-01: the same code pre-fills the form's Referral code field, which a user without
+  // a link can also type into.
+  const [referralCode, setReferralCode] = useState(() => {
+    const fromLink = capturePendingReferral(typeof window !== "undefined" ? window.location.search : "");
+    return fromLink || readPendingReferral() || "";
+  });
+  // null (not checked) | "checking" | "valid" | "invalid" | "unknown" (check unavailable)
+  const [referralStatus, setReferralStatus] = useState(null);
+  const [referralMessage, setReferralMessage] = useState("");
+
+  const checkReferral = async (raw = referralCode) => {
+    const code = String(raw || "").trim();
+    if (!code) {
+      setReferralStatus(null);
+      setReferralMessage("");
+      return null;
+    }
+    setReferralStatus("checking");
+    const result = await validateReferralCode(code);
+    const status = result.valid === true ? "valid" : result.valid === false ? "invalid" : "unknown";
+    setReferralStatus(status);
+    setReferralMessage(
+      status === "valid"
+        ? "Referral code applied"
+        : status === "invalid"
+          ? result.message || "Referral code not recognised"
+          : "Couldn't check this code right now. It will be checked again when you first sign in.",
+    );
+    return status;
+  };
+
+  // REF-UI-01: what to remember before the account exists. A code that the server has said
+  // is invalid refuses the submit (the user can fix it or empty the field); an emptied field
+  // forgets any code a link left behind; an unchecked or unverifiable code is kept, because
+  // the claim after first sign-in validates it again with the same rules.
+  const settleReferralBeforeSignup = async () => {
+    const code = referralCode.trim();
+    if (!code) {
+      clearPendingReferral();
+      return true;
+    }
+    const status = referralStatus === "valid" ? "valid" : await checkReferral(code);
+    if (status === "invalid") {
+      setError("That referral code isn't valid. Check it, or leave the field empty to continue without one.");
+      return false;
+    }
+    setPendingReferral(code);
+    return true;
+  };
 
   // Mode: "signin" | "signup"
   const [authMode, setAuthMode] = useState(mode === "signup" ? "signup" : "signin");
@@ -647,6 +699,8 @@ export default function AuthPage({ mode = "signin" }) {
     }
 
     if (loadingAction) return;
+
+    if (isUp && !(await settleReferralBeforeSignup())) return;
 
     clearStatus();
     setLoadingAction("password_auth");
@@ -1027,6 +1081,8 @@ export default function AuthPage({ mode = "signin" }) {
   // Google OAuth Fallback
   const handleGoogleAuth = async () => {
     if (loadingAction) return;
+    // REF-UI-01: a Google sign-up carries the typed referral code the same way.
+    if (isUp && !(await settleReferralBeforeSignup())) return;
     clearStatus();
     setLoadingAction("google");
     try {
@@ -1260,6 +1316,61 @@ export default function AuthPage({ mode = "signin" }) {
                     style={{ color: statusToken("ok").fg }}
                   >
                     <Check size={10} aria-hidden="true" /> Passwords match
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* REF-UI-01: Referral code (Sign-Up only, optional) */}
+            {isUp && (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <label htmlFor="auth-referral-code" className={passwordLabelClass}>
+                    Referral code
+                  </label>
+                  <span className="text-micro uppercase tracking-wide text-content-muted">Optional</span>
+                </div>
+                <input
+                  id="auth-referral-code"
+                  type="text"
+                  value={referralCode}
+                  onChange={(e) => {
+                    setReferralCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 32));
+                    setReferralStatus(null);
+                    setReferralMessage("");
+                  }}
+                  onBlur={() => { checkReferral(); }}
+                  placeholder="e.g. VYOM1234"
+                  disabled={isLoading}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={32}
+                  aria-invalid={referralStatus === "invalid" ? "true" : undefined}
+                  aria-describedby={referralMessage ? "auth-referral-code-status" : undefined}
+                  className={passwordInputClass}
+                  style={{
+                    borderColor: referralStatus === "invalid" ? token.status.error.fg : token.line.default,
+                    opacity: isLoading ? 0.6 : 1,
+                    letterSpacing: "0.08em",
+                  }}
+                />
+                {referralStatus === "checking" && (
+                  <p id="auth-referral-code-status" className="text-body text-content-muted">Checking code…</p>
+                )}
+                {referralMessage && referralStatus !== "checking" && (
+                  <p
+                    id="auth-referral-code-status"
+                    className="inline-flex items-center gap-1 text-body"
+                    style={{
+                      color: referralStatus === "valid"
+                        ? statusToken("ok").fg
+                        : referralStatus === "invalid"
+                          ? token.status.error.fg
+                          : undefined,
+                    }}
+                  >
+                    {referralStatus === "valid" && <Check size={10} aria-hidden="true" />}
+                    {referralMessage}
                   </p>
                 )}
               </div>

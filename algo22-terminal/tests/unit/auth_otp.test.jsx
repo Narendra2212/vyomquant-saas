@@ -233,6 +233,62 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
       expect(await screen.findByRole('heading', { name: /Verify Your Identity/i })).toBeDefined();
     });
 
+    it('REF-UI-01: a typed referral code is checked, and an invalid one blocks sign-up', async () => {
+      const pr = await import('../../src/lib/pendingReferral');
+      window.localStorage.clear();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ valid: false, message: 'Invalid referral code' }),
+      });
+      const signUpSpy = vi.spyOn(supabase.auth, 'signUp');
+      render(
+        <MemoryRouter>
+          <AuthPage mode="signup" />
+        </MemoryRouter>
+      );
+      const field = screen.getByLabelText(/^Referral code$/i);
+      fireEvent.change(field, { target: { value: 'bad-12' } });
+      expect(field.value).toBe('BAD12');
+      fireEvent.blur(field);
+      expect(await screen.findByText(/Invalid referral code/i)).toBeDefined();
+
+      fireEvent.change(screen.getByPlaceholderText('trader@vyomquant.io'), { target: { value: 'ref@vyomquant.io' } });
+      fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.change(screen.getByLabelText(/^Confirm Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /agree to the/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /at least 18/i }));
+      fireEvent.change(screen.getByLabelText(/which country are you in/i), { target: { value: 'IN' } });
+      fireEvent.click(screen.getByRole('button', { name: /CREATE ACCOUNT & SEND OTP/i }));
+      expect(await screen.findByText(/referral code isn't valid/i)).toBeDefined();
+      expect(signUpSpy).not.toHaveBeenCalled();
+      expect(pr.readPendingReferral()).toBeNull();
+      fetchSpy.mockRestore();
+    });
+
+    it('REF-UI-01: a valid typed code is remembered for the claim after first sign-in', async () => {
+      const pr = await import('../../src/lib/pendingReferral');
+      window.localStorage.clear();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ valid: true, message: 'Valid referral code' }),
+      });
+      vi.spyOn(supabase.auth, 'signUp').mockResolvedValueOnce({ data: { user: { id: 'usr_ref' } }, error: null });
+      render(
+        <MemoryRouter>
+          <AuthPage mode="signup" />
+        </MemoryRouter>
+      );
+      fireEvent.change(screen.getByLabelText(/^Referral code$/i), { target: { value: 'good1234' } });
+      fireEvent.change(screen.getByPlaceholderText('trader@vyomquant.io'), { target: { value: 'ref2@vyomquant.io' } });
+      fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.change(screen.getByLabelText(/^Confirm Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /agree to the/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /at least 18/i }));
+      fireEvent.change(screen.getByLabelText(/which country are you in/i), { target: { value: 'IN' } });
+      fireEvent.click(screen.getByRole('button', { name: /CREATE ACCOUNT & SEND OTP/i }));
+      expect(await screen.findByRole('heading', { name: /Verify Your Identity/i })).toBeDefined();
+      expect(pr.readPendingReferral()).toBe('GOOD1234');
+      fetchSpy.mockRestore();
+    });
+
     it('AUTH-DUP-01: an address that already has an account is told to sign in, not asked for a code', async () => {
       // Supabase answers signUp for an existing address with success, an EMPTY identities
       // list and no email. Production 2026-11-20: the page asked for a code that never came.

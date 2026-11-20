@@ -688,7 +688,6 @@ async def get_payout_history(
 async def validate_referral_code(
     request: Request,
     request_body: ValidateReferralCodeRequest,
-    supabase: SupabaseClient = Depends(get_request_supabase),
 ):
     """
     Validate a referral code before signup.
@@ -708,9 +707,11 @@ async def validate_referral_code(
     UUID disclosure the remediation note names, not a rewrite of this endpoint's
     authentication.
     """
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database connection unavailable")
-
+    # REF-UI-01: PUBLIC by design. The signup form checks a typed code before any session
+    # exists, so this cannot require a login. The REF-02 note above records that the old
+    # header requirement verified nothing anyway (any non-empty bearer string passed). What
+    # bounds it is unchanged: 30/minute per client, one exact code per call, and an answer
+    # of valid/invalid only -- never the referrer's id or name.
     svc = _get_service_client()
     if not svc:
         raise HTTPException(status_code=503, detail="Database connection unavailable")
