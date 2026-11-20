@@ -378,7 +378,8 @@ class OrderWatchdog:
                 await self.recheck_unresolved_submissions()
 
                 self.checks_run += 1
-                
+                self._end_cycle_transaction()
+
                 # Wait before next check
                 await asyncio.sleep(self.config.check_interval_seconds)
                 
@@ -393,6 +394,24 @@ class OrderWatchdog:
                 logger.error(f"Watchdog error: {e}", exc_info=True)
                 self._reset_session_after_error()
                 await asyncio.sleep(5)  # Short wait on error
+
+    def _end_cycle_transaction(self) -> None:
+        """TXN-IDLE-01. Close the shared session's transaction at the end of every cycle.
+
+        Found in production 2026-11-19: a cycle that only READ never committed, so the one
+        session both loops share for the life of the process held a single transaction open
+        for hours ("idle in transaction", 2 h 27 m, re-reading execution_records each
+        second). It blocked ``ALTER TABLE execution_records`` (migration 079 queued behind
+        it and every later query on the table queued behind that) and pinned a snapshot that
+        stops autovacuum reclaiming the table. A commit here persists whatever the cycle
+        meant to keep (its writes commit on their own already) and lets the next cycle start
+        a fresh transaction. A failure is handled like a failed cycle.
+        """
+        try:
+            self.db.commit()
+        except Exception:  # noqa: BLE001
+            logger.warning("Watchdog: ending the cycle's transaction failed", exc_info=True)
+            self._reset_session_after_error()
 
     def _reset_session_after_error(self) -> None:
         """POS-TXN-01. Roll the long-lived session back after a cycle failed.
@@ -435,7 +454,8 @@ class OrderWatchdog:
                     continue
 
                 await self._reconcile_open_orders()
-                
+                self._end_cycle_transaction()
+
                 # Wait 5-10 seconds before next reconciliation
                 # Randomize slightly to prevent thundering herd
                 wait_time = 5 + (hash(asyncio.get_event_loop().time()) % 5)
