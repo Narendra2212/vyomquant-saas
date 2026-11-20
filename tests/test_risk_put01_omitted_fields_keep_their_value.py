@@ -69,3 +69,33 @@ def test_each_save_notifies_under_its_own_idempotency_key():
     src = (pathlib.Path(__file__).resolve().parents[1] / "backend_app/routers/risk.py").read_text()
     assert '"idempotency_key": f"risk_settings:{uid}"' not in src
     assert "risk_settings:{uid}:{updated_record['updated_at']}" in src
+
+
+@patch("backend_app.routers.risk.get_service_supabase_async")
+def test_a_partial_save_on_a_cold_worker_keeps_the_persisted_limit(mock_sb, monkeypatch):
+    """RISK-PUT-02: production, after RISK-PUT-01 shipped: the save ran on a worker whose
+    process-local store held only the platform defaults, so an omitted Max Daily Loss fell
+    back to 500 although the user's saved row said 250. The baseline must be what
+    GET /settings answers."""
+    monkeypatch.setenv("SUPABASE_URL", "https://stub.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "stub-anon-key")
+    sb = Mock()
+    sb.table.return_value.upsert.return_value.execute.return_value = Mock(data=[{"ok": True}])
+    mock_sb.side_effect = AsyncMock(return_value=sb)
+    uid = "risk_put02_cold_worker"
+    risk_router._user_risk_settings.pop(uid, None)  # a worker that never loaded this user
+
+    async def persisted(_user):
+        return {"max_daily_loss": 250.0, "max_positions": 4, "max_leverage": 3,
+                "circuit_breaker_armed": True, "kill_switches": {}}
+
+    monkeypatch.setattr(risk_router, "get_risk_settings", persisted)
+    app.dependency_overrides[get_current_user] = lambda: {"id": uid, "access_token": "t"}
+    try:
+        response = client.put("/api/risk/settings", json={"max_leverage": 2})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    saved = sb.table.return_value.upsert.call_args[0][0]
+    assert saved["max_daily_loss"] == 250.0
+    assert saved["max_positions"] == 4
