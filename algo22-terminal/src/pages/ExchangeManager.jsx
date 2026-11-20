@@ -370,6 +370,7 @@ import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
 import { ConfirmDialog } from '../components/ds/ConfirmDialog';
 import { MfaStepUpDialog } from '../components/MfaStepUpDialog';
+import { isMfaStepUpRequired } from '../lib/mfaStepUp';
 import { ExchangeStatus } from '../components/ds/ExchangeStatus';
 import { Field } from '../components/ds/Field';
 import { Metric, NotAvailableMarker } from '../components/ds/Metric';
@@ -460,26 +461,15 @@ const MFA_CANCELLED_MESSAGE =
   "Verification was cancelled, so nothing was changed. Your details are still on the form — "
   + "save again when you are ready to confirm with your authenticator.";
 
-/**
- * Is this the `require_aal2` refusal — the one a trader can clear by verifying?
+/*
+ * `isMfaStepUpRequired` now lives in `lib/mfaStepUp.js`, imported at the top of this file.
  *
- * ONE definition, read by both `sanitizeErrorMessage` (for its copy) and the write handlers
- * (to decide whether to offer the step-up). These were about to be two copies of the same
- * predicate, which is how one of them comes to recognise a refusal the other does not.
- *
- * Both error shapes are read for the reason `sanitizeErrorMessage` documents at length:
- * `apiClient` rejects with an `ApiError` carrying `status`/`data` as own properties, while
- * this page's tests (and any direct axios caller) use the `response` shape.
- *
- * The detail match stays a regex over the server's sentence rather than a code, because
- * `core/dependencies.py` answers this one with a plain string and no `error` code. If that
- * ever becomes structured, this is the single place that learns about it.
+ * It moved for the reason its own comment here used to give: it was about to become two
+ * copies of the same predicate, because `pages/Billing.jsx` needs it for
+ * `POST /api/billing/resume`, which carries the same `require_aal2` dependency these
+ * exchange-key writes do. Two copies on an authentication boundary is how one page comes to
+ * recognise a refusal the other does not. Nothing about the predicate changed.
  */
-function isMfaStepUpRequired(err) {
-  const status = err?.status ?? err?.response?.status;
-  const detail = err?.data?.detail ?? err?.response?.data?.detail;
-  return status === 403 && typeof detail === "string" && /two-factor|mfa/i.test(detail);
-}
 
 function sanitizeErrorMessage(err, fallback = "An error occurred. Please try again.") {
   if (!err) return fallback;

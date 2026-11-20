@@ -441,6 +441,9 @@ import {
 
 import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
+import { MfaStepUpDialog } from '../components/MfaStepUpDialog';
+import { isMfaStepUpRequired } from '../lib/mfaStepUp';
+import { SUBSCRIPTION_CONTROL, subscriptionControlFor } from '../lib/billingControls';
 import { DataTable } from '../components/ds/DataTable';
 import { Metric, NotAvailableMarker } from '../components/ds/Metric';
 import { PageHeader } from '../components/ds/PageHeader';
@@ -928,6 +931,24 @@ export default function Billing() {
   const [notice, setNotice] = useState(null);
 
   /*
+    MFA-STEPUP-02. The pending AAL2 step-up: `{ label, operation }` or `null`.
+
+    `POST /api/billing/resume` carries `require_aal2` (`routers/billing.py`, SEC-15), so a
+    session at `aal1` is refused with a 403 the customer CAN clear. Before this, that refusal
+    reached the notice band as a flat failure — the customer was told resuming did not work,
+    with no way to do the thing the server was actually asking for. `pages/ExchangeManager.jsx`
+    already ran the challenge in place for the same refusal; this is that workflow, here.
+
+    `operation` is a thunk, so the retry re-runs the exact request that was refused.
+
+    DELIBERATELY NOT WIRED TO CANCELLATION. `POST /api/billing/cancel` is ungated on purpose
+    and asserted so: gating it would mean a customer who never enrolled a factor could not
+    stop their own billing. There is no refusal to clear there, so a step-up in front of it
+    would be a challenge the server never asks for — see `lib/mfaStepUp.js`.
+  */
+  const [stepUp, setStepUp] = useState(null);
+
+  /*
     The currency the catalogue reader asks for, as a ref rather than a dependency.
 
     This is `currencyRef` from before the migration, at the same lifetime and holding the same
@@ -1338,6 +1359,19 @@ export default function Billing() {
       });
       refetchEntitlements();
     } catch (err) {
+      /*
+        MFA-STEPUP-02: the refusal a customer can clear is handled here rather than
+        reported as a failure. `require_aal2` answers 403 for an `aal1` session, and
+        resuming is a real action the customer is entitled to take — they just have to
+        confirm it. The step-up runs the challenge and then re-issues THIS request.
+
+        `setIsResumeLoading(false)` still happens in `finally`, so the control is live
+        again behind the dialog and the retry can set its own loading state.
+      */
+      if (isMfaStepUpRequired(err)) {
+        setStepUp({ label: 'resume this subscription', operation: handleResume });
+        return;
+      }
       setNotice({
         severity: 'error',
         message: writeFailureMessage(err, 'Failed to resume subscription.'),
@@ -1394,6 +1428,20 @@ export default function Billing() {
   const isPaymentFailed = status === 'past_due' || status === 'payment_failed';
   const isCancelled = status === 'cancelled';
   const planIsPaid = planName.available && String(planName.value).toLowerCase() !== 'free';
+
+  /*
+    BILL-CANCEL-01. Which subscription control the panel offers, decided in
+    `lib/billingControls.js` so the rule can be tested without mounting this page.
+
+    `cancellationIsScheduled` requires the flag to be BOTH reported and true. An unreported
+    `cancel_at_period_end` therefore means "not scheduled as far as this page knows", which
+    keeps Cancel reachable rather than rendering neither control -- see that module.
+  */
+  const subscriptionControl = subscriptionControlFor({
+    planIsPaid,
+    isCancelled,
+    cancellationIsScheduled: cancelAtPeriodEnd.available && cancelAtPeriodEnd.value === true,
+  });
 
   /*
     `entitlements.features` is read and DROPPED, exactly as before: the previous version stored
@@ -2106,7 +2154,7 @@ export default function Billing() {
               fontSize: 11 ×2 → `ds/CommandButton`'s own step. */}
           {planIsPaid ? (
             <div className="flex flex-wrap gap-2.5 border-t border-line-default pt-4">
-              {cancelAtPeriodEnd.available && cancelAtPeriodEnd.value ? (
+              {subscriptionControl === SUBSCRIPTION_CONTROL.RESUME ? (
                 <CommandButton
                   intent="live"
                   icon={RefreshCw}
@@ -2117,10 +2165,33 @@ export default function Billing() {
                   Resume subscription
                 </CommandButton>
               ) : null}
-              {cancelAtPeriodEnd.available
-              && !cancelAtPeriodEnd.value
-              && !isCancelled
-              && !isPaymentFailed ? (
+              {/*
+                BILL-CANCEL-01. SHOWN UNLESS CANCELLATION IS ALREADY SCHEDULED, and the two
+                conditions that used to hide it are gone deliberately.
+
+                `!isPaymentFailed` HID THE CONTROL FROM THE CUSTOMER WHO MOST NEEDS IT. A
+                subscription at `past_due`/`payment_failed` is one the platform is still
+                trying to collect on; hiding Cancel there left the customer unable to stop
+                their own billing from the product, with support as the only route out. That
+                is the exact harm `routers/billing.py::cancel_subscription` refuses to
+                create -- it is deliberately NOT gated on AAL2 so that "a paying customer
+                who never enrolled a factor" can always stop being charged, and
+                `test_cancel_subscription_is_not_gated_so_a_customer_can_always_stop_billing`
+                enforces it. Hiding the button re-created that trap in the UI instead, which
+                the server-side guard cannot see.
+
+                `cancelAtPeriodEnd.available` was the second hole. That field is
+                `ABSENCE.UNREPORTED` (`design/pageFields.js`), so any entitlements response
+                that omits `cancel_at_period_end` rendered NEITHER button and left the page
+                with no cancellation path at all. The condition is now inverted: the control
+                is withheld only when the page positively knows a cancellation is already
+                scheduled, because that is the only state in which cancelling again means
+                nothing. Not knowing is not a reason to strand someone in a subscription.
+
+                `isCancelled` stays: a subscription already in `cancelled` has nothing left
+                to cancel, and Resume is the action that state offers.
+              */}
+              {subscriptionControl === SUBSCRIPTION_CONTROL.CANCEL ? (
                 <CommandButton
                   intent="destructive"
                   icon={XCircle}
@@ -2476,6 +2547,37 @@ export default function Billing() {
           </p>
         </Panel>
       </div>
+
+      {/*
+        MFA-STEPUP-02. The AAL2 step-up, a sibling of the page rather than something either
+        write handler owns, so no handler holds overlay state — the same shape
+        `pages/ExchangeManager.jsx` uses.
+
+        `onVerified` reads the thunk BEFORE clearing `stepUp`, then runs it. Clearing first
+        and reading after hands `undefined` to the retry, and the operation is silently
+        dropped after a successful challenge: the customer verifies, the dialog closes, and
+        nothing happens. That is the most expensive way this can fail, because it looks like
+        it worked.
+      */}
+      <MfaStepUpDialog
+        open={stepUp !== null}
+        operationLabel={stepUp?.label}
+        onCancel={() => {
+          setStepUp(null);
+          setNotice({
+            severity: 'guidance',
+            message:
+              'Verification was cancelled, so your subscription was not resumed. Nothing '
+              + 'changed — choose Resume again when you are ready to confirm with your '
+              + 'authenticator.',
+          });
+        }}
+        onVerified={() => {
+          const operation = stepUp?.operation;
+          setStepUp(null);
+          if (typeof operation === 'function') operation();
+        }}
+      />
     </div>
   );
 }
