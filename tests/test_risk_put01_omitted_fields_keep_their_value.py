@@ -58,3 +58,14 @@ def test_a_partial_save_does_not_loosen_the_daily_loss_limit(mock_sb, monkeypatc
     assert saved["max_positions"] == 4
     assert saved["circuit_breaker_armed"] is False
     assert saved["max_leverage"] == 2
+
+
+def test_each_save_notifies_under_its_own_idempotency_key():
+    """NOTIF-RISK-01: the key was `risk_settings:{uid}`; the durable (user, key) dedupe then
+    let a user hear about their FIRST risk change only. Found in production 2026-11-20:
+    four saves, one notification, showing the first save's values."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parents[1] / "backend_app/routers/risk.py").read_text()
+    assert '"idempotency_key": f"risk_settings:{uid}"' not in src
+    assert "risk_settings:{uid}:{updated_record['updated_at']}" in src

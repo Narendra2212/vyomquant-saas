@@ -847,7 +847,14 @@ async def update_risk_settings(
             severity="info",
             title="Risk Parameters Updated",
             message=f"Risk controls updated (Max Loss: ${updated_record['max_daily_loss']:,}, Max Positions: {updated_record['max_positions']}).",
-            metadata={"settings": updated_record, "idempotency_key": f"risk_settings:{uid}"},
+            # NOTIF-RISK-01: the key names THIS save. It was `risk_settings:{uid}`, and the
+            # notifications table de-duplicates (user_id, idempotency_key) durably, so a user
+            # was told about their first risk change ever and never again -- a later change
+            # (including one they did not make) raised no notice, and the one shown was stale.
+            metadata={
+                "settings": updated_record,
+                "idempotency_key": f"risk_settings:{uid}:{updated_record['updated_at']}",
+            },
             ws_manager=ws_mgr,
         )
     except Exception as notif_err:
