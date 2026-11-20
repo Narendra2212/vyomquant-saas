@@ -944,3 +944,48 @@ def test_the_watchdog_only_assigns_columns_that_exist():
         "TRADE-12's venue_order_id column is missing from the model, so the exchange's "
         "identifier has nowhere to go that is not foreign-keyed to public.orders"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TRADE-07b: a resting order the VENUE has an id for is not "lost"
+# ══════════════════════════════════════════════════════════════════════════
+def _set_venue_id(session, execution_id: str, venue_order_id: str, status: str = "EXECUTING"):
+    session.execute(
+        text("UPDATE public.execution_records SET venue_order_id = :v, "
+             "status = CAST(:s AS executionstatus) WHERE execution_id = :e"),
+        {"v": venue_order_id, "s": status, "e": execution_id},
+    )
+    session.commit()
+
+
+@pg_only
+def test_a_row_with_only_a_venue_order_id_is_left_to_the_ordinary_reconciler(tenant, db):
+    """Production 2026-11-20, Testnet order 8430401: the live engine stores the EXCHANGE's id
+    in `venue_order_id` and leaves `order_id` NULL (TRADE-12). Classified on `order_id` alone,
+    every resting live limit order was 'ambiguous' each cycle -> a critical 'live exposure,
+    platform had no record' alert, UNKNOWN, then back to EXECUTING, repeatedly."""
+    execution_id = _insert_executing(
+        db, tenant, "exec_t07b_venue", age_seconds=2000, submitted=True
+    )
+    _set_venue_id(db, execution_id, "8430401")
+    repo = ExecutionRecordRepository(db)
+    rows = {r["execution_id"]: r for r in repo.classify_stale_executions(uuid.UUID(tenant))}
+    assert rows[execution_id]["classification"] == repo.RECOVERY_SUBMITTED_WITH_ORDER_ID
+
+
+@pg_only
+def test_an_unknown_row_with_a_venue_order_id_is_never_given_up_as_lost(tenant, db):
+    """The give-up path writes FAILED/confirmation_lost. An order the venue gave an id for
+    exists by definition, so it must be outside that population however old it is."""
+    execution_id = _insert_executing(
+        db, tenant, "exec_t07b_unknown", age_seconds=200000, submitted=True
+    )
+    _set_venue_id(db, execution_id, "8430402", status="UNKNOWN")
+    repo = ExecutionRecordRepository(db)
+    population = {
+        r["execution_id"]
+        for r in repo.classify_unresolved_submissions(
+            uuid.UUID(tenant), confirmation_lost_after_seconds=1
+        )
+    }
+    assert execution_id not in population
