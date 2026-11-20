@@ -456,6 +456,7 @@ import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from '../design/pageFields';
 import { available, fromNullable, unavailable } from '../design/reported';
 import { token } from '../design/tokens';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import { REFRESH } from '../hooks/useAutoRefresh';
 import {
   CheckoutOutcome,
   canOpenRazorpayCheckout,
@@ -994,8 +995,8 @@ export default function Billing() {
     `tests/regression/baseline/surface_billing.json` is re-recorded in the same commit.
   */
   const plans = usePanelState(readPlans, { deps: [] });
-  const entitlements = usePanelState(readEntitlements, { deps: [] });
-  const invoices = usePanelState(readInvoices, { deps: [] });
+  const entitlements = usePanelState(readEntitlements, { deps: [], intervalMs: REFRESH.SLOW });
+  const invoices = usePanelState(readInvoices, { deps: [], intervalMs: REFRESH.SLOW });
 
   // Stable by `usePanelState`'s second inversion, so the socket effect below can depend on
   // them without being torn down and rebuilt on every render.

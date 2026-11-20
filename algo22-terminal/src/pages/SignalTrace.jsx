@@ -87,6 +87,7 @@ import SignalTraceVisualization from '../components/SignalTraceVisualization';
 import { PAGES, PAGE_FIELDS_BY_PAGE } from '../design/pageFields';
 import { ENVIRONMENT_IDS, statusToken } from '../design/semantic';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import { REFRESH } from '../hooks/useAutoRefresh';
 import useSignalTraceRealtime from '../hooks/useSignalTraceRealtime';
 import {
   SIGNAL_REALTIME_STATES,
@@ -1801,7 +1802,11 @@ export default function SignalTrace() {
     data: listData,
     error: listError,
     refetch: refetchList,
-  } = usePanelState(listReader, { deps: [query], enabled: !signalId });
+  } = usePanelState(listReader, {
+    deps: [query],
+    enabled: !signalId,
+    intervalMs: REFRESH.ACCOUNT,
+  });
 
   const detailReader = useCallback(
     () => get(`/api/signal-trace/signals/${detailId}`),

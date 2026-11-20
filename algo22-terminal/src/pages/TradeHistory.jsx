@@ -131,6 +131,7 @@ import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadg
 import { PAGES, PAGE_FIELDS_BY_PAGE } from '../design/pageFields';
 import { available, unavailable } from '../design/reported';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import { REFRESH } from '../hooks/useAutoRefresh';
 import { formatQuantity, renderDecimalParts, splitDecimalText } from './paperTradingFormat';
 import {
   COUNT_NOUN,
@@ -529,7 +530,7 @@ export default function TradeHistory() {
       : api.orders.getHistory({ limit: LIVE_TRADE_LIMIT })),
     [isPaper],
   );
-  const { state, data, error, refetch } = usePanelState(reader, { deps: [environment] });
+  const { state, data, error, refetch } = usePanelState(reader, { deps: [environment], intervalMs: REFRESH.ACCOUNT });
 
   /*
    * `GET /api/orders/history` answers a bare array; `GET /api/paper/trades` answers

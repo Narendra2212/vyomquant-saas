@@ -221,6 +221,7 @@ import { apiErrorMessage } from '../design/apiErrors';
 import { translateError } from '../design/errorCopy';
 import { BADGE_SUBSCRIBED, resolveSubscriptionView } from '../design/subscriptionState';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import { REFRESH } from '../hooks/useAutoRefresh';
 import {
   CheckoutOutcome,
   canOpenRazorpayCheckout,
@@ -731,6 +732,7 @@ const StrategyMarketplace = () => {
 
   const catalogue = usePanelState(readCatalogue, {
     deps: [page, sort, searchQuery, selectedCategory],
+    intervalMs: REFRESH.SLOW,
   });
 
   const catalogueState = readState(catalogue);

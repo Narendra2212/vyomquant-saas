@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { useAutoRefresh, REFRESH } from "../hooks/useAutoRefresh";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft, Activity, BarChart2, Zap, Shield,
@@ -244,8 +245,11 @@ export default function StrategyDetail() {
     loadStrategyDetail();
   }, [strategyId]);
 
-  const loadStrategyDetail = async () => {
-    setIsLoading(true);
+  // Keep status (running / stopped) and figures current without a manual refresh.
+  useAutoRefresh((background) => loadStrategyDetail(background), REFRESH.ACCOUNT);
+
+  const loadStrategyDetail = async (background = false) => {
+    if (!background) setIsLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/strategies/${strategyId}`, {
         headers: { "Authorization": `Bearer ${authToken}` }
@@ -257,7 +261,8 @@ export default function StrategyDetail() {
       setStrategy(data);
     } catch (err) {
       console.error("Error loading strategy detail:", err);
-      setStrategy(null);
+      // A background poll that fails keeps the page; only a first load blanks it.
+      if (!background) setStrategy(null);
     } finally {
       setIsLoading(false);
     }
@@ -1508,10 +1513,19 @@ function ExecutionsTab({ strategyId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const [executionsReloadKey, setExecutionsReloadKey] = useState(0);
+  const executionsBackgroundRef = useRef(false);
+  useAutoRefresh(() => {
+    executionsBackgroundRef.current = true;
+    setExecutionsReloadKey((k) => k + 1);
+  }, REFRESH.ACCOUNT);
+
   useEffect(() => {
     let isMounted = true;
+    const background = executionsBackgroundRef.current;
+    executionsBackgroundRef.current = false;
     const fetchExecutions = async () => {
-      setLoading(true);
+      if (!background) setLoading(true);
       setError(null);
       try {
         const data = await get(`/api/orders/history?strategy_id=${strategyId}&limit=50`);
@@ -1530,7 +1544,7 @@ function ExecutionsTab({ strategyId }) {
     };
     fetchExecutions();
     return () => { isMounted = false; };
-  }, [strategyId]);
+  }, [strategyId, executionsReloadKey]);
 
   if (loading) {
     return (
@@ -1657,9 +1671,18 @@ function SignalsTab({ strategyId }) {
   const [signals, setSignals] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const [signalsReloadKey, setSignalsReloadKey] = useState(0);
+  const signalsBackgroundRef = useRef(false);
+  useAutoRefresh(() => {
+    signalsBackgroundRef.current = true;
+    setSignalsReloadKey((k) => k + 1);
+  }, REFRESH.ACCOUNT);
+
   useEffect(() => {
+    const background = signalsBackgroundRef.current;
+    signalsBackgroundRef.current = false;
     const fetchSignals = async () => {
-      setLoading(true);
+      if (!background) setLoading(true);
       try {
         const data = await get(`/api/signal-trace/signals?strategy_id=${strategyId}&limit=20`);
         setSignals(data?.signals || []);
@@ -1670,7 +1693,7 @@ function SignalsTab({ strategyId }) {
       }
     };
     fetchSignals();
-  }, [strategyId]);
+  }, [strategyId, signalsReloadKey]);
 
   return (
     <div>
