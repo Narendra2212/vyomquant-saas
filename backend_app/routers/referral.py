@@ -752,6 +752,46 @@ async def validate_referral_code(
         raise HTTPException(status_code=500, detail="Failed to validate referral code")
 
 
+class ClaimReferralRequest(BaseModel):
+    referral_code: str = Field(..., min_length=1, max_length=32)
+
+
+@router.post("/referral/claim")
+@limiter.limit("10/minute")
+async def claim_referral(
+    request: Request,
+    request_body: ClaimReferralRequest,
+    user: dict = Depends(get_current_user),
+):
+    """REF-ATTR-01: attribute the signed-in account to the referrer whose code it signed up with.
+
+    The app reads ``?ref=CODE`` on the signup page and calls this once the new account has a
+    session (after email confirmation). The account is the AUTHENTICATED caller -- never an id
+    from the body -- and ``attribute_referral`` applies the rules: active code, no
+    self-referral, one referrer per account, within a week of the account's creation.
+    A refusal is a 200 with its ``status``; only an unreadable store is an error.
+    """
+    from backend_app.backend.referral_attribution import attribute_referral
+
+    svc = _get_service_client()
+    if not svc:
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+    user_id = str(user.get("id") or "")
+    try:
+        created_at = None
+        prof = svc.table("profiles").select("created_at").eq("id", user_id).execute()
+        if getattr(prof, "data", None):
+            created_at = prof.data[0].get("created_at")
+        outcome = await asyncio.to_thread(
+            attribute_referral, svc, user_id, request_body.referral_code,
+            account_created_at=created_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("REF-ATTR-01: claim failed for %s: %s", user_id, exc)
+        raise HTTPException(status_code=503, detail="Referral could not be recorded right now")
+    return {"status": outcome["status"], "attributed": outcome["status"] == "attributed"}
+
+
 @router.post("/referral/payouts")
 @limiter.limit("10/minute")
 async def create_payout_request(

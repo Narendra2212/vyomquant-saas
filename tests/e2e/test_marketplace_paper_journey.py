@@ -972,6 +972,7 @@ def test_the_marketplace_and_paper_trading_journey(
                 "user_id": OWNER,
                 "status": "COMPLETED",
                 "exchange_id": "binance",
+                "is_sandbox": False,  # EXEC-ENV-01: a real-money fill
                 "filled_size": "0.0100",
                 "filled_at": stamp.isoformat(),
                 "submitted_at": stamp.isoformat(),

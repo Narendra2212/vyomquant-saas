@@ -1975,7 +1975,20 @@ class PaperTradingService:
             # first trade.
             from backend_app.core.state import app_state
 
-            drawdown_pct = self.get_current_drawdown_pct(uid)
+            # RISK-REDUCE-01: an order that only REDUCES an open position is never an
+            # "open". Found 2026-11-19: the QA paper account sat at 80.14% utilization and
+            # a 0.01 SOL sell against its 1,122 SOL long was refused "New position opens are
+            # locked" -- the four limits below trapped the account in the exposure they
+            # exist to cap. They gate opening and adding; reducing passes them (the kill
+            # switch above still halts everything).
+            existing_position = open_positions.get(clean_sym)
+            existing_side = str(getattr(existing_position, "side", "") or "").lower()
+            is_reducing = existing_position is not None and qty_dec <= existing_position.size and (
+                (clean_side == "sell" and "long" in existing_side)
+                or (clean_side == "buy" and "short" in existing_side)
+            )
+
+            drawdown_pct = None if is_reducing else self.get_current_drawdown_pct(uid)
             max_drawdown = app_state.risk.thresholds.max_drawdown
             if drawdown_pct is not None and drawdown_pct > max_drawdown:
                 record_risk_violation(
@@ -2000,7 +2013,7 @@ class PaperTradingService:
                 account_row.get("realized_pnl"), "realized_pnl"
             )
             realized_loss = -min(Decimal("0"), realized_pnl)
-            if realized_loss >= max_daily_loss:
+            if not is_reducing and realized_loss >= max_daily_loss:
                 record_risk_violation(
                     uid,
                     "MAX_DAILY_LOSS_EXCEEDED",
@@ -2032,7 +2045,7 @@ class PaperTradingService:
             # "unmeasurable" (a brand-new account, or a read failure) and this call site,
             # like the bot path, fails OPEN on it -- an account too new to have a
             # measurable streak is not blocked from its first trade.
-            consecutive_losses = self.get_consecutive_loss_count(uid)
+            consecutive_losses = None if is_reducing else self.get_consecutive_loss_count(uid)
             if (
                 consecutive_losses is not None
                 and consecutive_losses >= CONSECUTIVE_LOSS_LIMIT
@@ -2056,7 +2069,7 @@ class PaperTradingService:
             # account's CURRENT state rather than projecting this order's own notional
             # into it. `None` means "unmeasurable" and this fails OPEN on it, same as
             # every other guard in this method.
-            utilization_pct = self.get_capital_utilization_pct(uid)
+            utilization_pct = None if is_reducing else self.get_capital_utilization_pct(uid)
             if (
                 utilization_pct is not None
                 and utilization_pct > CAPITAL_UTILIZATION_LIMIT_PCT

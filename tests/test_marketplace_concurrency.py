@@ -487,6 +487,7 @@ def _conc_live_history_rows():
             "user_id": _CONC_OWNER_ID,
             "status": "COMPLETED",
             "exchange_id": "binance",
+            "is_sandbox": False,  # EXEC-ENV-01: a real-money fill
             "filled_size": "0.0100",
             "filled_at": stamp.isoformat(),
             "submitted_at": stamp.isoformat(),

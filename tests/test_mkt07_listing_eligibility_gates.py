@@ -163,6 +163,7 @@ def _fill(
     filled_size: Any = "0.0100",
     stamp_field: str = "filled_at",
     execution_id: Optional[str] = None,
+    is_sandbox: Optional[bool] = False,
 ) -> Dict[str, Any]:
     """One ``execution_records`` row as PostgREST would hand it back.
 
@@ -175,6 +176,8 @@ def _fill(
         "strategy_id": STRATEGY_ID,
         "status": status,
         "exchange_id": exchange_id,
+        # EXEC-ENV-01: a real-money fill unless a test says otherwise.
+        "is_sandbox": is_sandbox,
         "filled_size": filled_size,
         "filled_at": None,
         "submitted_at": None,
@@ -390,7 +393,7 @@ _WINDOWS = (
 )
 
 
-def _seed(*, backtests: int, live_hours: Optional[float]) -> "_DB":
+def _seed(*, backtests: int, live_hours: Optional[float], is_sandbox: Optional[bool] = False) -> "_DB":
     """A strategy with ``backtests`` eligible runs and, optionally, ``live_hours`` of history."""
     db = _DB()
     db.stores["strategies"] = [
@@ -440,7 +443,7 @@ def _seed(*, backtests: int, live_hours: Optional[float]) -> "_DB":
     db.stores["execution_records"] = []
     if live_hours is not None:
         for hours_ago in (live_hours, 0.0):
-            row = _fill(hours_ago=hours_ago)
+            row = _fill(hours_ago=hours_ago, is_sandbox=is_sandbox)
             row["tenant_id"] = OWNER_ID
             db.stores["execution_records"].append(row)
     return db
@@ -478,6 +481,26 @@ def test_a_strategy_with_a_full_day_of_live_history_is_admitted() -> None:
     assert verdict.unevaluable is False, _failed(verdict)
     assert verdict.admitted is True, _failed(verdict)
     assert verdict.version_id == VERSION_ID
+
+
+def test_exec_env01_a_day_of_testnet_fills_is_not_live_history() -> None:
+    """EXEC-ENV-01: Binance testnet fills carry an exchange_id too. They are never live
+    performance -- strategy FROM had 15.7 h of them in production toward this bar."""
+    verdict = _evaluate(
+        _seed(backtests=ev.MIN_CONDITIONS, live_hours=gate.MIN_LIVE_HISTORY_HOURS + 1,
+              is_sandbox=True)
+    )
+    assert verdict.admitted is False
+    assert _failed(verdict) == {gate.MP_LIVE_HISTORY}
+
+
+def test_exec_env01_fills_whose_environment_was_never_recorded_do_not_count() -> None:
+    verdict = _evaluate(
+        _seed(backtests=ev.MIN_CONDITIONS, live_hours=gate.MIN_LIVE_HISTORY_HOURS + 1,
+              is_sandbox=None)
+    )
+    assert verdict.admitted is False
+    assert _failed(verdict) == {gate.MP_LIVE_HISTORY}
 
 
 def test_a_strategy_whose_live_history_is_short_of_a_day_is_refused() -> None:

@@ -1439,12 +1439,42 @@ class ExecutionRecordRepository:
     RECOVERY_SUBMITTED_WITH_ORDER_ID = "submitted_with_order_id"
     RECOVERY_NOT_STALE = "not_stale"
 
+    def _stamp_environment(
+        self, execution_id: str, tenant_id: UUID, is_sandbox: Optional[bool]
+    ) -> None:
+        """EXEC-ENV-01: record sandbox vs real money on the row, best effort.
+
+        A separate statement AFTER the submission evidence is committed, so a database that
+        does not have the column yet (migration 079 not applied) can never refuse an order:
+        the row then stays NULL, which the marketplace treats as not-real-money.
+        """
+        if is_sandbox is None:
+            return
+        try:
+            from sqlalchemy import bindparam, text
+            from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+            self.db.execute(
+                text(
+                    "UPDATE execution_records SET is_sandbox = :sb "
+                    "WHERE execution_id = :execution_id AND tenant_id = :tenant_id"
+                ).bindparams(bindparam("tenant_id", type_=PG_UUID(as_uuid=True))),
+                {"sb": bool(is_sandbox), "execution_id": execution_id, "tenant_id": tenant_id},
+            )
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001 - never block an order on this
+            self.db.rollback()
+            logger.warning(
+                "EXEC-ENV-01: could not stamp is_sandbox on %s (%s); left NULL", execution_id, exc
+            )
+
     def mark_submitted(
         self,
         execution_id: str,
         tenant_id: UUID,
         *,
         exchange_id: Optional[str] = None,
+        is_sandbox: Optional[bool] = None,
     ) -> bool:
         """Record that this execution is ABOUT TO BE sent to a venue. Returns success.
 
@@ -1513,6 +1543,7 @@ class ExecutionRecordRepository:
                     },
                 ).fetchone()
                 self.db.commit()
+                self._stamp_environment(execution_id, tenant_id, is_sandbox)
                 # `None` means the row was already marked -- a retry. That is success for
                 # this method's purpose: submission evidence exists either way.
                 return True

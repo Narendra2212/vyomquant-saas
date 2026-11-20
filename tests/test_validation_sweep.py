@@ -946,6 +946,13 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         path="/api/referral/validate",
         handler="backend_app.routers.referral:validate_referral_code",
     ),
+    # REF-ATTR-01: the referral-link claim, called after a `?ref=` signup.
+    MutatingRoute(
+        key="referral.claim_referral",
+        method="POST",
+        path="/api/referral/claim",
+        handler="backend_app.routers.referral:claim_referral",
+    ),
     MutatingRoute(
         key="referral.create_payout_request",
         method="POST",

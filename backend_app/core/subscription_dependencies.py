@@ -645,6 +645,31 @@ async def check_feature_optional(
     return await SubscriptionEngine.check_feature_entitlement(user["id"], context.plan, feature)
 
 
+async def live_trading_entitlement_holds(user_id: str) -> bool:
+    """LIVE-ENT-01: whether ``user_id`` may place a LIVE order NOW. Fails CLOSED.
+
+    The live gate lists ``live_trading_entitlement`` among its REQUIRED_CHECKS, but it was
+    only asserted -- checked once by the deploy endpoint (``require_live_trading``) and
+    never again. A bot restarted by the orphan sweep (RESUME_LIVE_DEPLOYMENTS) or un-paused
+    because its row was set back to ``running`` (a browser role may write ``status``) kept
+    trading after the account lost the feature. This is the per-order read; the plan is
+    cached by ``get_plan_context``. An unreadable plan refuses: this guards real money.
+    """
+    try:
+        from backend_app.core.supabase_connection import SupabaseConnection
+
+        client = SupabaseConnection().get_client()
+        context = await get_plan_context(str(user_id), client)
+        return bool(
+            await SubscriptionEngine.check_feature_entitlement(
+                str(user_id), context.plan, Feature.LIVE_TRADING.value
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.error("LIVE-ENT-01: live entitlement unreadable for %s (%s); refusing", user_id, exc)
+        return False
+
+
 async def enforce_quota(
     resource: str,
     user: dict,

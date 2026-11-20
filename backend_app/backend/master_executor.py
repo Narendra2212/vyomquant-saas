@@ -753,9 +753,19 @@ class BotRunner:
         try:
             snapshot = await asyncio.to_thread(paper_ledger.snapshot, self.symbol)
             self.execution_engine._reconcile_from_paper_ledger(snapshot)
+            # PAPER-EXP-01: the exposure every risk check reads. The paper branch of
+            # `_recover_live_state` returned without setting it, so it stayed at 0 after
+            # every restart: the $5,000 free-plan cap was judged against 0, the bot bought
+            # another full cap, and the QA account reached 1,122 SOL (~$80,000) across
+            # deploys. Seeded from the ledger's open long, the same figure the reduce-only
+            # guard reads.
+            held = await asyncio.to_thread(
+                paper_ledger.open_long_size, paper_ledger.ledger_symbol(self.symbol)
+            )
+            self.recovered_exposure_coins = max(Decimal("0"), Decimal(str(held)))
             logger.info(
                 f"[PAPER] Bot {self.user_id}/{self.symbol} starts from the paper account: "
-                f"cash {snapshot.cash}"
+                f"cash {snapshot.cash}, open long {self.recovered_exposure_coins}"
             )
         except Exception as exc:  # noqa: BLE001 - reported, and the bot still runs
             logger.warning(
@@ -2016,6 +2026,27 @@ class BotRunner:
                     # is a `session_id`, which a BotRunner bot does not have.
                     # Recorded as an open item rather than attempted here.
                     # Regression: tests/test_execution_environment_is_stated_not_defaulted.py
+                    # LIVE-ENT-01: the live entitlement, re-read for EVERY live order. It was
+                    # checked once at deploy and only asserted at the live gate after that, so
+                    # a bot restarted by the orphan sweep or un-paused by a row write kept
+                    # trading after the account lost live trading. Fails closed.
+                    if not self.paper_trading:
+                        from backend_app.core.subscription_dependencies import (
+                            live_trading_entitlement_holds,
+                        )
+
+                        if not await live_trading_entitlement_holds(self.user_id):
+                            reason = (
+                                "Live trading is not included in this account's current plan; "
+                                "the order was not sent."
+                            )
+                            logger.warning(
+                                f"LIVE-ENT-01: Bot {self.user_id}/{self.symbol} refused a live "
+                                f"order: entitlement does not hold"
+                            )
+                            asyncio.create_task(record_audit_signal(RiskVerdict.REJECT_TIER_LIMIT, reason))
+                            continue
+
                     # TRACE-LAT-01: the order's round trip -- submission to the venue's
                     # (or the paper simulator's) answer -- on a monotonic clock.
                     _submitted_at = time.monotonic()

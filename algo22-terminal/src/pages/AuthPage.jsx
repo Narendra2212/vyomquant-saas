@@ -343,6 +343,7 @@ import { getAuthRedirectUrl } from "../config";
 import { api } from "../api";
 import { LEGAL_VERSION, SIGNUP_REQUIRED_DOCUMENTS } from "../legal/documents";
 import { COUNTRIES } from "../legal/countries";
+import { capturePendingReferral } from "../lib/pendingReferral";
 
 // LEGAL-01: mirrored here only to refuse early in the form. The SERVER holds the
 // authoritative list (backend_app/core/restricted_jurisdictions.py) and refuses
@@ -474,6 +475,12 @@ function PasswordStrengthMeter({ strength }) {
 
 export default function AuthPage({ mode = "signin" }) {
   const navigate = useNavigate();
+
+  // REF-ATTR-01: `/signup?ref=CODE` is the referral link. Remember the code until the
+  // account's first signed-in session claims it (AuthGuard -> POST /api/referral/claim).
+  useEffect(() => {
+    capturePendingReferral(typeof window !== "undefined" ? window.location.search : "");
+  }, []);
 
   // Mode: "signin" | "signup"
   const [authMode, setAuthMode] = useState(mode === "signup" ? "signup" : "signin");

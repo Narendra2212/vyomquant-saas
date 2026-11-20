@@ -697,6 +697,9 @@ def _read_live_executions(
             .eq("tenant_id", caller_id)
             .eq("status", _LIVE_EXECUTION_STATUS)
             .not_.is_("exchange_id", "null")
+            # EXEC-ENV-01: real money only. A testnet fill has an exchange_id too; it is
+            # never live performance, and an unrecorded (NULL) environment does not count.
+            .eq("is_sandbox", False)
             .order(_LIVE_EXECUTION_ORDER_COLUMN, desc=descending)
             .limit(LIVE_HISTORY_END_WINDOW)
             .execute()

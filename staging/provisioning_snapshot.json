@@ -1195,6 +1195,17 @@
     ],
     [
       "execution_records",
+      "is_sandbox",
+      "boolean",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "execution_records",
       "last_exchange_sync",
       "timestamp with time zone",
       "",
@@ -15553,10 +15564,20 @@
     [
       "create_referral_code_for_user",
       "user_uuid uuid",
+      true
+    ],
+    [
+      "create_referral_code_for_user__impl",
+      "user_uuid uuid",
       false
     ],
     [
       "create_referral_payout_request",
+      "p_user_id uuid, p_amount_usd numeric, p_payout_method text, p_payout_details jsonb",
+      true
+    ],
+    [
+      "create_referral_payout_request__impl",
       "p_user_id uuid, p_amount_usd numeric, p_payout_method text, p_payout_details jsonb",
       true
     ],
@@ -15751,6 +15772,11 @@
       true
     ],
     [
+      "paper_apply_fill_atomic__impl",
+      "p_user_id uuid, p_account_id uuid, p_order_id uuid, p_session_id uuid, p_fill_event_id text, p_expected_account_version bigint, p_expected_order_state text, p_resume_fill_id uuid, p_fill jsonb, p_account jsonb, p_balance_event jsonb, p_order jsonb, p_position jsonb, p_closed_leg jsonb, p_trade jsonb, p_equity_snapshot jsonb",
+      true
+    ],
+    [
       "paper_order_transition_guard",
       "",
       false
@@ -15899,6 +15925,11 @@
       "reverse_referral_obligation",
       "p_provider text, p_provider_payment_id text, p_reason text",
       true
+    ],
+    [
+      "sec_def01_assert_caller_is",
+      "p_user_id uuid",
+      false
     ],
     [
       "settle_creator_payout",
@@ -26497,6 +26528,16 @@
     [
       "migrations/077_mkt11_listing_disclosures.sql",
       "b14fceda62281963a8839b6bd8c4b3467a80b73115745b1125d6cec320c20da3",
+      "step1"
+    ],
+    [
+      "migrations/078_sec_definer_caller_guard.sql",
+      "870dc465e2e01c790481b2549660b98dbacffc1856b53378dcfcef68b6223928",
+      "step1"
+    ],
+    [
+      "migrations/079_exec_env01_execution_records_is_sandbox.sql",
+      "a312a91df0d916199a3ebe160d1de72a2e8e21d52e62b77d2696d32edfbab4d7",
       "step1"
     ],
     [

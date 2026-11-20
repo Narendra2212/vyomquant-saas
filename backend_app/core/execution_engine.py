@@ -1812,6 +1812,12 @@ class ExecutionEngine:
                         exchange_id=getattr(
                             self.exchange_executor, "exchange_id", None
                         ),
+                        # EXEC-ENV-01: sandbox if the client asked for one OR proved one;
+                        # real money only when neither -- the conservative reading.
+                        is_sandbox=bool(
+                            getattr(self.exchange_executor, "sandbox", False)
+                            or getattr(self.exchange_executor, "sandbox_verified", False)
+                        ),
                     )
                 finally:
                     _evidence_session.close()
