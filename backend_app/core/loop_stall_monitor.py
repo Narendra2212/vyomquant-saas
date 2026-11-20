@@ -37,14 +37,46 @@ STALL_SECONDS = float(os.getenv("LOOP_STALL_SECONDS", "2.0"))
 _MAX_STACK_FRAMES = 25
 
 
-def _report_to_sentry(age: float, stack: str) -> None:
+def _innermost_frames(frame, limit: int = 12):
+    """``path:line in func`` for the loop's frames, INNERMOST FIRST.
+
+    Sentry trims every extra string to ~1 KB from the end, so a stack sent outermost-first
+    arrives as gunicorn's bootstrap frames with the blocking line cut off (production,
+    2026-11-20: VYOMQUANT-API-PRODUCTION-34). Innermost first, one short entry per frame.
+    """
+    if frame is None:
+        return []
+    summary = traceback.extract_stack(frame)[::-1][:limit]
+    out = []
+    for f in summary:
+        path = f.filename
+        for marker in ("/site-packages/", "/backend_app/"):
+            if marker in path:
+                path = ("backend_app/" if marker == "/backend_app/" else "") + path.split(marker, 1)[1]
+                break
+        out.append(f"{path}:{f.lineno} in {f.name}")
+    return out
+
+
+def _first_app_frame(frames):
+    """The innermost frame in this codebase: what to put in the event title."""
+    for entry in frames:
+        if entry.startswith("backend_app/"):
+            return entry
+    return frames[0] if frames else "unknown"
+
+
+def _report_to_sentry(age: float, frames) -> None:
     """Also send the stall to Sentry, which stays readable when CloudWatch is not."""
     try:
         import sentry_sdk
+        culprit = _first_app_frame(frames)
         with sentry_sdk.new_scope() as scope:
-            scope.set_extra("event_loop_stack", stack[-8000:])
+            for i, entry in enumerate(frames):
+                scope.set_extra(f"frame_{i:02d}", entry)
+            scope.set_tag("stall_culprit", culprit[:200])
             sentry_sdk.capture_message(
-                f"LOOP-STALL-01: event loop blocked >{age:.0f}s", level="warning"
+                f"LOOP-STALL-01: event loop blocked >{age:.0f}s at {culprit}", level="warning"
             )
     except Exception:  # noqa: BLE001 - diagnostics must never raise
         pass
@@ -86,7 +118,10 @@ class LoopStallMonitor:
                     "LOOP-STALL-01: event loop unresponsive for %.1fs; it is executing:\n%s",
                     age, stack,
                 )
-                _report_to_sentry(age, stack)
+                _report_to_sentry(
+                    age,
+                    _innermost_frames(sys._current_frames().get(self._loop_thread_id)),  # noqa: SLF001
+                )
             elif in_stall and age < self.stall_seconds:
                 in_stall = False
                 logger.warning(
