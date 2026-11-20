@@ -37,6 +37,19 @@ STALL_SECONDS = float(os.getenv("LOOP_STALL_SECONDS", "2.0"))
 _MAX_STACK_FRAMES = 25
 
 
+def _report_to_sentry(age: float, stack: str) -> None:
+    """Also send the stall to Sentry, which stays readable when CloudWatch is not."""
+    try:
+        import sentry_sdk
+        with sentry_sdk.new_scope() as scope:
+            scope.set_extra("event_loop_stack", stack[-8000:])
+            sentry_sdk.capture_message(
+                f"LOOP-STALL-01: event loop blocked >{age:.0f}s", level="warning"
+            )
+    except Exception:  # noqa: BLE001 - diagnostics must never raise
+        pass
+
+
 class LoopStallMonitor:
     def __init__(self, stall_seconds: float = STALL_SECONDS, tick_seconds: float = TICK_SECONDS):
         self.stall_seconds = stall_seconds
@@ -68,10 +81,12 @@ class LoopStallMonitor:
                 in_stall = True
                 stall_started = self._last_tick
                 self.stalls_reported += 1
+                stack = self._loop_stack()
                 logger.warning(
                     "LOOP-STALL-01: event loop unresponsive for %.1fs; it is executing:\n%s",
-                    age, self._loop_stack(),
+                    age, stack,
                 )
+                _report_to_sentry(age, stack)
             elif in_stall and age < self.stall_seconds:
                 in_stall = False
                 logger.warning(
