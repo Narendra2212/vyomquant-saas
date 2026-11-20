@@ -232,6 +232,31 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
       // Transitions to OTP step
       expect(await screen.findByRole('heading', { name: /Verify Your Identity/i })).toBeDefined();
     });
+
+    it('AUTH-DUP-01: an address that already has an account is told to sign in, not asked for a code', async () => {
+      // Supabase answers signUp for an existing address with success, an EMPTY identities
+      // list and no email. Production 2026-11-20: the page asked for a code that never came.
+      vi.spyOn(supabase.auth, 'signUp').mockResolvedValueOnce({
+        data: { user: { id: 'usr_existing', identities: [] } },
+        error: null,
+      });
+      const signOutSpy = vi.spyOn(supabase.auth, 'signOut').mockResolvedValue({ error: null });
+      render(
+        <MemoryRouter>
+          <AuthPage mode="signup" />
+        </MemoryRouter>
+      );
+      fireEvent.change(screen.getByPlaceholderText('trader@vyomquant.io'), { target: { value: 'existing@vyomquant.io' } });
+      fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.change(screen.getByLabelText(/^Confirm Password$/i), { target: { value: 'StrongAuth!2026' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /agree to the/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /at least 18/i }));
+      fireEvent.change(screen.getByLabelText(/which country are you in/i), { target: { value: 'IN' } });
+      fireEvent.click(screen.getByRole('button', { name: /CREATE ACCOUNT & SEND OTP/i }));
+      expect(await screen.findByText(/already exists\. Sign in instead/i)).toBeDefined();
+      expect(screen.queryByRole('heading', { name: /Verify Your Identity/i })).toBeNull();
+      expect(signOutSpy).toHaveBeenCalled();
+    });
   });
 
   describe('Step 2 — 6-Digit Email OTP Verification', () => {
