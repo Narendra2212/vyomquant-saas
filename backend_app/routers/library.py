@@ -4065,6 +4065,17 @@ async def deploy_marketplace_strategy(
 
         from backend_app.backend import deployment_binding as _db_binding
 
+        # LIVE-EXIT-01: the same "can this strategy ever close a position?" gate the
+        # first-party live deploy applies (deployment_binding.evaluate_binding). Only the
+        # verdict comes back; the owner's plan is read and judged inside deployment_binding.
+        try:
+            await _db_binding.assert_version_can_exit_live(svc, owner_version_id)
+        except _db_binding.DeployRejected as exc:
+            raise HTTPException(
+                status_code=exc.http_status,
+                detail={"error": exc.code, "message": str(exc)},
+            ) from exc
+
         # Column support first: writing `mode`/`exchange_account_id` to a database where
         # 004e is unapplied is a PGRST204, and writing the row WITHOUT them would store a
         # live deployment as paper -- silently trading nothing while the subscriber

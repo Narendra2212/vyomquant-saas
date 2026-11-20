@@ -1608,6 +1608,74 @@ async def assert_models_verified(
     return report.warnings
 
 
+#: LIVE-EXIT-01: action blocks that can close or reduce an open position on their own.
+EXIT_ACTION_BLOCKS = frozenset({
+    "action_close_position",
+    "action_stop_market", "action_stop_limit",
+    "action_take_profit_market", "action_take_profit_limit",
+})
+_BUY_ACTION_BLOCKS = frozenset({"action_buy_market", "action_buy_limit"})
+_SELL_ACTION_BLOCKS = frozenset({"action_sell_market", "action_sell_limit"})
+
+
+def assert_live_strategy_can_exit(plan: Any, mode: str) -> Dict[str, Any]:
+    """LIVE-EXIT-01: refuse a LIVE deployment of a strategy that can only open positions.
+
+    Production, 2026-11-20 (Binance Testnet): strategy "vyom" had one action, *buy market*,
+    gated by ``EMA(14) > WMA(9)``. That condition holds on every 1-minute bar of an uptrend,
+    so it bought 43 times and had no rule that could ever sell. On a live account that is an
+    ever-growing position with real money and no exit.
+
+    A strategy can exit when its plan has an exit action (close / stop / take-profit), or
+    actions on BOTH sides (a buy and a sell). Paper is never refused: experimenting with a
+    one-sided strategy risks nothing.
+    """
+    blocks = sorted({
+        str(getattr(plan.node_index.get(nid), "block_id", "") or "")
+        for nid in (getattr(plan, "action_nodes", ()) or ())
+    } - {""})
+    detail = {"mode": mode, "actions": blocks}
+    if str(mode).lower() != MODE_LIVE:
+        return {**detail, "checked": False}
+    opens = bool((_BUY_ACTION_BLOCKS | _SELL_ACTION_BLOCKS).intersection(blocks))
+    has_exit = not opens or bool(EXIT_ACTION_BLOCKS.intersection(blocks)) or (
+        bool(_BUY_ACTION_BLOCKS.intersection(blocks))
+        and bool(_SELL_ACTION_BLOCKS.intersection(blocks))
+    )
+    if not has_exit:
+        raise DeployRejected(
+            "LIVE_STRATEGY_HAS_NO_EXIT",
+            "This strategy can open positions but has no rule that closes them: add a "
+            "Sell, Close position, Stop or Take-profit action before deploying it live. "
+            "It can still be deployed to paper trading.",
+            detail,
+            http_status=422,
+        )
+    return {**detail, "checked": True}
+
+
+async def assert_version_can_exit_live(svc: Any, version_id: str) -> None:
+    """LIVE-EXIT-01 for a deploy path that holds only a version id (the marketplace route).
+
+    Reads that version's ``compiled_plan`` server-side and applies
+    :func:`assert_live_strategy_can_exit`. Only the verdict leaves this function: the plan
+    is the owner's protected logic and is never returned to the caller. A version whose plan
+    cannot be read is refused as ``PLAN_UNREADABLE``, the same as the first-party path.
+    """
+    resp = svc.table("strategy_versions").select("id, compiled_plan").eq("id", version_id).limit(1).execute()
+    if inspect.isawaitable(resp):
+        resp = await resp
+    rows = getattr(resp, "data", None) or []
+    if not rows:
+        raise DeployRejected(
+            "PLAN_UNREADABLE",
+            "The strategy version could not be read, so it cannot be checked for an exit rule.",
+            {"version_id": version_id},
+            http_status=409,
+        )
+    assert_live_strategy_can_exit(load_binding_plan(rows[0]), MODE_LIVE)
+
+
 async def evaluate_binding(
     sb: Any,
     user: Mapping[str, Any],
@@ -1641,6 +1709,7 @@ async def evaluate_binding(
 
     mode = normalise_mode(request.mode, environment=request.environment)
     assert_account_required_for_live(mode, request.exchange_account_id)
+    assert_live_strategy_can_exit(plan, mode)
     execution_config = normalise_execution_config(request.execution_config)
     gap_policy = resolve_binding_gap_policy(mode, request.gap_strategy)
 
@@ -1779,6 +1848,8 @@ BINDING_CONDITION_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
     "plan_readable": (),
     "market_resolved": ("plan_readable",),
     "deployment_mode": (),
+    # LIVE-EXIT-01: a live strategy must be able to close what it opens.
+    "exit_path": ("plan_readable", "deployment_mode"),
     "execution_config": (),
     "gap_policy": ("deployment_mode",),
     "binding_storable": ("deployment_mode",),
@@ -2065,6 +2136,11 @@ async def evaluate_binding_summary(
         "deployment_mode",
         lambda: _resolve_mode_and_account_requirement(request),
         detail=lambda m: {"mode": m, "exchange_account_id": request.exchange_account_id},
+    )
+    await c.run(
+        "exit_path",
+        lambda: assert_live_strategy_can_exit(plan, mode),
+        detail=lambda d: dict(d),
     )
     execution_config = await c.run(
         "execution_config",
