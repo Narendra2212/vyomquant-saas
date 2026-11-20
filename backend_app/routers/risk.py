@@ -461,10 +461,10 @@ async def _persist_strategy_limits(user: dict, uid: str, rows: list[dict]) -> bo
 # ═══════════════════════════════════════════════════════════════════════════
 
 class RiskSettingsUpdateRequest(BaseModel):
-    max_daily_loss: Optional[float] = Field(500.0, gt=0, le=1_000_000, description="Max daily loss in USD")
-    max_positions: Optional[int] = Field(10, gt=0, le=100, description="Max concurrent open positions")
-    max_leverage: Optional[int] = Field(3, ge=1, le=50, description="Max allowed account leverage")
-    circuit_breaker_armed: Optional[bool] = Field(True, description="Armed state of institutional circuit breaker")
+    max_daily_loss: Optional[float] = Field(None, gt=0, le=1_000_000, description="Max daily loss in USD")
+    max_positions: Optional[int] = Field(None, gt=0, le=100, description="Max concurrent open positions")
+    max_leverage: Optional[int] = Field(None, ge=1, le=50, description="Max allowed account leverage")
+    circuit_breaker_armed: Optional[bool] = Field(None, description="Armed state of institutional circuit breaker")
     kill_switches: Optional[Any] = Field(default=None, description="Kill switch configurations")
 
 
