@@ -640,7 +640,19 @@ async def update_risk_settings(
         raise HTTPException(400, "Max leverage must be at least 1")
 
     # Format kill switches
-    current_settings = get_user_risk_settings_store(uid)
+    #
+    # RISK-PUT-02: the baseline an omitted field falls back to is what GET /settings answers
+    # (Redis cache, then the `risk_settings` row), not this worker's process-local store.
+    # Found in production 2026-11-20 after RISK-PUT-01 shipped: Max Daily Loss 250 saved,
+    # then `{"max_leverage": 2}` alone read back 500 -- the save ran on a gunicorn worker
+    # whose memory store had never loaded the row and still held the platform defaults.
+    try:
+        current_settings = dict(await get_risk_settings(user))
+    except Exception as exc:  # noqa: BLE001 - fall back to this worker's store
+        logger.warning("[RISK-PUT-02] could not read persisted settings for %s: %s", uid, exc)
+        current_settings = get_user_risk_settings_store(uid)
+    for _key, _default in (("max_daily_loss", 500.0), ("max_positions", 10), ("max_leverage", 3)):
+        current_settings.setdefault(_key, _default)
     ks_dict = current_settings.get("kill_switches", {})
     if isinstance(body.kill_switches, dict):
         ks_dict = body.kill_switches
