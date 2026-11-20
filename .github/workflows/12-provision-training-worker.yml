@@ -1,0 +1,85 @@
+name: 12 Provision Training Worker
+
+# ML-WORKER-01: production has no process that runs ML training jobs.
+#
+# training_worker (`python -m backend_app.backend.training_worker`) claims QUEUED rows in
+# `training_jobs`. It is declared in docker-compose.yml and in terraform/ecs.tf
+# (OPS-TRAIN-01: cpu 2048 / mem 8192), but no ECS service was ever created for it, so
+# every training job a user submits stays QUEUED forever. Measured 2026-11-20: the first
+# training job ever created (QA account, after ML-PLAN-01) sat QUEUED with no worker.
+#
+# This workflow runs the existing, reviewed provisioning script
+# scripts/deploy_worker_services.py for the `training` worker ONLY. That script builds the
+# worker's task definition from the API's live, working revision (same ECR image, roles,
+# log group, env and secrets; without the QuestDB sidecar) and takes only the command
+# from terraform/ecs.tf. Once the service exists, 03-deploy's redeploy_workers() rolls it
+# onto every new image automatically.
+#
+# MANUAL ONLY. It changes production infrastructure, so it never runs on push:
+#   * mode=plan  (default) prints what would be registered/created and changes nothing.
+#   * mode=apply registers the task definition and creates the service (desired 1).
+# A worker that already exists is left alone unless update_existing is ticked.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "plan (dry run, changes nothing) or apply (create the service)"
+        required: true
+        default: plan
+        type: choice
+        options: [plan, apply]
+      update_existing:
+        description: "If the service already exists, roll it onto a new revision"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Never race 03-deploy or another run of this workflow on the same cluster.
+  group: ecs-vyomquant-cluster-workers
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+
+jobs:
+  provision:
+    name: Training worker (${{ inputs.mode }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
+          role-session-name: GitHubActions-12-training-worker
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Provision training worker
+        env:
+          MODE: ${{ inputs.mode }}
+          UPDATE_EXISTING: ${{ inputs.update_existing }}
+        run: |
+          ARGS=(--worker training --desired-count 1)
+          if [ "$MODE" = "apply" ]; then ARGS+=(--apply); else ARGS+=(--plan); fi
+          if [ "$UPDATE_EXISTING" = "true" ]; then ARGS+=(--update-existing); fi
+          echo "Running: python scripts/deploy_worker_services.py ${ARGS[*]}"
+          python scripts/deploy_worker_services.py "${ARGS[@]}" | tee provision.log
+          {
+            echo "## Training worker — ${MODE}"
+            echo '```'
+            tail -n 60 provision.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
