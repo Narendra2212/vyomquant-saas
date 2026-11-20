@@ -186,7 +186,7 @@ async def probe_database() -> DependencyReport:
 
     ALWAYS REQUIRED: every authenticated request resolves identity and RLS through it.
     """
-    async def _query():
+    def _select_one():
         from backend_app.core.database import SessionLocal
         from sqlalchemy import text as _text
 
@@ -195,6 +195,19 @@ async def probe_database() -> DependencyReport:
             session.execute(_text("SELECT 1"))
         finally:
             session.close()
+
+    async def _query():
+        # READY-BLOCK-01: the statement is SYNCHRONOUS (SQLAlchemy Session), so it runs in
+        # a worker thread. It used to run directly on the event loop inside this `async`
+        # function, where `asyncio.wait_for` cannot interrupt it: a slow connect or a pool
+        # checkout waiting on a busy pool (default pool_timeout 30s) froze the WHOLE
+        # process -- /health/live and /health/ready included -- so the ALB and the ECS
+        # container check timed out and the new task was killed. Production 2026-11-20:
+        # deploys 584 and 587 (twice) rolled back with "unhealthy ... Request timed out"
+        # ~70s after the task registered, while a live deployment was holding connections.
+        import asyncio
+
+        await asyncio.to_thread(_select_one)
 
     return await _probe_with_timeout("database", _query, required=True)
 
