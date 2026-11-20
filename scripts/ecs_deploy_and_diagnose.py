@@ -104,6 +104,16 @@ ECR_REGISTRY = os.getenv("ECR_REGISTRY", "273709947018.dkr.ecr.ap-southeast-1.am
 #   +        minimumHealthyPercent=100 serialises new-healthy-then-drain-old, and
 #            the target group's deregistration_delay.timeout_seconds is 300s.
 # Anything at or below ~350s produces false "unstable" verdicts on healthy rollouts.
+# DEPLOY-GRACE-01: how long ECS ignores ALB health-check failures on a NEW task.
+#
+# gunicorn binds :8000 before its uvicorn worker finishes the app lifespan, so every
+# health check during startup connects and then times out (5 s) instead of being
+# refused. With the service's grace at 60 s, a task whose startup took a little over a
+# minute was killed ~72 s after registering - deploys 584, 587, 591 (attempt 1) and 592,
+# each "(reason Request timed out)" at registration + 72-73 s. Startup time varies by
+# task, which is why the same image sometimes deployed and sometimes did not.
+# 180 s still fits DEPLOY_WAIT_SECONDS: ~110 s image pull + 180 + 30 healthy threshold.
+HEALTH_CHECK_GRACE_SECONDS = int(os.getenv("HEALTH_CHECK_GRACE_SECONDS", "180"))
 DEPLOY_WAIT_SECONDS = int(os.getenv("DEPLOY_WAIT_SECONDS", "600"))
 ROLLBACK_WAIT_SECONDS = int(os.getenv("ROLLBACK_WAIT_SECONDS", "600"))
 
@@ -472,6 +482,7 @@ def deploy_new_image(task_def_arn: str) -> Tuple[bool, str]:
         "--cluster", ECS_CLUSTER,
         "--service", ECS_SERVICE,
         "--task-definition", task_def_arn,
+        "--health-check-grace-period-seconds", str(HEALTH_CHECK_GRACE_SECONDS),
         "--force-new-deployment",
     ])
     if code != 0:
@@ -491,6 +502,7 @@ def rollback_to_task_def(task_def_arn: str) -> Tuple[bool, str]:
         "--cluster", ECS_CLUSTER,
         "--service", ECS_SERVICE,
         "--task-definition", task_def_arn,
+        "--health-check-grace-period-seconds", str(HEALTH_CHECK_GRACE_SECONDS),
     ])
     if code != 0:
         return False, stderr

@@ -46,3 +46,19 @@ async def test_a_healthy_loop_reports_nothing(caplog):
 async def test_it_can_be_switched_off(monkeypatch):
     monkeypatch.setenv("LOOP_STALL_MONITOR", "0")
     assert start_loop_stall_monitor() is None
+
+
+@pytest.mark.asyncio
+async def test_a_stall_is_also_sent_to_sentry(monkeypatch):
+    import sentry_sdk
+    sent = []
+    monkeypatch.setattr(sentry_sdk, "capture_message", lambda msg, level=None: sent.append((msg, level)))
+    m = LoopStallMonitor(stall_seconds=0.25, tick_seconds=0.05)
+    m.start()
+    try:
+        await asyncio.sleep(0.1)
+        _blocking_call_that_freezes_the_loop()
+        await asyncio.sleep(0.2)
+    finally:
+        m.stop()
+    assert sent and sent[0][0].startswith("LOOP-STALL-01") and sent[0][1] == "warning"

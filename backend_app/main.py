@@ -273,6 +273,7 @@ _orphan_sweep_task = None
 # ── Lifespan: boot + graceful shutdown ──────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _startup_began = time.monotonic()
     # Initialize Sentry early
     #
     # ENV-06: `environment` is the DEPLOYMENT environment and `trading_mode` is the trading
@@ -706,6 +707,22 @@ async def lifespan(app: FastAPI):
     # OBS-01: stamp the snapshot so /health/services can report its age rather than
     # presenting boot-time state as live state.
     _runtime_service_status["_captured_at"] = datetime.now(timezone.utc).isoformat()
+
+    # DEPLOY-GRACE-01: how long this worker took to become able to answer a request.
+    # gunicorn holds :8000 open the whole time, so health checks time out until here.
+    # Reported to Sentry when slow, because it is the figure the ECS health-check grace
+    # period (scripts/ecs_deploy_and_diagnose.py) has to exceed.
+    _startup_seconds = round(time.monotonic() - _startup_began, 1)
+    _runtime_service_status["_startup_seconds"] = _startup_seconds
+    logger.info("DEPLOY-GRACE-01: lifespan startup took %.1fs", _startup_seconds)
+    if _startup_seconds >= 45:
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(
+                f"DEPLOY-GRACE-01: slow startup {_startup_seconds}s", level="warning"
+            )
+        except Exception:  # noqa: BLE001 - reporting must never block serving
+            pass
 
     yield  #  Server is live and accepting requests here
 
