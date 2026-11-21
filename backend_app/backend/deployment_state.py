@@ -27,6 +27,7 @@ Regression: tests/test_rt08_deployment_state_is_durable.py
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from datetime import datetime, timezone
@@ -39,7 +40,18 @@ STOP_STATES = ("stopping", "stopped")
 
 
 async def _run(query: Any) -> Any:
-    result = query.execute()
+    """Execute a supabase query without blocking the event loop.
+
+    LOOP-STALL-04: the service client is supabase-py's SYNCHRONOUS client, and every
+    running bot calls ``status_of`` / ``close_requested`` on each tick, so ``execute()``
+    on the loop froze it for as long as the database took to answer (production
+    2026-11-21: "event loop blocked >2s at backend_app/backend/deployment_state.py:42").
+    A synchronous ``execute`` now runs in a worker thread; an async one is awaited here.
+    """
+    execute = query.execute
+    if inspect.iscoroutinefunction(execute):
+        return await execute()
+    result = await asyncio.to_thread(execute)
     return await result if inspect.isawaitable(result) else result
 
 

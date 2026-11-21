@@ -585,11 +585,14 @@ async def read_cached_universe() -> Optional[AssetUniverse]:
     return None
 
 
-async def write_cached_universe(universe: AssetUniverse) -> bool:
+async def write_cached_universe(
+    universe: AssetUniverse, payload: Optional[Dict[str, Any]] = None
+) -> bool:
     """Store a refreshed universe. Returns whether Redis accepted it.
 
     The process-local copy is set either way, so a Redis-less environment still serves a
-    real universe after a successful refresh.
+    real universe after a successful refresh. ``payload`` is ``universe.to_payload()``
+    when the caller already built it off the event loop (LOOP-STALL-04).
     """
     global _local_universe
     _local_universe = universe
@@ -603,7 +606,8 @@ async def write_cached_universe(universe: AssetUniverse) -> bool:
         return False
     try:
         stored = await manager.cache_set_json(
-            CACHE_KEY, universe.to_payload(), ttl=UNIVERSE_TTL_SECONDS
+            CACHE_KEY, payload if payload is not None else universe.to_payload(),
+            ttl=UNIVERSE_TTL_SECONDS,
         )
     except Exception as exc:
         logger.warning("[AssetUniverse] Redis write failed: %s", exc)
@@ -636,6 +640,43 @@ async def refresh_universe() -> AssetUniverse:
         _last_refresh_error = "No exchanges are configured for asset discovery"
         _last_failure_at = time.time()
         raise AssetUniverseUnavailable(_last_refresh_error)
+
+    # LOOP-STALL-04: loading, parsing and merging thousands of markets from every venue is
+    # seconds of pure CPU (ccxt parse_market / set_markets / deep_extend, then the payload's
+    # deepcopy). Run on the API's event loop it froze every request -- health checks too --
+    # for 2-3 s at a time after each start and every 3 h (production 2026-11-21, ~40
+    # LOOP-STALL events). It now runs in a worker thread with its own event loop; only the
+    # cache write comes back to this one.
+    (universe, payload, failed, errors, stats) = await asyncio.to_thread(
+        _build_universe_in_thread, list(exchange_ids)
+    )
+    await write_cached_universe(universe, payload)
+    _last_refresh_error = "; ".join(errors) or None
+    _last_failure_at = 0.0
+    logger.info(
+        "[AssetUniverse] Refreshed: %d markets from %s (failed: %s, considered %d, "
+        "excluded %d)",
+        len(universe.assets),
+        ", ".join(universe.exchanges) or "none",
+        ", ".join(failed) or "none",
+        stats["considered"],
+        stats["excluded_unusable"],
+    )
+    return universe
+
+
+def _build_universe_in_thread(exchange_ids: List[str]):
+    """Run :func:`_build_universe` on a private event loop in the calling (worker) thread."""
+    return asyncio.run(_build_universe(exchange_ids))
+
+
+async def _build_universe(exchange_ids: List[str]):
+    """Load every venue, merge, and build the cache payload. Raises when no venue works.
+
+    Returns ``(universe, payload, failed, errors, stats)``. Records the failure globals
+    itself on the all-venues-failed path, exactly as the inline version did.
+    """
+    global _last_refresh_error, _last_failure_at
 
     per_exchange: List[Tuple[str, Dict[str, Any]]] = []
     failed: List[str] = []
@@ -673,19 +714,7 @@ async def refresh_universe() -> AssetUniverse:
         exchanges=[exchange_id for exchange_id, _ in per_exchange],
         exchanges_failed=failed,
     )
-    await write_cached_universe(universe)
-    _last_refresh_error = "; ".join(errors) or None
-    _last_failure_at = 0.0
-    logger.info(
-        "[AssetUniverse] Refreshed: %d markets from %s (failed: %s, considered %d, "
-        "excluded %d)",
-        len(assets),
-        ", ".join(universe.exchanges) or "none",
-        ", ".join(failed) or "none",
-        stats["considered"],
-        stats["excluded_unusable"],
-    )
-    return universe
+    return universe, universe.to_payload(), failed, errors, stats
 
 
 def _refresh_is_in_flight() -> bool:

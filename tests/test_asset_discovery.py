@@ -364,9 +364,16 @@ class TestRefreshIsOffTheRequestPath:
             for line in source.splitlines()
             if "load_exchange_markets(" in line and "def " not in line
         ]
-        # One call site: the gather inside `refresh_universe`.
+        # One call site: the gather inside `_build_universe`, which only `refresh_universe`
+        # reaches (via its worker thread, LOOP-STALL-04).
         assert len(callers) == 1, callers
-        assert "load_exchange_markets" in inspect.getsource(au.refresh_universe)
+        assert "load_exchange_markets" in inspect.getsource(au._build_universe)
+        assert "_build_universe_in_thread" in inspect.getsource(au.refresh_universe)
+        build_callers = [
+            line.strip() for line in source.splitlines()
+            if "_build_universe(" in line and "def " not in line
+        ]
+        assert len(build_callers) == 1 and "asyncio.run" in build_callers[0], build_callers
 
 
 # ---------------------------------------------------------------------------
