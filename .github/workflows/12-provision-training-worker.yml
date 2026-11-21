@@ -71,15 +71,21 @@ jobs:
         env:
           MODE: ${{ inputs.mode }}
           UPDATE_EXISTING: ${{ inputs.update_existing }}
+        # `bash -e` alone does not fail a pipeline whose LAST command (tee) succeeds, so a
+        # refused create-service was reported green (run 3, 2026-11-21). pipefail fixes it.
+        shell: bash
         run: |
+          set -euo pipefail
           ARGS=(--worker training --desired-count 1)
           if [ "$MODE" = "apply" ]; then ARGS+=(--apply); else ARGS+=(--plan); fi
           if [ "$UPDATE_EXISTING" = "true" ]; then ARGS+=(--update-existing); fi
           echo "Running: python scripts/deploy_worker_services.py ${ARGS[*]}"
-          python scripts/deploy_worker_services.py "${ARGS[@]}" | tee provision.log
+          rc=0
+          python scripts/deploy_worker_services.py "${ARGS[@]}" | tee provision.log || rc=$?
           {
             echo "## Training worker — ${MODE}"
             echo '```'
             tail -n 60 provision.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
