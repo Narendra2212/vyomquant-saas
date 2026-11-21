@@ -33,14 +33,14 @@ def _grace(argv):
 def test_forward_deploy_sets_the_grace_period(monkeypatch, deploy):
     calls = _capture(monkeypatch, deploy)
     deploy.deploy_new_image("arn:td:1")
-    assert _grace(calls[0]) == 180
+    assert _grace(calls[0]) == 360
     assert "--force-new-deployment" in calls[0]
 
 
 def test_rollback_sets_it_too(monkeypatch, deploy):
     calls = _capture(monkeypatch, deploy)
     deploy.rollback_to_task_def("arn:td:0")
-    assert _grace(calls[0]) == 180
+    assert _grace(calls[0]) == 360
     assert "--force-new-deployment" not in calls[0]
 
 
@@ -48,6 +48,8 @@ def test_the_grace_fits_inside_the_deploy_wait_window(deploy):
     # image pull (~110 s) + grace + ALB healthy threshold (2 x 15 s) must leave margin.
     assert 110 + deploy.HEALTH_CHECK_GRACE_SECONDS + 30 < deploy.DEPLOY_WAIT_SECONDS
     assert deploy.HEALTH_CHECK_GRACE_SECONDS > 72, "the observed kill point must be covered"
+    # DEPLOY-GRACE-02: the slowest startup measured in production (Sentry, 2026-11-21).
+    assert deploy.HEALTH_CHECK_GRACE_SECONDS > 293.9
 
 
 def test_it_is_configurable(monkeypatch):

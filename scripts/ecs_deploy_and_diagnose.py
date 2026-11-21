@@ -112,8 +112,11 @@ ECR_REGISTRY = os.getenv("ECR_REGISTRY", "273709947018.dkr.ecr.ap-southeast-1.am
 # minute was killed ~72 s after registering - deploys 584, 587, 591 (attempt 1) and 592,
 # each "(reason Request timed out)" at registration + 72-73 s. Startup time varies by
 # task, which is why the same image sometimes deployed and sometimes did not.
-# 180 s still fits DEPLOY_WAIT_SECONDS: ~110 s image pull + 180 + 30 healthy threshold.
-HEALTH_CHECK_GRACE_SECONDS = int(os.getenv("HEALTH_CHECK_GRACE_SECONDS", "180"))
+# 180 s was the first value; DEPLOY-GRACE-02 measured startup in production at up to
+# 293.9 s (Sentry "DEPLOY-GRACE-01: slow startup", 2026-11-21 06:19 UTC), so 180 s would
+# have killed that task too. 360 s still fits DEPLOY_WAIT_SECONDS:
+# ~110 s image pull + 360 + 30 s healthy threshold = 500 s < 600 s.
+HEALTH_CHECK_GRACE_SECONDS = int(os.getenv("HEALTH_CHECK_GRACE_SECONDS", "360"))
 DEPLOY_WAIT_SECONDS = int(os.getenv("DEPLOY_WAIT_SECONDS", "600"))
 ROLLBACK_WAIT_SECONDS = int(os.getenv("ROLLBACK_WAIT_SECONDS", "600"))
 
