@@ -34,6 +34,32 @@ resource "aws_ecs_task_definition" "api" {
   # rather than on a task that is already saturated.
   cpu                      = 2048
   memory                   = 4096
+
+  # ╔══════════════════════════════════════════════════════════════════════════╗
+  # ║  DO NOT APPLY THIS TASK DEFINITION YET. IT WOULD DELETE A CONTAINER.     ║
+  # ╚══════════════════════════════════════════════════════════════════════════╝
+  #
+  # The live api task (revision 392) runs TWO containers. This file declares ONE:
+  #
+  #   vyomquant-api   essential=true   memoryReservation=2560, no hard cap
+  #   questdb         essential=false  memory=1024, memoryReservation=512
+  #
+  # `container_definitions` below describes a single container named "api". Applying it
+  # replaces the task definition with that one container, which REMOVES the QuestDB
+  # sidecar from the api task. Nothing in a plan summary will read as "deletes a database";
+  # it reads as an in-place task definition update.
+  #
+  # The two containers were also sharing 4096 MB with NO limit and NO reservation on either,
+  # so whichever allocated first won and a QuestDB query burst could take memory the web app
+  # then could not get. That is the likeliest source of the memory pressure that started
+  # this investigation. It is fixed in revision 392 by bounding the sidecar (hard 1024 MB,
+  # non-essential, so exceeding it kills QuestDB and the API keeps serving) and giving the
+  # app a soft floor rather than a cap (a hard cap on the essential container would turn a
+  # traffic spike into an outage).
+  #
+  # BEFORE THIS FILE CAN BE APPLIED: port the questdb container and both memory settings
+  # into `container_definitions`, then `terraform plan` and confirm the diff touches only
+  # cpu/memory and shows two containers, not one.
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
 
