@@ -432,12 +432,21 @@ locals {
     # So CPU doubles on the three workers that peg, and memory is LEFT ALONE. Cutting
     # memory to match current use would remove the headroom that is keeping these from
     # actually starving once 1000 users put real queue depth behind them.
+    # FARGATE CONSTRAINT, learned by having it refuse: 512 CPU does not pair with 512 MB.
+    # `RegisterTaskDefinition` answers "No Fargate configuration exists for given values:
+    # 512 CPU, 512 memory". 512 CPU's smallest legal memory is 1024, so every worker raised
+    # to 512 CPU goes to 1024 MB whether or not it needs the memory. Had this file kept
+    # 512/512, `terraform apply` would have failed outright.
     backtest = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.worker"] }
     dag      = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.backend.dag_worker"] }
-    command  = { cpu = 512, memory = 512, command = ["python", "-m", "backend_app.workers.command_worker"] }
+    command  = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.workers.command_worker"] }
     # INF-03 / marketplace Requirement 11.8: the subscription expiry sweep (30s). It was built
     # and tested but had no deployment entry, so paid marketplace access never ended.
-    marketplace_expiry = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
+    # Raised with the others: its CPU maximum was 99% of 256 units. It cannot be scaled
+    # OUT -- a second task runs the same 30s sweep and expires the same rows twice -- so a
+    # bigger task is the only axis available. 1024 MB because of the Fargate pairing rule
+    # noted above, not because it needs the memory (it peaked at 14% of 512).
+    marketplace_expiry = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
     # OPS-TRAIN-01: backend_app.backend.training_worker.TrainingWorker claims QUEUED rows
     # via the atomic `SET status='RUNNING' ... WHERE status='QUEUED'` transition described
     # in that module's own docstring and runs them -- but nothing has ever run this process
