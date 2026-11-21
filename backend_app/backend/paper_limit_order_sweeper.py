@@ -102,7 +102,11 @@ class PaperLimitOrderSweeper:
             )
             return 0
 
-        pairs = repo.get_open_legacy_limit_order_pairs(sb)
+        # LOOP-STALL-03: the repository read is a SYNCHRONOUS HTTP call (supabase-py). Run
+        # in a worker thread, not on the event loop: every 30 s it froze the API task's
+        # loop -- health checks included -- for as long as the database took to answer
+        # (production 2026-11-21, VYOMQUANT-API-PRODUCTION-35).
+        pairs = await asyncio.to_thread(repo.get_open_legacy_limit_order_pairs, sb)
         if not pairs:
             return 0
 

@@ -274,6 +274,15 @@ _orphan_sweep_task = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _startup_began = time.monotonic()
+    # DEPLOY-GRACE-03: per-step startup durations, attached to the slow-startup report.
+    # Startups measured 140-365 s in production with nothing saying which step took it.
+    _phase_times: dict = {}
+    _phase_last = [_startup_began]
+
+    def _mark(name: str) -> None:
+        now = time.monotonic()
+        _phase_times[name] = round(now - _phase_last[0], 1)
+        _phase_last[0] = now
     # Initialize Sentry early
     #
     # ENV-06: `environment` is the DEPLOYMENT environment and `trading_mode` is the trading
@@ -400,6 +409,7 @@ async def lifespan(app: FastAPI):
     )
     assert_master_key_can_read_stored_credentials()
 
+    _mark("config_and_vault_check")
     logger.info(" ALGO22 server starting up...")
     
     # 
@@ -417,6 +427,7 @@ async def lifespan(app: FastAPI):
     
     service_status = {"redis": "unknown", "questdb": "unknown", "alert": "unknown", "fleet": "unknown", "supabase": "unknown"}
     
+    _mark("startup_recovery")
     # Check Supabase
     try:
         supabase_conn = SupabaseConnection()
@@ -430,6 +441,7 @@ async def lifespan(app: FastAPI):
         service_status["supabase"] = "fallback"
         logger.warning(f" Supabase: Fallback mode ({e})")
     
+    _mark("supabase")
     # Check QuestDB
     try:
         if check_questdb():
@@ -440,6 +452,7 @@ async def lifespan(app: FastAPI):
         service_status["questdb"] = "fallback"
         logger.warning(f" QuestDB check failed: {e}")
 
+    _mark("questdb_check")
     # Engine: Redis Cache
     try:
         await redis_manager.connect()
@@ -455,6 +468,7 @@ async def lifespan(app: FastAPI):
         service_status["redis"] = "failed"
         logger.warning(f" Redis Cache connection failed: {e}")
 
+    _mark("redis")
     # Engine B: QuestDB connection pool
     try:
         await app_state.telemetry.connect()
@@ -464,6 +478,7 @@ async def lifespan(app: FastAPI):
         service_status["questdb"] = "failed"
         logger.warning(f" TelemetryEngine (QuestDB) connection failed: {e}")
 
+    _mark("questdb_pool")
     # Engine M: Alert Engine (Discord/Telegram)
     try:
         await app_state.alert.send_info("ALGO22 server started successfully.")
@@ -473,6 +488,7 @@ async def lifespan(app: FastAPI):
         service_status["alert"] = "mock/fallback"
         logger.warning(f" AlertEngine not armed (using mock): {e}")
 
+    _mark("alert_engine")
     # Engine L: FleetManager online
     try:
         max_bots = getattr(app_state.fleet, 'MAX_SYSTEM_BOTS', 'unknown')
@@ -482,6 +498,7 @@ async def lifespan(app: FastAPI):
         service_status["fleet"] = "mock/fallback"
         logger.warning(f" FleetManager using mock: {e}")
 
+    _mark("fleet_manager")
     # ── Runtime Service: ConsistencyChecker ──────────────────────────
     _consistency_checker: Optional[PositionConsistencyChecker] = None
     try:
@@ -493,6 +510,7 @@ async def lifespan(app: FastAPI):
         service_status["consistency_checker"] = "INACTIVE"
         logger.warning(f" ConsistencyChecker: INACTIVE — {e}")
 
+    _mark("consistency_checker")
     # ── Runtime Service: PaperLimitOrderSweeper (PAPER-07) ───────────
     _paper_limit_sweeper: Optional[PaperLimitOrderSweeper] = None
     try:
@@ -504,6 +522,7 @@ async def lifespan(app: FastAPI):
         service_status["paper_limit_order_sweeper"] = "INACTIVE"
         logger.warning(f" PaperLimitOrderSweeper: INACTIVE — {e}")
 
+    _mark("paper_limit_sweeper")
     # ── Runtime Service: OrderWatchdog ───────────────────────────────
     _order_watchdog: Optional[OrderWatchdog] = None
     _watchdog_db = None
@@ -522,6 +541,7 @@ async def lifespan(app: FastAPI):
         service_status["order_watchdog"] = "INACTIVE"
         logger.warning(f" OrderWatchdog: INACTIVE — {e}")
 
+    _mark("order_watchdog")
     # ── Runtime Service: PnLEngine ───────────────────────────────────
     _pnl_db = None
     _pnl_engine: Optional[PnLEngine] = None
@@ -537,6 +557,7 @@ async def lifespan(app: FastAPI):
         service_status["pnl_engine"] = "INACTIVE"
         logger.warning(f" PnLEngine: INACTIVE — {e}")
 
+    _mark("pnl_engine")
     # ── Runtime Service: ReconciliationScheduler ─────────────────────────────
     try:
         await start_reconciliation_scheduler()
@@ -546,6 +567,7 @@ async def lifespan(app: FastAPI):
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
 
+    _mark("reconciliation_scheduler")
     # ── PAPER-04: mark paper sessions whose loop died as ABANDONED ───────────
     #
     # A ONE-SHOT PASS AT BOOT, not a loop, which is why it belongs here and does not
@@ -608,6 +630,7 @@ async def lifespan(app: FastAPI):
         service_status["paper_session_reconciliation"] = "INACTIVE"
         logger.warning(f" PaperSessionReconciliation: INACTIVE — {e}")
 
+    _mark("paper_session_reconciliation")
     # ── MKT-06: CreatorPayoutScheduler — weekly marketplace creator payouts ──
     try:
         await start_creator_payout_scheduler()
@@ -621,6 +644,7 @@ async def lifespan(app: FastAPI):
         service_status["creator_payout_scheduler"] = "INACTIVE"
         logger.warning(f" CreatorPayoutScheduler: INACTIVE — {e}")
 
+    _mark("creator_payout_scheduler")
     # ── BILL-01: expire lapsed one-time (Razorpay) plan purchases ───────────
     global _plan_expiry_task
     try:
@@ -632,6 +656,7 @@ async def lifespan(app: FastAPI):
         service_status["plan_expiry_sweep"] = "INACTIVE"
         logger.warning(f" PlanExpirySweep: INACTIVE — {e}")
 
+    _mark("plan_expiry")
     # ── RT-08: resume deployments the database says are running ────────────
     # Runs in the background so a slow venue cannot delay readiness. Live deployments are
     # only resumed when the operator opted in (RESUME_LIVE_DEPLOYMENTS); otherwise their
@@ -662,6 +687,7 @@ async def lifespan(app: FastAPI):
         service_status["deployment_resume"] = "INACTIVE"
         logger.warning(f" DeploymentResume: INACTIVE — {e}")
 
+    _mark("deployment_resume")
     # ── Runtime Service: PortfolioCacheUpdater ─────────────────────────────
     try:
         await start_portfolio_cache_updater()
@@ -671,6 +697,7 @@ async def lifespan(app: FastAPI):
         service_status["portfolio_cache_updater"] = "INACTIVE"
         logger.warning(f" PortfolioCacheUpdater: INACTIVE — {e}")
 
+    _mark("portfolio_cache_updater")
     # ── Runtime Service: DashboardDataIngester ─────────────────────────────
     try:
         await start_dashboard_data_ingester()
@@ -680,6 +707,7 @@ async def lifespan(app: FastAPI):
         service_status["dashboard_data_ingester"] = "INACTIVE"
         logger.warning(f" DashboardDataIngester: INACTIVE — {e}")
 
+    _mark("dashboard_data_ingester")
     # ── Runtime Service: AssetUniverseRefresher ───────────────────────────
     # strategy-builder task 7.1 / Requirements 11.5, 25.5. `start()` only creates the
     # task, so a slow or unreachable exchange delays no boot; the first refresh IS the
@@ -695,6 +723,7 @@ async def lifespan(app: FastAPI):
 
     logger.info(f" Service Status: {service_status}")
 
+    _mark("asset_universe_refresher")
     # Start WebSocket Streamer
     try:
         await ws_streamer.start()
@@ -712,17 +741,18 @@ async def lifespan(app: FastAPI):
     # gunicorn holds :8000 open the whole time, so health checks time out until here.
     # Reported to Sentry when slow, because it is the figure the ECS health-check grace
     # period (scripts/ecs_deploy_and_diagnose.py) has to exceed.
+    _mark("websocket_streamer")
     _startup_seconds = round(time.monotonic() - _startup_began, 1)
     _runtime_service_status["_startup_seconds"] = _startup_seconds
-    logger.info("DEPLOY-GRACE-01: lifespan startup took %.1fs", _startup_seconds)
+    _runtime_service_status["_startup_phases"] = dict(_phase_times)
+    from backend_app.core.startup_timing import report_slow_startup, slowest_step
+    _slowest = slowest_step(_phase_times)
+    logger.info(
+        "DEPLOY-GRACE-01: lifespan startup took %.1fs; slowest step %s=%.1fs; steps=%s",
+        _startup_seconds, _slowest[0], _slowest[1], _phase_times,
+    )
     if _startup_seconds >= 45:
-        try:
-            import sentry_sdk
-            sentry_sdk.capture_message(
-                f"DEPLOY-GRACE-01: slow startup {_startup_seconds}s", level="warning"
-            )
-        except Exception:  # noqa: BLE001 - reporting must never block serving
-            pass
+        report_slow_startup(_startup_seconds, _phase_times)
 
     yield  #  Server is live and accepting requests here
 
