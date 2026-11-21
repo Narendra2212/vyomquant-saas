@@ -541,7 +541,7 @@ def main() -> int:
             "ecs", "register-task-definition", "--output", "json",
             "--cli-input-json", json.dumps(definition))
         if code != 0:
-            print(f"   register FAILED: {(err or '').strip()[:220]}")
+            print(f"   register FAILED: {(err or '').strip()[:2000]}")
             failures += 1
             continue
         registered = json.loads(out)["taskDefinition"]
@@ -563,7 +563,7 @@ def main() -> int:
                 "--output", "json",
             )
             if code != 0:
-                print(f"   update-service FAILED: {(err or '').strip()[:220]}")
+                print(f"   update-service FAILED: {(err or '').strip()[:2000]}")
                 failures += 1
                 continue
             print(f"   rolled {service_name} onto {arn.split('/')[-1]} "
@@ -585,7 +585,7 @@ def main() -> int:
             "--output", "json",
         )
         if code != 0:
-            print(f"   create-service FAILED: {(err or '').strip()[:220]}")
+            print(f"   create-service FAILED: {(err or '').strip()[:2000]}")
             failures += 1
             continue
         print(f"   created service {service_name}")
