@@ -66,15 +66,32 @@ def _first_app_frame(frames):
     return frames[0] if frames else "unknown"
 
 
-def _report_to_sentry(age: float, frames) -> None:
+def _app_frames(frame, limit: int = 6):
+    """LOOP-STALL-03: the innermost frames IN THIS CODEBASE, searched over the WHOLE stack.
+
+    ``_innermost_frames`` keeps only the 12 innermost frames. A blocking HTTP read is 12+
+    frames deep inside ssl/httpcore/httpx/postgrest before it reaches our code, so the
+    caller was cut off and 514 production stalls (VYOMQUANT-API-PRODUCTION-35) all said
+    only "ssl.py in read" -- not which of our loops made the call.
+    """
+    return [entry for entry in _innermost_frames(frame, limit=200)
+            if entry.startswith("backend_app/")][:limit]
+
+
+def _report_to_sentry(age: float, frames, app_frames=None) -> None:
     """Also send the stall to Sentry, which stays readable when CloudWatch is not."""
     try:
         import sentry_sdk
-        culprit = _first_app_frame(frames)
+        app_frames = list(app_frames or [])
+        culprit = app_frames[0] if app_frames else _first_app_frame(frames)
         with sentry_sdk.new_scope() as scope:
             for i, entry in enumerate(frames):
                 scope.set_extra(f"frame_{i:02d}", entry)
+            for i, entry in enumerate(app_frames):
+                scope.set_extra(f"app_frame_{i:02d}", entry)
             scope.set_tag("stall_culprit", culprit[:200])
+            if frames:
+                scope.set_tag("stall_innermost", frames[0][:200])
             sentry_sdk.capture_message(
                 f"LOOP-STALL-01: event loop blocked >{age:.0f}s at {culprit}", level="warning"
             )
@@ -118,10 +135,9 @@ class LoopStallMonitor:
                     "LOOP-STALL-01: event loop unresponsive for %.1fs; it is executing:\n%s",
                     age, stack,
                 )
-                _report_to_sentry(
-                    age,
-                    _innermost_frames(sys._current_frames().get(self._loop_thread_id)),  # noqa: SLF001
-                )
+                frame = sys._current_frames().get(self._loop_thread_id)  # noqa: SLF001
+                _report_to_sentry(age, _innermost_frames(frame), _app_frames(frame))
+                del frame
             elif in_stall and age < self.stall_seconds:
                 in_stall = False
                 logger.warning(
