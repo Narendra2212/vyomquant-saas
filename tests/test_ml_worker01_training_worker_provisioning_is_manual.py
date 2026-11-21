@@ -44,3 +44,16 @@ def test_the_service_it_creates_is_kept_current_by_every_deploy():
     spec = d.worker_definitions()["training"]
     assert spec["command"] == ["python", "-m", "backend_app.backend.training_worker"]
     assert spec["service"].startswith(e.WORKER_SERVICE_PREFIX)
+
+
+def test_a_refused_step_fails_the_run():
+    # run 3: create-service was AccessDenied but the job was green, because `| tee` hid it.
+    assert "set -euo pipefail" in WF.read_text()
+
+
+def test_the_deploy_role_policy_for_workers_is_narrow():
+    import json
+    pol = json.loads(Path("infra/iam/deploy-role-worker-services-policy.json").read_text())
+    (stmt,) = pol["Statement"]
+    assert set(stmt["Action"]) == {"ecs:CreateService", "ecs:UpdateService", "ecs:DescribeServices"}
+    assert stmt["Resource"].endswith(":service/vyomquant-cluster/vyomquant-worker-*")
