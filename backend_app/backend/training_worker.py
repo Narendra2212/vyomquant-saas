@@ -3409,4 +3409,16 @@ def run_worker() -> None:  # pragma: no cover - process entry point
 
 
 if __name__ == "__main__":  # pragma: no cover - process entry point
-    run_worker()
+    # ML-WORKER-04: run the CANONICAL module, never this `__main__` copy.
+    #
+    # `python -m backend_app.backend.training_worker` executes this file as `__main__`.
+    # `_main()` then calls `install_training_runtime()`, which imports
+    # `backend_app.backend.training_worker` by its real name -- a SECOND module object
+    # with its own `_TRAINING_BACKEND`. The trainer landed in that module while the loop
+    # running here read `__main__`'s empty slot, so every claimed job ended
+    # FAILED / TRAINER_UNAVAILABLE (production, 2026-11-21, the first job the new ECS
+    # training worker ever ran). Importing by name and running from there keeps one
+    # module, one backend slot, one worker.
+    import importlib
+
+    importlib.import_module("backend_app.backend.training_worker").run_worker()
