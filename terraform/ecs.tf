@@ -34,6 +34,32 @@ resource "aws_ecs_task_definition" "api" {
   # rather than on a task that is already saturated.
   cpu                      = 2048
   memory                   = 4096
+
+  # ╔══════════════════════════════════════════════════════════════════════════╗
+  # ║  DO NOT APPLY THIS TASK DEFINITION YET. IT WOULD DELETE A CONTAINER.     ║
+  # ╚══════════════════════════════════════════════════════════════════════════╝
+  #
+  # The live api task (revision 392) runs TWO containers. This file declares ONE:
+  #
+  #   vyomquant-api   essential=true   memoryReservation=2560, no hard cap
+  #   questdb         essential=false  memory=1024, memoryReservation=512
+  #
+  # `container_definitions` below describes a single container named "api". Applying it
+  # replaces the task definition with that one container, which REMOVES the QuestDB
+  # sidecar from the api task. Nothing in a plan summary will read as "deletes a database";
+  # it reads as an in-place task definition update.
+  #
+  # The two containers were also sharing 4096 MB with NO limit and NO reservation on either,
+  # so whichever allocated first won and a QuestDB query burst could take memory the web app
+  # then could not get. That is the likeliest source of the memory pressure that started
+  # this investigation. It is fixed in revision 392 by bounding the sidecar (hard 1024 MB,
+  # non-essential, so exceeding it kills QuestDB and the API keeps serving) and giving the
+  # app a soft floor rather than a cap (a hard cap on the essential container would turn a
+  # traffic spike into an outage).
+  #
+  # BEFORE THIS FILE CAN BE APPLIED: port the questdb container and both memory settings
+  # into `container_definitions`, then `terraform plan` and confirm the diff touches only
+  # cpu/memory and shows two containers, not one.
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
 
@@ -110,6 +136,36 @@ resource "aws_ecs_service" "api" {
   task_definition = aws_ecs_task_definition.api.arn
   desired_count   = 2
   launch_type     = "FARGATE"
+
+  # CAP-01. THE MEASURED KILL MECHANISM, AND WHY THIS IS THE FIX RATHER THAN MORE MEMORY.
+  #
+  # The only stopped tasks in the whole cluster are two api tasks, and neither died of
+  # memory. Both read:
+  #
+  #     Task failed ELB health checks in (target-group .../vyomquant-api-tg/...)
+  #
+  # There is no OutOfMemoryError anywhere, no service event mentioning memory, and Redis
+  # sits at 2-4% of capacity with zero evictions. What there IS: the api's CPU maximum at
+  # 106% of a single vCPU.
+  #
+  # That composes into a loop. One saturated task stops answering `/health/ready` inside
+  # its 5s timeout -- that endpoint probes dependencies at 3s each, so a CPU-starved task
+  # misses it -- the ALB marks it unhealthy after 3 intervals, ECS kills and replaces it,
+  # and every request in the gap fails. With production running ONE task, that gap is a
+  # total outage. To a user it reads exactly like memory starvation: hangs, then errors.
+  #
+  # `health_check_grace_period_seconds` is the missing piece. Without it a REPLACEMENT task
+  # is health-checked while it is still importing the application and opening pools, so a
+  # cold start can be killed before it ever serves a request -- the loop sustains itself
+  # once it begins. 120s is chosen against the probe's own cost, not guessed: 3 intervals
+  # of 30s is 90s of grace before the ALB may act, plus margin for image pull.
+  health_check_grace_period_seconds = 120
+
+  # A deploy must never drop below the capacity that is serving traffic. At `desired_count`
+  # 2 this keeps one task in rotation while the other is replaced, which is also what makes
+  # a rollout survivable under load rather than a self-inflicted version of the loop above.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
 
   network_configuration {
     security_groups  = [aws_security_group.ecs_tasks.id]
@@ -402,12 +458,21 @@ locals {
     # So CPU doubles on the three workers that peg, and memory is LEFT ALONE. Cutting
     # memory to match current use would remove the headroom that is keeping these from
     # actually starving once 1000 users put real queue depth behind them.
+    # FARGATE CONSTRAINT, learned by having it refuse: 512 CPU does not pair with 512 MB.
+    # `RegisterTaskDefinition` answers "No Fargate configuration exists for given values:
+    # 512 CPU, 512 memory". 512 CPU's smallest legal memory is 1024, so every worker raised
+    # to 512 CPU goes to 1024 MB whether or not it needs the memory. Had this file kept
+    # 512/512, `terraform apply` would have failed outright.
     backtest = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.worker"] }
     dag      = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.backend.dag_worker"] }
-    command  = { cpu = 512, memory = 512, command = ["python", "-m", "backend_app.workers.command_worker"] }
+    command  = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.workers.command_worker"] }
     # INF-03 / marketplace Requirement 11.8: the subscription expiry sweep (30s). It was built
     # and tested but had no deployment entry, so paid marketplace access never ended.
-    marketplace_expiry = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
+    # Raised with the others: its CPU maximum was 99% of 256 units. It cannot be scaled
+    # OUT -- a second task runs the same 30s sweep and expires the same rows twice -- so a
+    # bigger task is the only axis available. 1024 MB because of the Fargate pairing rule
+    # noted above, not because it needs the memory (it peaked at 14% of 512).
+    marketplace_expiry = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
     # OPS-TRAIN-01: backend_app.backend.training_worker.TrainingWorker claims QUEUED rows
     # via the atomic `SET status='RUNNING' ... WHERE status='QUEUED'` transition described
     # in that module's own docstring and runs them -- but nothing has ever run this process
