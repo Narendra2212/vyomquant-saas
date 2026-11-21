@@ -17,8 +17,23 @@ resource "aws_ecs_task_definition" "api" {
   family                   = "vyomquant-api-${var.environment}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = 512
-  memory                   = 1024
+
+  # CAP-01. WAS cpu = 512 / memory = 1024, AND THAT WAS SMALLER THAN WHAT IS RUNNING.
+  #
+  # The live api task is 1024 CPU / 4096 MB (measured against the cluster in
+  # ap-southeast-1). So this file had drifted BELOW production, and applying it unchanged
+  # would have halved the api's CPU and quartered its memory — converting the reported
+  # memory pressure into an outage. That is recorded here because the drift is the
+  # dangerous part, not the number: anyone running `terraform apply` to fix a capacity
+  # complaint would have made it far worse, and nothing warned them.
+  #
+  # 2048 CPU because the measured 3-day maximum was 106% of 1024 — over the ceiling, which
+  # is throttling. Memory stays at the 4096 production already carries: its peak was 55%,
+  # and that headroom is what absorbs per-user session and connection state as the account
+  # count grows. Halving CPU utilisation also gives the autoscaler room to act on a signal
+  # rather than on a task that is already saturated.
+  cpu                      = 2048
+  memory                   = 4096
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
 
@@ -168,8 +183,20 @@ resource "aws_ecs_task_definition" "mds" {
   family                   = "vyomquant-mds-${var.environment}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = 256
-  memory                   = 512
+  # CAP-01. WAS cpu = 256 / memory = 512, ALSO SMALLER THAN WHAT IS RUNNING.
+  #
+  # The live mds task is 1024 CPU / 3072 MB. Same drift as the api above and the same
+  # hazard: applying this file unchanged would have cut mds to a quarter of its CPU and a
+  # sixth of its memory.
+  #
+  # Matched to production rather than trimmed to measured use. Its memory sat at 4% of
+  # 3072 — but mds holds candle state for EVERY subscribed symbol, so memory is the axis
+  # that grows with the account count, and 4% today says nothing about 1000 users each
+  # watching their own symbols. CPU peaked at 65% of 1024, which is real headroom, so CPU
+  # is left where it is. If anything here needs raising later it is memory, and the
+  # autoscaler cannot help: this service is a singleton by design.
+  cpu                      = 1024
+  memory                   = 3072
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
 
@@ -352,9 +379,32 @@ resource "aws_ecs_service" "simulator" {
 # Worker Definitions Base
 locals {
   worker_definitions = {
-    backtest = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.worker"] }
-    dag      = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.backend.dag_worker"] }
-    command  = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.command_worker"] }
+    # CAP-01 SIZING, FROM MEASURED USE RATHER THAN GUESSWORK.
+    #
+    # A 3-day CloudWatch window over the live cluster (ap-southeast-1) said the constraint
+    # is CPU, not memory, and it is not close:
+    #
+    #   service              mem% avg/max   cpu% avg/max   allotted
+    #   api                      41 / 55        8 / 106     4096MB / 1024
+    #   dag                      30 / 31        0 / 100      512MB /  256
+    #   command                  17 / 18        0 / 100      512MB /  256
+    #   marketplace_expiry       13 / 14        0 /  99      512MB /  256
+    #   exchange_fills           16 / 21        0 /  94     1024MB /  512
+    #   backtest                  8 /  8        0 /  62      512MB /  256
+    #   mds                       4 /  4        0 /  65     3072MB / 1024
+    #
+    # Every memory maximum is under 56%. Every CPU maximum on a 256-unit (0.25 vCPU)
+    # worker pegs at 94-100%, and the api exceeded 100% — which is throttling, not load.
+    # Average CPU near 0% with maxima at the ceiling is the signature of bursty work on a
+    # task too small to absorb a burst: the queue drains in steps, which presents as the
+    # app hanging rather than as an out-of-memory error.
+    #
+    # So CPU doubles on the three workers that peg, and memory is LEFT ALONE. Cutting
+    # memory to match current use would remove the headroom that is keeping these from
+    # actually starving once 1000 users put real queue depth behind them.
+    backtest = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.worker"] }
+    dag      = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.backend.dag_worker"] }
+    command  = { cpu = 512, memory = 512, command = ["python", "-m", "backend_app.workers.command_worker"] }
     # INF-03 / marketplace Requirement 11.8: the subscription expiry sweep (30s). It was built
     # and tested but had no deployment entry, so paid marketplace access never ended.
     marketplace_expiry = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
@@ -504,4 +554,134 @@ locals {
   simulator_image = join("", [
     local.ecr_registry, "/", var.simulator_image_repository, ":", var.image_tag,
   ])
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CAP-01 — WORKER AUTOSCALING, AND THE THREE WORKERS THAT MUST NOT HAVE IT
+#
+#  The brief was "scale up and down with load". Three of the six workers CANNOT be
+#  horizontally scaled safely, and scaling them would cause incidents rather than
+#  relieve load. The dangerous one is named first because it moves real money.
+#
+#  command           NEVER. `command_worker.py` consumes COMMAND_STREAM='command_queue',
+#                    which carries start_bot/stop_bot. This file's own note at the
+#                    `worker_definitions` map records why a second consumer of that
+#                    stream is "a live double-execution hazard against real exchange" —
+#                    two tasks can take the same start command and open a position twice.
+#                    Its CPU does peg at 100%, so it gets a BIGGER task (above), not more
+#                    tasks. That is the only safe axis for it.
+#
+#  marketplace_expiry NEVER. A 30-second sweep over due subscriptions (Requirement 11.8).
+#                    A second task runs the same sweep concurrently and expires the same
+#                    rows twice.
+#
+#  exchange_fills    POINTLESS, so no. It takes a Redis leader lease
+#                    (core/leader_lease.try_acquire_or_renew) specifically so that extra
+#                    tasks elect one streamer; the others would idle at full cost while
+#                    holding authenticated venue sockets open for nothing.
+#
+#  The three below are safe because each one CLAIMS its work exclusively:
+#
+#  backtest          Redis Streams consumer group 'backtest_workers' (worker.py). XREADGROUP
+#                    hands a message to exactly one consumer in the group.
+#  dag               the same consumer-group shape.
+#  training          claims rows with an atomic
+#                    `SET status='RUNNING' ... WHERE status='QUEUED'` transition
+#                    (training_worker's own docstring), so two tasks cannot take one job.
+#
+#  Scaled on MEMORY as well as CPU, because the reported symptom was memory pressure. The
+#  CPU signal is what the measurements actually implicate, but a queue deep enough to
+#  change that is exactly when the memory signal earns its place — and target tracking
+#  takes whichever policy demands more capacity.
+# ══════════════════════════════════════════════════════════════════════════════
+
+locals {
+  #: Workers whose work is exclusively claimed, so a second task cannot duplicate it.
+  #: Adding a key here is a statement that concurrent execution of that worker is SAFE.
+  scalable_workers = {
+    backtest = { min = 1, max = 6 }
+    dag      = { min = 1, max = 6 }
+    training = { min = 1, max = 4 }
+  }
+}
+
+resource "aws_appautoscaling_target" "worker_target" {
+  for_each = local.scalable_workers
+
+  max_capacity       = each.value.max
+  min_capacity       = each.value.min
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.workers[each.key].name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "worker_cpu" {
+  for_each = local.scalable_workers
+
+  name               = "vyomquant-worker-${each.key}-cpu"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.worker_target[each.key].resource_id
+  scalable_dimension = aws_appautoscaling_target.worker_target[each.key].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.worker_target[each.key].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value = 60.0
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+
+    # Out fast, in slow. A queue that just spiked will spike again, and a worker removed
+    # 60 seconds after a burst is a worker that has to be added again immediately —
+    # flapping costs more than the task did.
+    scale_out_cooldown = 60
+    scale_in_cooldown  = 300
+  }
+}
+
+resource "aws_appautoscaling_policy" "worker_memory" {
+  for_each = local.scalable_workers
+
+  name               = "vyomquant-worker-${each.key}-memory"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.worker_target[each.key].resource_id
+  scalable_dimension = aws_appautoscaling_target.worker_target[each.key].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.worker_target[each.key].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value = 70.0
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+
+    scale_out_cooldown = 60
+    scale_in_cooldown  = 300
+  }
+}
+
+# ── The API's second signal ───────────────────────────────────────────────────
+#
+# `api_cpu_policy` above already tracks CPU at 70%. Memory is added as a second policy
+# rather than replacing it: the api measured 55% memory at its peak on one task, and the
+# headroom that leaves disappears as connection and session state multiplies across 1000
+# users. Target tracking honours whichever policy asks for more tasks, so this can only
+# add capacity, never withhold it.
+resource "aws_appautoscaling_policy" "api_memory_policy" {
+  name               = "vyomquant-api-memory"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.api_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.api_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.api_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value = 70.0
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+
+    scale_out_cooldown = 60
+    scale_in_cooldown  = 300
+  }
 }
