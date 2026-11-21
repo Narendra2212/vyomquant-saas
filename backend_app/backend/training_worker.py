@@ -1279,6 +1279,29 @@ async def set_version_lifecycle(
 # ══════════════════════════════════════════════════════════════════════════
 
 
+def _report_training_failure(exc: BaseException, job: Mapping[str, Any], reason: str) -> None:
+    """ML-WORKER-05: send a failed job's exception to Sentry, with the job as tags.
+
+    Production, 2026-11-21: the first job the ECS worker trained (XGBoost, QA account)
+    reached round 31 of 200 and ended FAILED / TRAINING_RUNTIME_ERROR. The job row stores
+    only the classified reason, and the traceback went to CloudWatch alone. Cancellation
+    and other control-flow exits are not errors and are not reported.
+    """
+    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+        return
+    try:
+        import sentry_sdk
+
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("training_failure_reason", str(reason))
+            scope.set_tag("training_block_id", str(job.get("block_id") or ""))
+            scope.set_extra("training_job_id", str(job.get("id") or ""))
+            scope.set_extra("training_version_id", str(job.get("version_id") or ""))
+            sentry_sdk.capture_exception(exc)
+    except Exception:  # noqa: BLE001 - diagnostics must never change the job outcome
+        pass
+
+
 async def _finish(
     sb: Any,
     job: Mapping[str, Any],
@@ -2336,6 +2359,7 @@ async def run_training_job(
         logger.warning(
             "Training job %s failed: %s (%s)", job.get("id"), reason, detail.get("message")
         )
+        _report_training_failure(exc, job, reason)
         await _finish(
             sb,
             job,
@@ -3356,6 +3380,25 @@ async def _main() -> None:  # pragma: no cover - process entry point
     _logging.basicConfig(
         level=_logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
     )
+
+    # ML-WORKER-05: the worker is its own process, so it needs its own Sentry client.
+    # Without it a failed job's exception reached only CloudWatch, and the job row holds
+    # just the classified reason (TRAINING_RUNTIME_ERROR) -- not enough to diagnose.
+    try:
+        import os as _os
+
+        from backend_app.backend.observability.sentry_config import initialize_sentry
+        from backend_app.core.runtime_env import deployment_environment
+        from backend_app.core.safety_config import get_vyomquant_mode
+
+        initialize_sentry(
+            dsn=_os.getenv("SENTRY_DSN"),
+            environment=deployment_environment() or "unknown",
+            release="2.4.0",
+            trading_mode=get_vyomquant_mode("safe"),
+        )
+    except Exception as exc:  # noqa: BLE001 - telemetry must never stop the worker
+        logger.warning("Sentry could not be initialised in the training worker: %s", exc)
 
     # Install the fit. Here, in the PROCESS entry point, rather than at module import:
     # a global backend installed as an import side effect would make every process that
