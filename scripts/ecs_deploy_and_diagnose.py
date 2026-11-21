@@ -169,7 +169,16 @@ PRE_DEPLOY_IDLE_WAIT_SECONDS = int(os.getenv("PRE_DEPLOY_IDLE_WAIT_SECONDS", "60
 # is not new code -- it is the same code measured against a ceiling it was already pressed
 # against. The size is accepted here because the pipeline must reproduce what runs; the
 # question of why it needs 2 GB is recorded in the session report and is not answered here.
-EXPECTED_TASK_CPU = os.getenv("EXPECTED_TASK_CPU", "1024")
+#
+# CPU WAS RAISED 1024 -> 2048 ON 2026-11-21 (CAP-01, PR #376), ALSO ON EVIDENCE.
+#
+# terraform/ecs.tf now declares the api task at 2048 CPU / 4096 MB because the measured
+# 3-day maximum CPU was 106% of 1024 -- over the ceiling, i.e. throttling. That apply
+# registered revision 389 at 2048, and the next deploy (run 602) was refused here with
+# "CPU is not 1024, got 2048": the same out-of-band-sizing trap as memory on 2026-11-18.
+# The expectation follows the declared, measured size; 2048 CPU with 4096 MB is a valid
+# Fargate combination (2 vCPU admits 4-16 GB).
+EXPECTED_TASK_CPU = os.getenv("EXPECTED_TASK_CPU", "2048")
 EXPECTED_TASK_MEMORY = os.getenv("EXPECTED_TASK_MEMORY", "4096")
 
 # Rollout outcome states returned by wait_for_rollout().

@@ -145,7 +145,8 @@ def test_the_sizing_expectation_is_a_named_constant(deploy) -> None:
     2048 was expected was the absence of any record. The constant is what the comment above it
     is attached to.
     """
-    assert deploy.EXPECTED_TASK_CPU == "1024"
+    # 2048 since CAP-01 (terraform/ecs.tf, measured 106% of 1024 at peak).
+    assert deploy.EXPECTED_TASK_CPU == "2048"
     assert deploy.EXPECTED_TASK_MEMORY == "4096"
     # Strings, because that is what the ECS API returns and a silent int/str mismatch would
     # make the comparison always fail.
@@ -194,7 +195,7 @@ def test_any_other_memory_is_refused(deploy, memory) -> None:
     assert "Memory is not" in message
 
 
-@pytest.mark.parametrize("cpu", ["512", "2048", None])
+@pytest.mark.parametrize("cpu", ["512", "1024", "4096", None])
 def test_any_other_cpu_is_refused(deploy, cpu) -> None:
     task_def = copy.deepcopy(_valid_task_def(deploy))
     task_def["cpu"] = cpu
@@ -235,3 +236,14 @@ def test_the_refusal_explains_why_the_gate_exists(deploy) -> None:
     assert "RUNNING" in message
     assert "out-of-band" in message
     assert "do not widen" in message.lower()
+
+
+def test_the_cpu_expectation_matches_the_terraform_api_task(deploy) -> None:
+    """CAP-01: the gate and terraform must agree, or an apply blocks every deploy (run 602)."""
+    import re
+    tf = (pathlib.Path(__file__).resolve().parents[1] / "terraform" / "ecs.tf").read_text()
+    block = tf[tf.index('resource "aws_ecs_task_definition" "api"'):]
+    block = block[:block.index("\n}\n")]
+    cpu = re.search(r"^\s*cpu\s*=\s*(\d+)", block, re.M).group(1)
+    mem = re.search(r"^\s*memory\s*=\s*(\d+)", block, re.M).group(1)
+    assert (deploy.EXPECTED_TASK_CPU, deploy.EXPECTED_TASK_MEMORY) == (cpu, mem)
