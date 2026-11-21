@@ -337,6 +337,11 @@ PRODUCTION_SENTRY_DSN = os.environ.get(
 )
 
 
+#: ML-STORE-01: the private Supabase Storage bucket for trained model artifacts
+#: (created 2026-11-21, 256 MB per object = ml_training_policy's max_model_size_mb).
+MODEL_ARTIFACT_BUCKET = os.getenv("STRATEGY_MODEL_ARTIFACT_BUCKET", "model-artifacts")
+
+
 def ensure_observability_env(container: dict) -> list:
     """Give a container SENTRY_DSN / SENTRY_ENVIRONMENT unless it already declares them.
 
@@ -351,6 +356,22 @@ def ensure_observability_env(container: dict) -> list:
             env.append({"name": name, "value": value})
             added.append(name)
     return added
+
+
+def ensure_model_store_env(container: dict) -> list:
+    """ML-STORE-01: point a container at the shared model bucket unless it already is.
+
+    Trained models go to the private Supabase bucket, not the container's disk: the
+    training worker could not write /app/user_strategies (PermissionError, 2026-11-21),
+    and a file there would be invisible to the API tasks that load models anyway. Set on
+    the API and every worker; an operator's value (environment or secrets) is kept.
+    """
+    env = container.setdefault("environment", [])
+    present = {e.get("name") for e in env} | {s.get("name") for s in container.get("secrets", [])}
+    if "STRATEGY_MODEL_ARTIFACT_BUCKET" in present or not MODEL_ARTIFACT_BUCKET:
+        return []
+    env.append({"name": "STRATEGY_MODEL_ARTIFACT_BUCKET", "value": MODEL_ARTIFACT_BUCKET})
+    return ["STRATEGY_MODEL_ARTIFACT_BUCKET"]
 
 
 #: LIVE-LAUNCH-01: the live-trading launch policy, applied to the API container on every
@@ -439,7 +460,7 @@ def register_task_definition(image_uri: str, base_task_def_arn: str = "") -> Tup
         for container in current_td["containerDefinitions"]:
             if container.get("name") in ("vyomquant-api", "api"):
                 container["image"] = image_uri
-                added = ensure_observability_env(container)
+                added = ensure_observability_env(container) + ensure_model_store_env(container)
                 if added:
                     print(f"[ecs_deploy] OBS-01: added {added} to the API container")
                 for name, old, new in apply_live_trading_policy_env(container):
@@ -921,7 +942,7 @@ def register_worker_task_definition(image_uri: str, current_task_def_arn: str) -
 
     for container in current_td["containerDefinitions"]:
         container["image"] = image_uri
-        added = ensure_observability_env(container)
+        added = ensure_observability_env(container) + ensure_model_store_env(container)
         if added:
             print(f"[ecs_deploy] OBS-01: added {added} to worker container {container.get('name')}")
 
