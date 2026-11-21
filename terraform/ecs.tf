@@ -111,6 +111,36 @@ resource "aws_ecs_service" "api" {
   desired_count   = 2
   launch_type     = "FARGATE"
 
+  # CAP-01. THE MEASURED KILL MECHANISM, AND WHY THIS IS THE FIX RATHER THAN MORE MEMORY.
+  #
+  # The only stopped tasks in the whole cluster are two api tasks, and neither died of
+  # memory. Both read:
+  #
+  #     Task failed ELB health checks in (target-group .../vyomquant-api-tg/...)
+  #
+  # There is no OutOfMemoryError anywhere, no service event mentioning memory, and Redis
+  # sits at 2-4% of capacity with zero evictions. What there IS: the api's CPU maximum at
+  # 106% of a single vCPU.
+  #
+  # That composes into a loop. One saturated task stops answering `/health/ready` inside
+  # its 5s timeout -- that endpoint probes dependencies at 3s each, so a CPU-starved task
+  # misses it -- the ALB marks it unhealthy after 3 intervals, ECS kills and replaces it,
+  # and every request in the gap fails. With production running ONE task, that gap is a
+  # total outage. To a user it reads exactly like memory starvation: hangs, then errors.
+  #
+  # `health_check_grace_period_seconds` is the missing piece. Without it a REPLACEMENT task
+  # is health-checked while it is still importing the application and opening pools, so a
+  # cold start can be killed before it ever serves a request -- the loop sustains itself
+  # once it begins. 120s is chosen against the probe's own cost, not guessed: 3 intervals
+  # of 30s is 90s of grace before the ALB may act, plus margin for image pull.
+  health_check_grace_period_seconds = 120
+
+  # A deploy must never drop below the capacity that is serving traffic. At `desired_count`
+  # 2 this keeps one task in rotation while the other is replaced, which is also what makes
+  # a rollout survivable under load rather than a self-inflicted version of the loop above.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+
   network_configuration {
     security_groups  = [aws_security_group.ecs_tasks.id]
     subnets          = aws_subnet.private[*].id
